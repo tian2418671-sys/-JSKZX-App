@@ -1557,13 +1557,20 @@ const app = createApp({
             }
         };
 
+        // 将可能为 Vue 响应式 Proxy 的卡片数据转为可经 IPC 结构化克隆的纯 JSON 对象
+        // （直接从左侧库打开时 cardData.value 是 reactive Proxy，直接传 IPC 会报 "An object could not be cloned"）
+        const getPlainCardData = () => {
+            if (!cardData.value) return null;
+            return JSON.parse(JSON.stringify(cardData.value));
+        };
+
         // 覆盖保存当前卡片到本地原文件（经 saveCard IPC）
         const saveToLocalDisk = async () => {
             if (!cardData.value) return;
             const libItem = library.value.find(item => item.data === cardData.value);
             if (!libItem) return nativeAlert("未找到原文件路径。");
             try {
-                const res = await window.electronAPI.saveCard(libItem.id, cardData.value);
+                const res = await window.electronAPI.saveCard(libItem.id, getPlainCardData());
                 if (res.success) nativeAlert(`成功保存到本地！\n文件：${libItem.id}`, 'info');
                 else nativeAlert(`保存失败: ${res.error}`, 'error');
             } catch (e) { nativeAlert(`发生错误: ${e.message}`, 'error'); }
@@ -1576,7 +1583,7 @@ const app = createApp({
             if (!libItem) return nativeAlert("未找到原文件路径。");
             
             try {
-                const res = await window.electronAPI.exportPackage(libItem.id, cardData.value);
+                const res = await window.electronAPI.exportPackage(libItem.id, getPlainCardData());
                 if (res.success) {
                     nativeAlert(`整合包导出成功！\n已归档至目录:\n${res.exportDir}`, "info");
                 } else if (res.error !== "用户取消操作") {
