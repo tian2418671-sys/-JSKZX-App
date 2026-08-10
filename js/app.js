@@ -1638,3 +1638,5 @@ app.config.errorHandler = (err, _instance, info) => {
 };
 
 app.mount('#app');
+
+window.__app = app; // 【临时】截图脚本暴露 Vue 实例（用后移除）
