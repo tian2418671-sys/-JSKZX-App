@@ -1,0 +1,104 @@
+/* ============================================
+   SillyTavern 角色卡高级解析中心 - 全局样式
+   ============================================ */
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f3f4f6;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+}
+
+/* 内容区专用滚动条 */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 5px;
+}
+
+/* 拖拽高亮状态 */
+.drag-active {
+    border-color: #3b82f6 !important;
+    background-color: #eff6ff !important;
+    transform: scale(1.02);
+}
+
+/* 毛玻璃面板 */
+.glass-panel {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+}
+
+/* 淡入动画（角色卡库展示区） */
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+    animation: fade-in 0.4s ease-out;
+}
+
+/* 悬浮批量操作栏滑入/滑出动画 */
+.slide-up-enter-active, .slide-up-leave-active { transition: all 0.3s ease; }
+.slide-up-enter-from, .slide-up-leave-to { opacity: 0; transform: translate(-50%, 20px); }
+
+/* 关系图谱弹窗淡入淡出动画 */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.4s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ============ 紧凑版 IDE 风格 ============ */
+html, body, #app { height: 100%; }
+body { overflow: hidden; }
+
+/* 横向超细滚动条 */
+.custom-scrollbar-x::-webkit-scrollbar { height: 4px; }
+.custom-scrollbar-x::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar-x::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+
+/* 输入控件过渡 */
+textarea, input, select { transition: border-color 0.15s ease-in-out; }
+
+/* ============ 主题系统 (浅色 / 深色) ============ */
+[data-theme="dark"] { color-scheme: dark; }
+[data-theme="dark"] body { background-color: #111827; color: #d1d5db; }
+[data-theme="dark"] .bg-white,
+[data-theme="dark"] .bg-\[\#fbfbfb\],
+[data-theme="dark"] .bg-\[\#f8f9fa\],
+[data-theme="dark"] .bg-\[\#fafafa\] { background-color: #1f2937; }
+[data-theme="dark"] .bg-gray-50 { background-color: #1f2937; }
+[data-theme="dark"] .bg-gray-100 { background-color: #374151; }
+[data-theme="dark"] .bg-gray-200 { background-color: #4b5563; }
+[data-theme="dark"] .bg-gray-300 { background-color: #4b5563; }
+[data-theme="dark"] .bg-gray-800 { background-color: #111827; }
+[data-theme="dark"] .bg-\[\#1e1e1e\] { background-color: #0b1120; }
+[data-theme="dark"] .text-gray-500,
+[data-theme="dark"] .text-gray-600,
+[data-theme="dark"] .text-gray-700,
+[data-theme="dark"] .text-gray-800,
+[data-theme="dark"] .text-gray-900 { color: #e5e7eb; }
+[data-theme="dark"] .text-gray-400 { color: #9ca3af; }
+[data-theme="dark"] .border-gray-100,
+[data-theme="dark"] .border-gray-200,
+[data-theme="dark"] .border-gray-300 { border-color: #374151; }
+[data-theme="dark"] textarea,
+[data-theme="dark"] input,
+[data-theme="dark"] select { background-color: #111827 !important; color: #e5e7eb; border-color: #4b5563 !important; }
+[data-theme="dark"] .bg-blue-100 { background-color: #1e3a5f; }
+[data-theme="dark"] .border-blue-300 { border-color: #3b82f6; }

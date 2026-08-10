@@ -1,0 +1,473 @@
+/**
+ * SillyTavern 角色卡高级解析中心 - Electron 主进程
+ *
+ * 架构说明：
+ * - 渲染进程（Vue）通过 preload 暴露的 window.electronAPI 与主进程通信（IPC）；
+ * - `app://` 协议加载应用自身页面：解决 file:// 下 ES Modules 的 CORS 限制；
+ * - `local-file://` 特权协议安全读取磁盘图片：无需关闭 webSecurity 即可展示本地立绘；
+ * - 文件夹选择通过原生 dialog 弹出，选中的路径静默保存到系统 userData 目录。
+ */
+const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { pathToFileURL } = require('url');
+
+// ================= 全局异常兜底（崩溃不闪退，错误堆栈落盘） =================
+function crashLogPath() {
+  return path.join(app.getPath('userData'), 'crash.log');
+}
+
+function writeCrashLog(err) {
+  try {
+    const entry = `[${new Date().toISOString()}] ${err && err.stack ? err.stack : String(err)}\n\n`;
+    fs.appendFileSync(crashLogPath(), entry);
+  } catch (e) { /* 日志写入失败时静默忽略，避免递归崩溃 */ }
+}
+
+process.on('uncaughtException', (err) => {
+  writeCrashLog(err);
+  console.error('未捕获异常:', err);
+  try {
+    dialog.showErrorBox('程序发生未预期的错误', `${err && err.message ? err.message : String(err)}\n\n错误堆栈已写入日志：\n${crashLogPath()}`);
+  } catch (e) { /* 弹窗失败忽略 */ }
+});
+
+process.on('unhandledRejection', (reason) => {
+  writeCrashLog(reason instanceof Error ? reason : new Error(String(reason)));
+  console.error('未处理的 Promise 拒绝:', reason);
+});
+
+// ================= [ PNG 角色卡写入工具 ] =================
+// CRC32 校验（PNG 块标准算法）
+function crc32(buf) {
+  let table = crc32.table;
+  if (!table) {
+    table = crc32.table = new Int32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c;
+    }
+  }
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xFF];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+// 将更新后的角色卡 JSON 写回 PNG 的 chara/ccv3 块（保留原图，仅替换数据块）
+function writeTavernPNGChunk(buffer, updatedJson) {
+  // 校验 PNG 签名
+  if (!buffer || buffer.length < 8 || buffer.readUInt32BE(0) !== 0x89504E47) return null;
+
+  const base64 = Buffer.from(JSON.stringify(updatedJson), 'utf-8').toString('base64');
+  const sig = buffer.subarray(0, 8);
+  let offset = 8;
+  let chunks = [];
+  let found = false;
+
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    if (offset + 12 + length > buffer.length) break; // 越界保护
+    const type = buffer.subarray(offset + 4, offset + 8).toString('latin1');
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+
+    // 找到第一个 chara/ccv3 文本块，替换为新数据（统一写为 tEXt + Base64）
+    if ((type === 'tEXt' || type === 'iTXt') && !found) {
+      const nullPos = data.indexOf(0);
+      if (nullPos > 0) {
+        const keyword = data.subarray(0, nullPos).toString('latin1');
+        if (keyword === 'chara' || keyword === 'ccv3') {
+          chunks.push({
+            type: 'tEXt',
+            data: Buffer.concat([
+              Buffer.from(keyword, 'latin1'),
+              Buffer.from([0]),
+              Buffer.from(base64, 'latin1')
+            ])
+          });
+          found = true;
+          offset += 12 + length;
+          continue;
+        }
+      }
+    }
+    chunks.push({ type, data });
+    offset += 12 + length;
+  }
+
+  if (!found) return null; // 未找到角色卡数据块，无法写入
+
+  // 重建 PNG 文件（重新计算每个块的 CRC）
+  const parts = [sig];
+  for (const chunk of chunks) {
+    const typeBuf = Buffer.from(chunk.type, 'latin1');
+    const lengthBuf = Buffer.alloc(4);
+    lengthBuf.writeUInt32BE(chunk.data.length);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, chunk.data])));
+    parts.push(lengthBuf, typeBuf, chunk.data, crcBuf);
+  }
+  return Buffer.concat(parts);
+}
+
+// 系统级应用数据目录（用于保存配置，不会随项目丢失）
+const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.json');
+
+// 将自定义协议注册为特权协议（必须在 app ready 之前调用）
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    // secure: true 使页面成为安全上下文，允许使用 localStorage 等 Web API
+    // 注意：不加 standard，避免改变 app:// 的 URL 解析结构
+    privileges: { secure: true, supportFetchAPI: true, corsEnabled: true }
+  },
+  {
+    scheme: 'local-file',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
+  }
+]);
+
+/**
+ * 注册自定义协议
+ * - app://        -> 项目根目录下的文件（页面、JS、CSS）
+ * - local-file:// -> 磁盘上的任意本地文件（仅用于展示本地立绘图片）
+ */
+function registerAppProtocol() {
+  protocol.handle('app', (request) => {
+    const url = new URL(request.url);
+    let filePath = decodeURIComponent(url.pathname);
+
+    // 根路径默认加载 index.html
+    if (filePath === '/' || filePath === '') filePath = '/index.html';
+
+    const resolved = path.normalize(path.join(__dirname, filePath));
+
+    // 安全校验：确保解析后的路径始终位于项目根目录内（防止路径穿越）
+    if (!resolved.startsWith(path.join(__dirname))) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    return net.fetch(pathToFileURL(resolved).toString());
+  });
+
+  protocol.handle('local-file', (request) => {
+    const url = new URL(request.url);
+    // 路径通过查询参数传递（如 local-file://img/?path=E:\...），
+    // 避免 Windows 盘符冒号被 URL 规范化当作端口剥离
+    const filePath = url.searchParams.get('path');
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+}
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 1024,
+    minHeight: 640,
+    autoHideMenuBar: true, // 隐藏顶部菜单栏
+    backgroundColor: '#f3f4f6',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'), // 安全桥梁
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  // 通过自定义协议加载页面（支持 ES Modules 与 CDN）
+  win.loadURL('app://index.html');
+  return win;
+}
+
+app.whenReady().then(() => {
+  registerAppProtocol();
+  createWindow();
+
+  // IPC：打开文件夹弹窗并扫描
+  ipcMain.handle('dialog:openFolder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: '选择角色卡所在的文件夹'
+    });
+
+    if (canceled || filePaths.length === 0) return null;
+    return scanAndSaveFolder(filePaths[0]);
+  });
+
+  // IPC：启动时加载上一次的文件夹配置
+  ipcMain.handle('config:load', () => {
+    try {
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (config.lastFolder && fs.existsSync(config.lastFolder)) {
+          return scanAndSaveFolder(config.lastFolder);
+        }
+      }
+    } catch (e) {
+      console.error('读取配置失败', e);
+    }
+    return null;
+  });
+
+  // IPC：读取单个文件内容（返回二进制 Buffer）
+  ipcMain.handle('file:readBuffer', (event, filePath) => {
+    return fs.readFileSync(filePath);
+  });
+
+  // IPC：读取单个文件文本（用于 JSON 卡片）
+  ipcMain.handle('file:readText', (event, filePath) => {
+    return fs.readFileSync(filePath, 'utf-8');
+  });
+
+  // IPC：原生消息对话框（替代 alert）
+  ipcMain.handle('dialog:showMessage', async (event, options) => {
+    return await dialog.showMessageBox(options);
+  });
+
+  // IPC：系统级拖拽复制文件到库
+  ipcMain.handle('file:copyToLibrary', (event, sourcePaths, targetFolder) => {
+    const copiedFiles = [];
+    for (const src of sourcePaths) {
+      try {
+        // 确保拖入的是支持的文件格式
+        if (!src.match(/\.(png|webp|json)$/i)) continue;
+
+        const fileName = path.basename(src);
+        const dest = path.join(targetFolder, fileName);
+
+        // 如果目标文件夹中没有同名文件，则进行复制
+        if (!fs.existsSync(dest)) {
+          fs.copyFileSync(src, dest);
+          copiedFiles.push(dest);
+        }
+      } catch (e) {
+        console.error('复制文件失败:', e);
+      }
+    }
+    return copiedFiles; // 返回成功复制的文件路径数组
+  });
+
+  // IPC：保存卡片（写入前自动备份历史快照到 .bak_history）
+  ipcMain.handle('file:saveCard', (event, filePath, updatedJson) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: "原文件不存在，无法保存。" };
+      }
+
+      // --- 【新增】版本控制：创建 .bak_history 隐藏备份 ---
+      const dir = path.dirname(filePath);
+      const bakDir = path.join(dir, '.bak_history');
+      if (!fs.existsSync(bakDir)) {
+        fs.mkdirSync(bakDir, { recursive: true });
+      }
+
+      const fileName = path.basename(filePath);
+      const timeStr = new Date().toISOString().replace(/[:.]/g, '-');
+      const bakPath = path.join(bakDir, `${timeStr}_${fileName}`);
+
+      // 复制当前老文件到备份目录
+      fs.copyFileSync(filePath, bakPath);
+      // --------------------------------------------------
+
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.json') {
+        fs.writeFileSync(filePath, JSON.stringify(updatedJson, null, 2), 'utf-8');
+        return { success: true };
+      } else if (ext === '.png') {
+        const buffer = fs.readFileSync(filePath);
+        const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
+        if (newBuffer) {
+          fs.writeFileSync(filePath, newBuffer);
+          return { success: true };
+        } else {
+          return { success: false, error: "无法写入 PNG 结构。" };
+        }
+      }
+      return { success: false, error: "不支持的文件格式。" };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC：发送大模型 API 请求（经主进程转发，绕过前端 CORS 限制）
+  ipcMain.handle('chat:send', async (event, endpoint, payload, apiKey) => {
+    try {
+      // 鉴权密钥：前端配置了则使用，未配置时回退到 test-key（兼容无需鉴权的本地 API）
+      const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : 'test-key';
+      // Electron 自带的 Node.js fetch
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        return { success: false, error: `HTTP 错误: ${response.status} - ${await response.text()}` };
+      }
+
+      const data = await response.json();
+      return { success: true, data: data };
+    } catch (e) {
+      console.error('API 请求失败:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC：删除卡片（移入本地回收站 .trash 而非物理删除）
+  ipcMain.handle('file:delete', (event, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: "未找到该文件" };
+      }
+
+      const dir = path.dirname(filePath);
+      const trashDir = path.join(dir, '.trash');
+      if (!fs.existsSync(trashDir)) {
+        fs.mkdirSync(trashDir, { recursive: true });
+      }
+
+      const fileName = path.basename(filePath);
+      const trashPath = path.join(trashDir, `${Date.now()}_${fileName}`);
+
+      // 将文件移动到回收站目录
+      fs.renameSync(filePath, trashPath);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC 通信：一键导出角色卡完整整合包（主卡 + 独立世界书 + 正则脚本）
+  ipcMain.handle('file:exportPackage', async (event, filePath, cardJsonData) => {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) {
+        return { success: false, error: "原文件路径无效" };
+      }
+      
+      // 弹出文件夹选择对话框，让用户选择导出的目标父目录
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择整合包导出的存放目录'
+      });
+      
+      if (canceled || filePaths.length === 0) return { success: false, error: "用户取消操作" };
+      
+      const targetParentDir = filePaths[0];
+      const charName = (cardJsonData.data?.name || cardJsonData.name || 'character').replace(/[\/\\?%*:|"<>]/g, '_');
+      const exportDir = path.join(targetParentDir, `${charName}_Package`);
+      
+      // 创建专属整合文件夹
+      if (!fs.existsSync(exportDir)) {
+        fs.mkdirSync(exportDir, { recursive: true });
+      }
+      
+      // 1. 复制原卡片文件 (PNG 或 JSON)
+      const fileName = path.basename(filePath);
+      const destCardPath = path.join(exportDir, fileName);
+      fs.copyFileSync(filePath, destCardPath);
+      
+      // 2. 如果卡片中内嵌了世界书，自动将其单独导出为 worldbook.json
+      const d = cardJsonData.data || cardJsonData;
+      const book = d.character_book;
+      if (book && ((book.entries && book.entries.length > 0) || Array.isArray(book))) {
+        const wbPath = path.join(exportDir, 'worldbook.json');
+        fs.writeFileSync(wbPath, JSON.stringify(book, null, 2), 'utf-8');
+      }
+      
+      // 3. 如果卡片中内嵌了正则脚本，自动将其单独导出为 regex_scripts.json
+      const regex = d.extensions?.regex_scripts || d.regex_scripts;
+      if (regex && regex.length > 0) {
+        const regexPath = path.join(exportDir, 'regex_scripts.json');
+        fs.writeFileSync(regexPath, JSON.stringify(regex, null, 2), 'utf-8');
+      }
+      
+      return { success: true, exportDir };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC 通信：批量打包导出多张卡片
+  ipcMain.handle('file:exportBatchPackage', async (event, filePaths) => {
+    try {
+      if (!filePaths || filePaths.length === 0) {
+        return { success: false, error: "未选择任何卡片" };
+      }
+      
+      const { canceled, filePaths: targetDirs } = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择批量导出的目标文件夹'
+      });
+      
+      if (canceled || targetDirs.length === 0) return { success: false, error: "用户取消操作" };
+      
+      const targetParentDir = targetDirs[0];
+      const batchDirName = `Batch_Export_${Date.now()}`;
+      const exportRoot = path.join(targetParentDir, batchDirName);
+      fs.mkdirSync(exportRoot, { recursive: true });
+      
+      let successCount = 0;
+      for (const srcPath of filePaths) {
+        if (fs.existsSync(srcPath)) {
+          const fileName = path.basename(srcPath);
+          const destPath = path.join(exportRoot, fileName);
+          fs.copyFileSync(srcPath, destPath);
+          successCount++;
+        }
+      }
+      
+      return { success: true, exportDir: exportRoot, count: successCount };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // macOS：点击 Dock 图标且无窗口时重新创建窗口
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+/**
+ * 扫描文件夹并静默保存配置
+ * @param {string} folderPath 用户选择的文件夹
+ * @returns {{folderPath: string|null, files: Array, error?: string}}
+ */
+function scanAndSaveFolder(folderPath) {
+  try {
+    // 静默保存配置
+    fs.writeFileSync(configPath, JSON.stringify({ lastFolder: folderPath }));
+
+    // 读取目录下所有文件，过滤出支持的格式
+    const files = fs.readdirSync(folderPath);
+    const validFiles = files
+      .filter(f => f.match(/\.(png|webp|json)$/i))
+      .map(f => {
+        const absPath = path.join(folderPath, f);
+        // 仅图片文件生成立绘展示链接（JSON 无立绘，避免无谓请求）
+        // 路径经查询参数传递，规避 URL 规范化对盘符冒号的影响
+        const isImage = /\.(png|webp)$/i.test(f);
+        return {
+          name: f,
+          path: absPath,
+          url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
+        };
+      });
+
+    return { folderPath, files: validFiles };
+  } catch (e) {
+    return { folderPath: null, files: [], error: e.message };
+  }
+}

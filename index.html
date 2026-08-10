@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SillyTavern 角色卡高级解析中心</title>
+    <!-- 引入 Tailwind CSS 用于快速页面样式（本地化，离线可用） -->
+    <script src="./vendor/tailwindcss.js"></script>
+    <!-- 引入 ECharts 用于渲染关系图谱（本地化，离线可用） -->
+    <script src="./vendor/echarts.min.js"></script>
+    <!-- 引入自定义样式 -->
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Vue 3 依赖映射（ES Modules 导入方式，本地生产版） -->
+    <script type="importmap">
+        {
+            "imports": {
+                "vue": "./vendor/vue.esm-browser.prod.js"
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans selection:bg-blue-200">
+    <div id="app" class="h-full flex flex-col">
+        
+        <!-- ================= [ 顶部紧凑工具栏 ] ================= -->
+        <header class="h-10 bg-white border-b border-gray-300 flex items-center justify-between px-3 shrink-0 shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <span class="font-bold text-gray-800 flex items-center gap-2">
+                    <svg class="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/><path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/></svg>
+                    SillyTavern Core
+                </span>
+                <div class="h-4 w-px bg-gray-300"></div>
+                <button @click="selectFixedDirectory" class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-100 rounded text-gray-600 transition">📂 打开本地库</button>
+                <button @click="openGraph" class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-100 rounded text-gray-600 transition">🌌 关系图谱</button>
+                <button @click="showGlobalAssetModal = true" class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-100 rounded text-gray-600 transition" title="查看全库收集的世界书与正则脚本">
+                    📚 全局资产库
+                </button>
+                <label class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-100 rounded text-gray-600 transition cursor-pointer">
+                    📥 恢复配置 <input type="file" class="hidden" accept=".json" @change="importLibraryDB">
+                </label>
+                <button @click="toggleTheme" class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-100 rounded text-gray-600 transition" :title="theme === 'light' ? '切换到深色主题' : '切换到浅色主题'">
+                    {{ theme === 'light' ? '🌙 深色' : '☀️ 浅色' }}
+                </button>
+            </div>
+            
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400">总计: {{ library.length }} 张卡片</span>
+                <button @click="exportLibraryDB" class="flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-gray-700 transition">备份配置</button>
+            </div>
+        </header>
+
+        <!-- ================= [ 主工作区 (左右分栏) ] ================= -->
+        <div class="flex-1 flex overflow-hidden">
+            
+            <!-- 【左侧】资源管理器 (库列表) -->
+            <aside class="w-72 bg-[#fafafa] border-r border-gray-300 flex flex-col shrink-0 relative">
+                <!-- 过滤器 -->
+                <div class="p-2 border-b border-gray-200 flex flex-col gap-2 bg-white">
+                    <div class="flex gap-1 items-center">
+                        <select v-model="currentCategoryKey" class="flex-1 bg-gray-50 border border-gray-300 text-xs rounded px-1.5 py-1.5 outline-none focus:border-blue-500">
+                            <option v-for="cat in allCategories" :key="cat.key" :value="cat.key">
+                                📁 {{ getCategoryDisplayName(cat) }}
+                            </option>
+                        </select>
+                        <button @click="addNewCategory" class="px-2 py-1.5 bg-gray-50 border border-gray-300 rounded hover:bg-gray-100 text-xs" title="新增自定义分组">➕</button>
+                        <button @click="renameCurrentCategory" class="px-2 py-1.5 bg-gray-50 border border-gray-300 rounded hover:bg-gray-100 text-xs" title="重命名当前自定义分组">✏️</button>
+                        <button v-if="selectedIds.length > 0" @click="clearSelection" class="px-2 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100 text-xs" title="取消多选">取消</button>
+                    </div>
+                    <div class="relative">
+                        <input v-model="searchQuery" type="text" placeholder="全局搜索名称、世界书、关键词..." class="w-full bg-gray-50 border border-gray-300 text-xs rounded pl-7 pr-6 py-1.5 outline-none focus:border-blue-500">
+                        <svg class="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        <button v-if="searchQuery" @click="searchQuery = ''" class="absolute right-2.5 top-2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px] px-1">
+                        <span class="text-gray-400">显示语言:</span>
+                        <button @click="toggleTagLangMode" class="px-2 py-0.5 bg-gray-100 hover:bg-blue-600 hover:text-white rounded transition font-bold text-gray-700">
+                            {{ tagLangMode === 'both' ? '🌐 中英双语' : (tagLangMode === 'cn' ? '🇨🇳 纯中文' : '🇺🇸 纯英文') }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 系统快捷过滤标签 -->
+                <div class="flex flex-wrap gap-1 px-2 py-1.5 bg-white border-b border-gray-200">
+                    <button @click="currentCategoryKey = 'all'" 
+                            :class="currentCategoryKey === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                        全部卡片 ({{ library.length }})
+                    </button>
+                    <button @click="currentCategoryKey = 'has_lorebook'" 
+                            :class="currentCategoryKey === 'has_lorebook' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                        📖 带世界书
+                    </button>
+                    <button @click="currentCategoryKey = 'has_regex'" 
+                            :class="currentCategoryKey === 'has_regex' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                        ⚡ 带正则脚本
+                    </button>
+                </div>
+
+                <!-- 列表头部：计数与多选开关 -->
+                <div class="flex items-center justify-between px-2 py-1.5 bg-gray-50 border-b border-gray-200 text-xs">
+                    <span class="font-bold text-gray-600">卡片列表 ({{ filteredLibrary.length }})</span>
+                    <button @click="isMultiSelectMode = !isMultiSelectMode" 
+                            :class="isMultiSelectMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'"
+                            class="px-2 py-0.5 rounded transition font-medium">
+                        {{ isMultiSelectMode ? '✓ 退出多选' : '☑ 批量多选' }}
+                    </button>
+                </div>
+
+                <!-- 紧凑型列表 -->
+                <div class="flex-1 overflow-y-auto p-1 custom-scrollbar" @dragover.prevent @drop.prevent="handleDrop">
+                    <div v-for="(item, index) in filteredLibrary" :key="item.id" 
+                         @click.prevent="handleCardClick($event, item, index)"
+                         @contextmenu.prevent="openContextMenu($event, item)"
+                         :class="['flex items-center gap-2 p-1.5 mb-0.5 rounded cursor-pointer border select-none transition-colors relative',
+                                  selectedIds.includes(item.id) ? 'bg-blue-100 border-blue-300' : 
+                                  (cardData && safeData.name === item.name) ? 'bg-blue-600 text-white border-blue-600 shadow-inner' : 'border-transparent hover:bg-gray-200 text-gray-700']">
+                        
+                        <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="accent-blue-600 w-3.5 h-3.5 cursor-pointer shrink-0">
+
+                        <!-- 极小缩略图 -->
+                        <img v-if="item.avatar" :src="item.avatar" class="w-8 h-10 object-cover rounded-sm border border-black/10 shrink-0 bg-white">
+                        <div v-else class="w-8 h-10 bg-gray-300 rounded-sm border border-black/10 shrink-0"></div>
+                        
+                        <!-- 信息 -->
+                        <div class="flex-1 min-w-0 overflow-hidden">
+                            <div class="font-bold text-xs truncate leading-tight">{{ item.name }}</div>
+                            <div class="text-[10px] truncate opacity-70 leading-tight mt-0.5">{{ item.category }} · {{ displayTagText(item.customTags[0]) || '无标签' }}</div>
+                        </div>
+                    </div>
+                    
+                    <div v-if="library.length === 0" class="flex flex-col items-center justify-center h-full text-gray-400 text-xs text-center p-4">
+                        将卡片拖拽到此处，<br>或点击左上角打开本地库
+                    </div>
+                </div>
+
+                <!-- 批量操作栏 -->
+                <div v-if="selectedIds.length > 0" class="absolute bottom-0 left-0 right-0 bg-gray-800 text-white p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs z-20 border-t border-gray-700">
+                    <div class="flex justify-between items-center px-1">
+                        <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
+                        <button @click="clearSelection" class="text-gray-400 hover:text-white">取消选择 ✕</button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1">
+                        <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1 rounded transition font-medium">📁 移分组</button>
+                        <button @click="showBatchTagModal = true" class="bg-gray-700 hover:bg-purple-600 py-1 rounded transition font-medium">🏷️ 贴标签</button>
+                        <button @click="batchExportSelected" class="bg-gray-700 hover:bg-emerald-600 py-1 rounded transition font-medium">📦 打包导出</button>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 【右侧】编辑器面板 -->
+            <main class="flex-1 flex flex-col bg-white overflow-hidden relative">
+                
+                <template v-if="cardData">
+                    <!-- 编辑器头部: 角色名与保存动作 -->
+                    <div class="h-12 border-b border-gray-200 flex items-center justify-between px-4 shrink-0 bg-[#fbfbfb]">
+                        <div class="flex items-center gap-3 w-1/2">
+                            <img v-if="imgUrl" :src="imgUrl" class="w-8 h-8 rounded-full object-cover border border-gray-300 shadow-sm">
+                            <input :value="safeData.name" @input="updateName($event.target.value)" class="font-bold text-base bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none w-full px-1 py-0.5 transition" placeholder="角色名称">
+                            <div class="hidden md:flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded text-amber-800 text-[11px] shrink-0" title="预估总 Token 消耗量">
+                                <span>⚡ 预估 Token:</span>
+                                <span class="font-bold">{{ cardTokenStats.total }}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold">
+                                💾 覆盖保存
+                            </button>
+                            <button @click="exportPackage" class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded shadow-sm transition text-xs font-bold" title="一键打包卡片、独立世界书与正则脚本">
+                                📦 导出整合包
+                            </button>
+                            <button @click="deleteCard" class="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded shadow-sm transition text-xs font-bold ml-2">
+                                🗑️ 删除
+                            </button>
+                            <div class="w-px h-4 bg-gray-300 mx-1"></div>
+                            <button @click="reset" class="px-2 py-1.5 text-gray-500 hover:bg-gray-200 rounded transition" title="关闭卡片">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- 分组与标签工具栏（合并紧凑版） -->
+                    <div class="px-3 py-1.5 border-b border-gray-200 bg-white flex flex-wrap gap-x-3 gap-y-1 items-center shrink-0">
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <span class="text-[11px] text-gray-500 font-medium whitespace-nowrap">分组:</span>
+                            <select v-model="currentCardCategory" @change="handleCardCategoryChange" class="bg-gray-50 border border-gray-300 text-[11px] rounded px-1.5 py-0.5 outline-none focus:border-blue-500 font-medium text-gray-700">
+                                <option v-for="cat in allCategories.filter(c => c.key !== 'all')" :key="cat.key" :value="cat.key">
+                                    📁 {{ getCategoryDisplayName(cat) }}
+                                </option>
+                            </select>
+                            <button @click="addNewCategory" class="text-[11px] text-blue-600 hover:text-blue-800 font-bold" title="创建新分组">➕</button>
+                        </div>
+                        <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+                            <span class="text-[11px] font-bold text-gray-500 whitespace-nowrap">标签:</span>
+                            <button @click="toggleTagLangMode" title="切换标签语言显示" class="text-[10px] px-1.5 py-0.5 bg-gray-100 hover:bg-blue-600 hover:text-white rounded transition font-bold text-gray-600">
+                                {{ tagLangMode === 'both' ? '🌐' : (tagLangMode === 'cn' ? '🇨🇳' : '🇺🇸') }}
+                            </button>
+                            <span v-for="tag in activeCardTags" :key="tag" 
+                                  class="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200 flex items-center gap-1">
+                                {{ displayTagText(tag) }}
+                                <button @click="removeSingleTag(tag)" class="hover:text-red-500 hover:bg-indigo-100 rounded-full w-3 h-3 flex items-center justify-center transition-colors">✕</button>
+                            </span>
+                            <button @click="addSingleTag" class="text-[10px] text-gray-400 hover:text-indigo-600 border border-dashed border-gray-300 hover:border-indigo-400 rounded px-1.5 py-0.5 transition-colors whitespace-nowrap">
+                                + 贴标签
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 系统/全局标签快捷添加（默认收起，点击展开，节省顶部空间） -->
+                    <div class="px-3 py-1 border-b border-gray-200 bg-white shrink-0 flex items-center justify-between cursor-pointer select-none" @click="isEditingSystemTags = !isEditingSystemTags">
+                        <span class="text-[11px] text-gray-500">💡 系统/常用标签快速添加 <span class="text-gray-400">({{ globalAvailableTags.length }})</span></span>
+                        <span class="text-[10px] text-blue-500 font-medium">{{ isEditingSystemTags ? '收起 ▲' : '展开 ▼' }}</span>
+                    </div>
+                    <div v-if="isEditingSystemTags" class="px-3 pb-2 pt-1 bg-white border-b border-gray-200 shrink-0">
+                        <div class="flex flex-wrap gap-1 p-1.5 bg-gray-50 rounded border border-gray-200 overflow-y-auto custom-scrollbar max-h-40">
+                            <button v-for="tag in globalAvailableTags" :key="tag"
+                                    @click="addGlobalTag(tag)"
+                                    :class="activeCardTags.includes(tag) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-200 border border-gray-300'"
+                                    class="text-[10px] px-2 py-0.5 rounded transition shadow-sm">
+                                + {{ tag }}
+                            </button>
+                            <div v-if="globalAvailableTags.length === 0" class="text-xs text-gray-400 py-1">暂无可选标签，输入后自动沉淀</div>
+                        </div>
+                    </div>
+
+                    <!-- 紧凑型 Tab 栏 -->
+                    <div class="flex border-b border-gray-200 bg-[#f8f9fa] px-2 shrink-0 overflow-x-auto custom-scrollbar-x">
+                        <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id; if(tab.action) tab.action()"
+                            :class="['px-4 py-2 text-xs font-medium whitespace-nowrap border-b-2 transition-colors flex items-center gap-1.5', 
+                            currentTab === tab.id ? 'border-blue-600 text-blue-700 bg-white' : 'border-transparent text-gray-600 hover:bg-gray-100']">
+                            {{ tab.icon }} {{ tab.name }}
+                            <span v-if="tab.badge" class="px-1.5 py-0.5 bg-gray-200 text-gray-500 text-[9px] rounded-full ml-1">{{ tab.badge }}</span>
+                        </button>
+                    </div>
+
+                    <!-- 核心内容滚动区 -->
+                    <div class="flex-1 overflow-y-auto bg-white p-4 custom-scrollbar">
+                        
+                        <!-- 1. 基础设定 (Basic) -->
+                        <div v-if="currentTab === 'basic'" class="space-y-4 max-w-5xl">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="flex flex-col gap-1">
+                                    <label class="text-xs font-bold text-gray-500 uppercase">性格特征 (Personality)</label>
+                                    <textarea v-model="safeData.personality" rows="4" class="w-full text-xs p-2 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                                </div>
+                                <div class="flex flex-col gap-1">
+                                    <label class="text-xs font-bold text-gray-500 uppercase">初始场景 (Scenario)</label>
+                                    <textarea v-model="safeData.scenario" rows="4" class="w-full text-xs p-2 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                                </div>
+                            </div>
+                            
+                            <div class="flex flex-col gap-1">
+                                <label class="text-xs font-bold text-gray-500 uppercase">详细设定 (Description)</label>
+                                <textarea v-model="safeData.description" rows="8" class="w-full text-xs p-2 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                            </div>
+                            
+                            <div class="flex flex-col gap-1">
+                                <label class="text-xs font-bold text-blue-600 uppercase flex justify-between">初次问候 (First Message)</label>
+                                <textarea v-model="safeData.first_mes" rows="8" class="w-full text-xs p-2 border border-blue-200 rounded outline-none focus:border-blue-500 bg-blue-50/30 resize-y leading-relaxed custom-scrollbar"></textarea>
+                            </div>
+
+                            <div class="mt-6 p-3 bg-gray-50 border border-gray-200 rounded text-xs space-y-2">
+                                <div class="font-bold text-gray-700 flex justify-between items-center">
+                                    <span>📊 卡片重量与 Token 消耗明细</span>
+                                    <span class="text-amber-600 font-bold">总计: ~{{ cardTokenStats.total }} Tokens</span>
+                                </div>
+                                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] text-gray-600">
+                                    <div class="bg-white p-1.5 rounded border border-gray-100">详细设定: <b>{{ cardTokenStats.desc }}</b></div>
+                                    <div class="bg-white p-1.5 rounded border border-gray-100">性格特征: <b>{{ cardTokenStats.pers }}</b></div>
+                                    <div class="bg-white p-1.5 rounded border border-gray-100">初始场景: <b>{{ cardTokenStats.scen }}</b></div>
+                                    <div class="bg-white p-1.5 rounded border border-gray-100">初次问候: <b>{{ cardTokenStats.first }}</b></div>
+                                    <div class="bg-white p-1.5 rounded border border-gray-100">世界书合集: <b>{{ cardTokenStats.book }}</b></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 进阶设定 -->
+                        <div v-if="currentTab === 'advanced'" class="space-y-4 max-w-5xl">
+                            <div class="flex flex-col gap-1">
+                                <label class="text-xs font-bold text-gray-500 uppercase">系统提示词 (System Prompt)</label>
+                                <textarea v-model="safeData.system_prompt" rows="5" class="w-full text-xs p-2 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <label class="text-xs font-bold text-gray-500 uppercase">历史记录后注入 (Post History Instructions)</label>
+                                <textarea v-model="safeData.post_history_instructions" rows="5" class="w-full text-xs p-2 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                            </div>
+                            <div v-if="safeData.extensions?.depth_prompt" class="flex flex-col gap-1">
+                                <label class="text-xs font-bold text-purple-600 uppercase">深度提示词 (深度: {{ safeData.extensions.depth_prompt.depth }})</label>
+                                <textarea v-model="safeData.extensions.depth_prompt.prompt" rows="4" class="w-full text-xs p-2 border border-purple-200 rounded outline-none focus:border-purple-500 bg-purple-50/30 resize-y leading-relaxed custom-scrollbar"></textarea>
+                            </div>
+                            <div v-if="safeData.alternate_greetings && safeData.alternate_greetings.length > 0">
+                                <label class="text-xs font-bold text-gray-500 uppercase mb-2 block">附加问候语 (Alternate Greetings)</label>
+                                <div class="space-y-2">
+                                    <div v-for="(greeting, index) in safeData.alternate_greetings" :key="index" class="relative">
+                                        <span class="absolute top-1 right-2 bg-gray-100 text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded">#{{index + 1}}</span>
+                                        <textarea v-model="safeData.alternate_greetings[index]" rows="3" class="w-full text-xs p-2 pr-10 border border-gray-300 rounded outline-none focus:border-blue-500 bg-gray-50 resize-y leading-relaxed custom-scrollbar"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 世界书 (Worldbook) -->
+                        <div v-if="currentTab === 'worldbook'" class="max-w-5xl">
+                            <div v-if="worldbookEntries.length > 0">
+                                <div class="flex justify-between items-center mb-3 bg-gray-50 p-2 rounded border border-gray-200">
+                                    <span class="text-xs text-gray-500 font-bold">共 {{ worldbookEntries.length }} 条世界书设定</span>
+                                    <div class="flex gap-2">
+                                        <button @click="expandAllWorldbook" class="text-xs px-2.5 py-1 bg-white hover:bg-gray-100 border border-gray-300 rounded text-gray-700 transition">全部展开</button>
+                                        <button @click="collapseAllWorldbook" class="text-xs px-2.5 py-1 bg-white hover:bg-gray-100 border border-gray-300 rounded text-gray-700 transition">全部折叠</button>
+                                    </div>
+                                </div>
+
+                                <div class="space-y-2">
+                                    <div v-for="(entry, index) in worldbookEntries" :key="index" class="bg-white border border-gray-200 rounded shadow-sm overflow-hidden transition-all">
+                                        
+                                        <div @click="toggleWorldbookEntry(index)" class="px-3 py-2.5 bg-gray-50 hover:bg-gray-100 cursor-pointer flex justify-between items-center select-none">
+                                            <div class="flex items-center gap-2 overflow-hidden">
+                                                <span class="text-gray-400 text-xs transition-transform inline-block" :class="worldbookExpanded[index] ? 'rotate-90' : ''">▶</span>
+                                                <span class="font-bold text-xs text-gray-800 truncate">{{ entry.name || entry.comment || '未命名条目' }}</span>
+                                                <span class="text-[10px] text-green-700 bg-green-50 px-1.5 py-0.2 rounded border border-green-200 truncate max-w-xs" v-if="entry.keys && entry.keys.length">
+                                                    🔑 {{ entry.keys.join(', ') }}
+                                                </span>
+                                            </div>
+                                            <div class="flex items-center gap-2 shrink-0">
+                                                <span class="text-[10px] px-1.5 py-0.5 bg-white rounded text-gray-600 border border-gray-200">优先级: {{ entry.insertion_order ?? 50 }}</span>
+                                            </div>
+                                        </div>
+
+                                        <div v-if="worldbookExpanded[index]" class="p-3 border-t border-gray-200 bg-gray-50/50 space-y-3 text-xs">
+                                            
+                                            <div class="grid grid-cols-3 gap-2">
+                                                <div class="col-span-2 flex flex-col gap-1">
+                                                    <label class="font-bold text-gray-500">条目名称 (Name / Comment):</label>
+                                                    <input v-model="entry.name" class="bg-white border border-gray-300 rounded p-1.5 outline-none focus:border-blue-500" placeholder="条目名称">
+                                                </div>
+                                                <div class="flex flex-col gap-1">
+                                                    <label class="font-bold text-gray-500">优先级 (Order):</label>
+                                                    <input v-model.number="entry.insertion_order" type="number" class="bg-white border border-gray-300 rounded p-1.5 outline-none focus:border-blue-500" placeholder="50">
+                                                </div>
+                                            </div>
+
+                                            <div class="flex flex-col gap-1">
+                                                <label class="font-bold text-gray-500">触发关键词 (Keys，用逗号分隔):</label>
+                                                <input :value="getKeysString(entry.keys)" @input="updateEntryKeys(entry, $event.target.value)" class="bg-white border border-gray-300 rounded p-1.5 outline-none focus:border-blue-500" placeholder="关键词1, 关键词2">
+                                            </div>
+
+                                            <div class="flex flex-col gap-1">
+                                                <label class="font-bold text-gray-500">注入正文内容 (Content):</label>
+                                                <textarea v-model="entry.content" rows="6" class="w-full bg-white border border-gray-300 rounded p-2 outline-none focus:border-blue-500 resize-y leading-relaxed custom-scrollbar font-mono text-[11px]"></textarea>
+                                            </div>
+
+                                        </div>
+
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="text-gray-400 text-center py-10">此卡片未内置世界书数据</div>
+                        </div>
+
+                        <!-- 正则脚本 -->
+                        <div v-if="currentTab === 'regex'" class="max-w-5xl">
+                            <div v-if="regexScripts.length > 0" class="space-y-3">
+                                <div v-for="(script, index) in regexScripts" :key="index" class="bg-white p-3 border border-gray-200 rounded shadow-sm">
+                                    <div class="flex items-center flex-wrap gap-2 mb-2">
+                                        <span class="font-bold text-sm text-gray-900">{{ script.scriptName || '未命名规则' }}</span>
+                                        <span v-if="script.disabled" class="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold border border-red-200">已禁用</span>
+                                        <span class="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">作用域: {{ getRegexPlacement(script.placement) }}</span>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div class="bg-gray-50 p-2 rounded border border-gray-100">
+                                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">匹配正则 (Regex)</div>
+                                            <code class="block text-[11px] text-red-600 break-all font-mono">{{ script.regex }}</code>
+                                        </div>
+                                        <div class="bg-gray-50 p-2 rounded border border-gray-100">
+                                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">替换为 (Replacement)</div>
+                                            <code class="block text-[11px] text-blue-600 break-all font-mono">{{ script.replacement || '（清空/无）' }}</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="text-gray-400 text-center py-10">此卡片没有设置正则脚本</div>
+                        </div>
+
+                        <!-- 3. 聊天测卡 (Chat) -->
+                        <div v-if="currentTab === 'chat'" class="flex flex-col h-full max-w-4xl mx-auto border border-gray-200 rounded">
+                            <div class="bg-gray-100 p-2 text-xs flex items-center justify-between border-b border-gray-200">
+                                <div class="flex items-center gap-2 flex-1">
+                                    <span class="font-bold text-gray-500">API:</span>
+                                    <input v-model="apiEndpoint" type="text" class="px-2 py-1 bg-white border border-gray-300 rounded w-1/2 outline-none focus:border-blue-500" placeholder="http://127.0.0.1:1234/v1/chat/completions">
+                                    <span class="font-bold text-gray-500 ml-2 shrink-0">Key:</span>
+                                    <input v-model="apiKey" type="password" placeholder="留空则使用 test-key" title="远端 API 的鉴权密钥，本地 API 可留空" class="px-2 py-1 bg-white border border-gray-300 rounded w-32 outline-none focus:border-blue-500">
+                                </div>
+                                <div class="flex items-center">
+                                    <button @click="isChatRenderMode = !isChatRenderMode" 
+                                            :class="isChatRenderMode ? 'text-indigo-600' : 'text-gray-600'" 
+                                            class="font-bold mr-4 hover:opacity-80 transition-opacity">
+                                        {{ isChatRenderMode ? '👁️ 渲染模式' : '💻 代码模式' }}
+                                    </button>
+                                    <button @click="clearChat" class="text-red-500 hover:text-red-700 font-bold">清空记录</button>
+                                </div>
+                            </div>
+                            <div ref="chatContainer" class="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 custom-scrollbar">
+                                <template v-for="(msg, idx) in chatHistory" :key="idx">
+                                    <div v-if="msg.role !== 'system'" class="flex gap-3" :class="msg.role === 'user' ? 'flex-row-reverse' : ''">
+                                        <div class="w-8 h-8 rounded shrink-0 shadow-sm border border-gray-200 overflow-hidden" :class="msg.role === 'user' ? 'bg-blue-600' : 'bg-gray-200'">
+                                            <img v-if="msg.role === 'assistant' && imgUrl" :src="imgUrl" class="w-full h-full object-cover">
+                                        </div>
+                                        <div class="max-w-[75%]">
+                                            <div class="text-[10px] text-gray-500 mb-0.5" :class="msg.role === 'user' ? 'text-right' : ''">{{ msg.name }}</div>
+                                            <div :class="msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-800'" class="p-2.5 rounded shadow-sm leading-relaxed text-[12px]">
+                                                <div v-if="!isChatRenderMode" v-html="renderHTML(msg.content)"></div>
+                                                <div v-else v-html="msg.content"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                                <div v-if="isChatting" class="text-xs text-gray-400 italic">对方正在输入...</div>
+                            </div>
+                            <div class="p-2 bg-white border-t border-gray-200 flex gap-2">
+                                <textarea v-model="chatInput" @keydown.enter.exact.prevent="sendMessage" rows="2" class="flex-1 bg-gray-50 border border-gray-300 rounded py-1.5 px-2 outline-none focus:border-blue-500 resize-none text-[12px] custom-scrollbar" placeholder="输入对话... (Enter 发送)"></textarea>
+                                <button @click="sendMessage" :disabled="isChatting || chatInput.trim() === ''" class="px-4 bg-blue-600 text-white rounded font-bold disabled:bg-gray-300">发送</button>
+                            </div>
+                        </div>
+
+                        <!-- 4. 原始代码 (Raw JSON) -->
+                        <div v-if="currentTab === 'raw'" class="h-full">
+                            <pre class="bg-[#1e1e1e] text-[#d4d4d4] p-4 rounded text-[11px] overflow-auto h-full font-mono leading-tight custom-scrollbar">{{ formattedJson }}</pre>
+                        </div>
+
+                    </div>
+                </template>
+
+                <div v-else class="flex flex-col items-center justify-center h-full text-gray-400 bg-gray-50">
+                    <p class="text-sm font-medium">在左侧选择角色卡进行编辑</p>
+                </div>
+            </main>
+        </div>
+
+        <!-- ================= [ 弹窗：单卡添加标签 ] ================= -->
+        <transition name="fade">
+            <div v-if="tagModalVisible" class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4" @click.self="closeSingleTagModal">
+                <div class="bg-white rounded-lg shadow-xl w-96 max-w-full p-5 border border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-800 mb-3">🏷️ {{ tagModalTitle }}</h3>
+                    <input id="single-tag-input" v-model="tagInput" type="text"
+                        placeholder="输入标签，多个用逗号分隔，如: 魔法, 精灵"
+                        class="w-full px-3 py-2 border border-gray-300 rounded outline-none focus:border-blue-500 text-sm mb-4"
+                        @keyup.enter="confirmSingleTag" @keyup.esc="closeSingleTagModal">
+                    <div class="flex justify-end gap-2">
+                        <button @click="closeSingleTagModal" class="px-4 py-1.5 text-xs font-bold text-gray-500 hover:bg-gray-100 rounded border border-gray-300 transition">取消</button>
+                        <button @click="confirmSingleTag" class="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-sm transition">确定</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- ================= [ 弹窗：通用输入（替代 prompt） ] ================= -->
+        <transition name="fade">
+            <div v-if="promptModalVisible" class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4" @click.self="cancelPrompt">
+                <div class="bg-white rounded-lg shadow-xl w-96 max-w-full p-5 border border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-800 mb-3 whitespace-pre-line">📝 {{ promptModalTitle }}</h3>
+                    <input id="app-prompt-input" v-model="promptInput" type="text"
+                        class="w-full px-3 py-2 border border-gray-300 rounded outline-none focus:border-blue-500 text-sm mb-4"
+                        @keyup.enter="confirmPrompt" @keyup.esc="cancelPrompt">
+                    <div class="flex justify-end gap-2">
+                        <button @click="cancelPrompt" class="px-4 py-1.5 text-xs font-bold text-gray-500 hover:bg-gray-100 rounded border border-gray-300 transition">取消</button>
+                        <button @click="confirmPrompt" class="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-sm transition">确定</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- ================= [ 弹窗：批量标签 ] ================= -->
+        <transition name="fade">
+            <div v-if="showBatchTagModal" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh]">
+                    <div class="px-4 py-3 bg-gray-100 border-b border-gray-200 flex justify-between items-center">
+                        <h3 class="font-bold text-sm text-gray-800">批量设置标签 (已选 {{ selectedIds.length }} 张卡片)</h3>
+                        <button @click="showBatchTagModal = false" class="text-gray-400 hover:text-gray-600">✕</button>
+                    </div>
+                    
+                    <div class="p-4 overflow-y-auto space-y-4 flex-1 custom-scrollbar text-xs">
+                        <div>
+                            <label class="block font-bold text-gray-600 mb-1">操作模式:</label>
+                            <div class="flex gap-4">
+                                <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="batchMode" value="append"> 追加标签 (保留原有)</label>
+                                <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="batchMode" value="overwrite"> 覆盖标签 (清空旧标签)</label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-gray-600 mb-1">当前输入的标签 (用逗号分隔):</label>
+                            <input v-model="batchInputTags" type="text" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="例如: Fantasy, Elf, 魔法">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <label class="font-bold text-gray-600">💡 系统预设标签库 (点击快速添加):</label>
+                                <button @click="toggleTagLangMode" class="text-[10px] px-2 py-0.5 bg-gray-200 hover:bg-blue-600 hover:text-white rounded transition font-bold text-gray-700">
+                                    语言: {{ tagLangMode === 'both' ? '🌐 中英双语' : (tagLangMode === 'cn' ? '🇨🇳 纯中文' : '🇺🇸 纯英文') }}
+                                </button>
+                            </div>
+                            
+                            <div class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto p-2 bg-gray-50 border border-gray-200 rounded custom-scrollbar">
+                                <button v-for="preset in presetTagsLibrary" :key="preset.en" 
+                                        @click="togglePresetTag(preset)"
+                                        class="px-2 py-1 bg-white border border-gray-300 hover:border-blue-500 hover:text-blue-600 rounded transition-colors text-[11px]">
+                                    + {{ getPresetTagText(preset) }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex justify-end gap-2">
+                        <button @click="showBatchTagModal = false" class="px-4 py-1.5 bg-white border border-gray-300 rounded text-gray-700">取消</button>
+                        <button @click="executeBatchTagSave" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold">确认应用</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- ================= [ 弹窗：关系图谱 ] ================= -->
+        <transition name="fade">
+            <div v-if="showGraph" class="fixed inset-0 z-50 bg-gray-900 flex flex-col">
+                
+                <div class="px-4 py-2.5 bg-gray-900 border-b border-gray-800 flex flex-wrap justify-between items-center text-white shrink-0 gap-3 text-xs">
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <h3 class="font-bold flex items-center gap-1.5 text-sm">🌌 角色宇宙图谱</h3>
+                        
+                        <div class="flex bg-gray-800 rounded p-0.5 border border-gray-700">
+                            <button @click="updateGraphLayout('force')" :class="graphLayoutMode === 'force' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-2 py-1 rounded transition">🌐 网状</button>
+                            <button @click="updateGraphLayout('circular')" :class="graphLayoutMode === 'circular' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-2 py-1 rounded transition">🎯 环形</button>
+                        </div>
+
+                        <label class="flex items-center gap-1.5 bg-gray-800 px-2.5 py-1 rounded border border-gray-700 cursor-pointer hover:border-blue-500">
+                            <input type="checkbox" v-model="isolateCurrentGroup" @change="renderGraph" class="accent-blue-500">
+                            <span class="text-gray-300">仅显示当前分组 (Isolate)</span>
+                        </label>
+                    </div>
+
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2 bg-gray-800 px-2.5 py-1 rounded border border-gray-700">
+                            <span class="text-gray-400">连线图例:</span>
+                            <label class="flex items-center gap-1 text-blue-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.creator" @change="renderGraph" class="accent-blue-500"> 同作者</label>
+                            <label class="flex items-center gap-1 text-purple-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.category" @change="renderGraph" class="accent-purple-500"> 同分组</label>
+                            <label class="flex items-center gap-1 text-emerald-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.tags" @change="renderGraph" class="accent-emerald-500"> 共享标签</label>
+                        </div>
+
+                        <input v-model="graphSearchKeyword" @input="renderGraph" type="text" placeholder="高亮搜索..." class="bg-gray-800 border border-gray-700 rounded px-2.5 py-1 text-white outline-none focus:border-blue-500 w-28">
+
+                        <button @click="closeGraph" class="px-4 py-1 bg-red-600 hover:bg-red-700 text-white rounded font-bold transition">关闭</button>
+                    </div>
+                </div>
+                
+                <div ref="graphContainer" class="flex-1 w-full h-full relative"></div>
+            </div>
+        </transition>
+
+        <!-- ================= [ 弹窗：全局资产中心 ] ================= -->
+        <transition name="fade">
+            <div v-if="showGlobalAssetModal" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
+                <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col">
+                    
+                    <div class="px-6 py-4 bg-gray-900 text-white flex justify-between items-center shrink-0">
+                        <div class="flex items-center gap-4">
+                            <h3 class="font-bold text-base flex items-center gap-2">📚 全局世界书与正则资产中心</h3>
+                            <div class="flex bg-gray-800 rounded p-0.5 border border-gray-700 text-xs">
+                                <button @click="globalAssetTab = 'worldbook'" :class="globalAssetTab === 'worldbook' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-3 py-1 rounded transition">世界书合集 ({{ globalAllWorldbooks.length }})</button>
+                                <button @click="globalAssetTab = 'regex'" :class="globalAssetTab === 'regex' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-3 py-1 rounded transition">正则脚本合集 ({{ globalAllRegexScripts.length }})</button>
+                            </div>
+                        </div>
+                        <button @click="showGlobalAssetModal = false" class="px-4 py-1.5 bg-gray-800 hover:bg-red-600 rounded text-xs transition">关闭窗口</button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto p-6 bg-gray-50 custom-scrollbar space-y-3">
+                        
+                        <template v-if="globalAssetTab === 'worldbook'">
+                            <div v-if="globalAllWorldbooks.length > 0" class="space-y-3">
+                                <div v-for="(entry, idx) in globalAllWorldbooks" :key="idx" class="bg-white p-4 rounded-lg border border-gray-200 shadow-sm text-xs space-y-2">
+                                    <div class="flex justify-between items-center">
+                                        <div class="font-bold text-gray-900 text-sm flex items-center gap-2">
+                                            <span>{{ entry.displayName }}</span>
+                                            <span class="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">所属角色: {{ entry.ownerCardName }}</span>
+                                        </div>
+                                        <span class="text-gray-400">优先级: {{ entry.insertion_order ?? 50 }}</span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-1" v-if="entry.keys && entry.keys.length">
+                                        <span class="text-gray-400 font-bold mr-1">触发词:</span>
+                                        <span v-for="k in entry.keys" class="text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200 text-[10px]">{{ k }}</span>
+                                    </div>
+                                    <div class="bg-gray-50 p-2.5 rounded border border-gray-100 text-gray-700 font-mono text-[11px] max-h-24 overflow-y-auto custom-scrollbar" v-html="renderHTML(entry.content)"></div>
+                                </div>
+                            </div>
+                            <div v-else class="text-center text-gray-400 py-20">当前全库未收集到任何世界书条目</div>
+                        </template>
+
+                        <template v-if="globalAssetTab === 'regex'">
+                            <div v-if="globalAllRegexScripts.length > 0" class="space-y-3">
+                                <div v-for="(reg, idx) in globalAllRegexScripts" :key="idx" class="bg-white p-4 rounded-lg border border-gray-200 shadow-sm text-xs space-y-2">
+                                    <div class="flex justify-between items-center">
+                                        <div class="font-bold text-gray-900 text-sm flex items-center gap-2">
+                                            <span>{{ reg.scriptName || reg.comment || '未命名正则' }}</span>
+                                            <span class="text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded border border-purple-200">所属角色: {{ reg.ownerCardName }}</span>
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                                        <div class="bg-gray-50 p-2 rounded border border-gray-200">
+                                            <span class="text-gray-400 block mb-1">查找正则 (Find):</span>
+                                            <code>{{ reg.findRegex || reg.find }}</code>
+                                        </div>
+                                        <div class="bg-gray-50 p-2 rounded border border-gray-200">
+                                            <span class="text-gray-400 block mb-1">替换内容 (Replace):</span>
+                                            <code>{{ reg.replaceString || reg.replace }}</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="text-center text-gray-400 py-20">当前全库未收集到任何正则脚本</div>
+                        </template>
+
+                    </div>
+
+                </div>
+            </div>
+        </transition>
+
+        <!-- ================= [ 右键快捷菜单 ] ================= -->
+        <transition name="fade">
+            <div v-if="contextMenu.visible" 
+                 class="fixed z-[100] bg-white border border-gray-200 shadow-2xl rounded-lg py-1.5 w-48 text-xs text-gray-700"
+                 :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+                 @click.stop>
+                
+                <div class="px-3 py-1.5 font-bold text-gray-900 border-b border-gray-100 mb-1 truncate flex items-center justify-between">
+                    <span class="truncate">{{ contextMenu.item?.name }}</span>
+                    <span class="text-[9px] text-gray-400 font-normal">快捷操作</span>
+                </div>
+
+                <button @click="openFromLibrary(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-1.5 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-2 transition">
+                    👁️ 查看 / 编辑卡片
+                </button>
+                <button @click="quickMoveGroup(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-1.5 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-2 transition">
+                    📁 移动到指定分组...
+                </button>
+                <button @click="exportCard(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-1.5 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-2 transition">
+                    💾 导出单张卡片 (PNG)
+                </button>
+
+                <div class="border-t border-gray-100 my-1"></div>
+
+                <button @click="deleteCardItem(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-1.5 hover:bg-red-50 hover:text-red-600 flex items-center gap-2 transition">
+                    🗑️ 删除这张卡片
+                </button>
+            </div>
+        </transition>
+
+    </div>
+
+    <!-- 应用逻辑以 ES Module 方式引入（拆分为 js/ 目录下的模块） -->
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

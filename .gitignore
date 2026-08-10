@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+out/
+
+# Electron 二进制副本/缓存（本地构建用，勿提交）
+sillytavern-card-manager/
+*.zip
+
+# 日志
+*.log
+crash.log
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 临时
+*.tmp
+*.bak

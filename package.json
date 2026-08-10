@@ -1,0 +1,46 @@
+{
+  "name": "sillytavern-card-manager",
+  "version": "1.0.0",
+  "description": "SillyTavern 角色卡高级解析中心 - 本地桌面版（Vue 3 + Tailwind CSS + Electron）",
+  "main": "main.js",
+  "author": {
+    "name": "SillyTavern Community"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder -w"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.sillytavern.cardmanager",
+    "productName": "SillyTavern 角色卡管理器",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "css/**/*",
+      "js/**/*",
+      "vendor/**/*",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false,
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
