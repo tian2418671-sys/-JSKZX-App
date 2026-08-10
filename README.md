@@ -35,6 +35,24 @@
 
 ---
 
+## 📸 界面预览
+
+| 世界书管理（285 条可折叠） | 正则脚本编辑 |
+|:---:|:---:|
+| ![世界书](docs/screenshots/worldbook.png) | ![正则脚本](docs/screenshots/regex.png) |
+
+| 聊天测卡 · 渲染模式（HTML 卡片页） | 基础设定编辑 + 右键菜单 |
+|:---:|:---:|
+| ![聊天渲染](docs/screenshots/chat-render.png) | ![编辑与右键](docs/screenshots/editor-contextmenu.png) |
+
+| Raw JSON 视图 | 聊天测卡 · 代码模式 |
+|:---:|:---:|
+| ![Raw JSON](docs/screenshots/raw-json.png) | ![聊天代码](docs/screenshots/chat-code.png) |
+
+> 截图文件位于 `docs/screenshots/`（详见该目录内 README 的命名约定）。
+
+---
+
 ## ✨ 功能特性
 
 | 模块 | 说明 |
