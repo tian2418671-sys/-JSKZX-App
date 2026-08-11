@@ -477,6 +477,46 @@ app.whenReady().then(() => {
     }
   });
 
+  // IPC：通用选择文件夹对话框（用于绑定酒馆本地根目录）
+  ipcMain.handle('dialog:selectGenericFolder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: '选择 SillyTavern (酒馆) 根目录'
+    });
+    if (canceled || filePaths.length === 0) return null;
+    return filePaths[0]; // 只返回纯字符串路径
+  });
+
+  // IPC：物理跨目录拷贝卡片到酒馆 characters 目录（本地直推，无需 API / 无 CORS / 无 403）
+  ipcMain.handle('tavern:pushDir', async (event, sourcePaths, stRootPath) => {
+    try {
+      if (!fs.existsSync(stRootPath)) return { success: false, error: '无效的酒馆根目录路径' };
+
+      // 智能兼容：新版酒馆(多用户结构) 和 老版酒馆 的角色存储路径
+      const newDataDir = path.join(stRootPath, 'data', 'default-user', 'characters');
+      const oldDataDir = path.join(stRootPath, 'public', 'characters');
+
+      let targetDir = '';
+      if (fs.existsSync(newDataDir)) targetDir = newDataDir;
+      else if (fs.existsSync(oldDataDir)) targetDir = oldDataDir;
+      else return { success: false, error: '未找到 characters 文件夹，请确认选择的是 SillyTavern 根目录！' };
+
+      let count = 0;
+      for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
+        if (fs.existsSync(src)) {
+          const fileName = path.basename(src);
+          const dest = path.join(targetDir, fileName);
+          // 强制覆盖同名卡片，实现更新效果
+          fs.copyFileSync(src, dest);
+          count++;
+        }
+      }
+      return { success: true, count };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：原生消息对话框（替代 alert）
   ipcMain.handle('dialog:showMessage', async (event, options) => {
     return await dialog.showMessageBox(options);

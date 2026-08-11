@@ -74,67 +74,58 @@ const app = createApp({
         if (appSettings.value.tavernUrl === undefined) {
             appSettings.value.tavernUrl = 'http://127.0.0.1:8000';
         }
+        // 酒馆本地根目录（物理推送用；绑定一次即可永久免密一键推送）
+        if (appSettings.value.tavernLocalPath === undefined) {
+            appSettings.value.tavernLocalPath = '';
+        }
 
-        // 推送到酒馆的具体方法
+        // 推送到酒馆：本地物理拷贝（直接复制卡片 PNG 到酒馆 characters 目录，无 API / CORS / 403 烦恼）
         const pushToTavern = async () => {
-            showExperimentalMenu.value = false; // 点击后关闭下拉菜单
+            showExperimentalMenu.value = false;
 
             if (selectedIds.value.length === 0) {
                 return nativeAlert('请先在列表中勾选要推送到酒馆的角色卡！', 'warning');
             }
 
-            // 询问酒馆地址（Electron 中 window.prompt 静默失效，改用通用弹窗 appPrompt）
-            const currentUrl = appSettings.value.tavernUrl;
-            const inputUrl = await appPrompt('🍻 请输入您的酒馆 (SillyTavern) 根地址：\n(确保酒馆已开启 API 扩展功能)', currentUrl);
+            // 1. 检查或请求酒馆的本地绝对路径
+            let stRoot = appSettings.value.tavernLocalPath;
+            if (!stRoot) {
+                const confirmed = await confirmDialog('尚未绑定 SillyTavern 本地目录。\n是否现在去选择你的酒馆根文件夹？\n(选对一次即可永久免密一键推送)');
+                if (!confirmed) return;
 
-            if (!inputUrl) return; // 用户取消
-            appSettings.value.tavernUrl = inputUrl; // 保存最新地址
+                const folderPath = await window.electronAPI.selectGenericFolder();
+                if (!folderPath) return; // 用户取消选择
 
-            // 询问酒馆 API 密码（酒馆若设置了 API 密码则必须填写；留空表示未设置，取消则中断）
-            const savedTavernKey = appSettings.value.tavernApiKey || '';
-            const inputTavernKey = await appPrompt('🔑 请输入酒馆 API 密码（若酒馆未设置 API 密码可留空）：', savedTavernKey);
-            if (inputTavernKey === null) return; // 用户取消
-            appSettings.value.tavernApiKey = inputTavernKey; // 保存密码（留空即清空）
+                stRoot = folderPath;
+                appSettings.value.tavernLocalPath = stRoot; // 自动持久化保存
+            }
 
-            // 进入推送流程
+            // 2. 收集目标文件的真实物理路径
             const targetIds = [...selectedIds.value];
-            let successCount = 0;
-            const failReasons = [];
-
+            const pathsToPush = [];
             for (const id of targetIds) {
                 const item = library.value.find(c => c.id === id);
-                if (!item) continue;
+                if (item && item.path) pathsToPush.push(item.path);
+            }
+            if (pathsToPush.length === 0) {
+                return nativeAlert('未找到选中卡片的物理文件路径，无法推送。', 'warning');
+            }
 
-                try {
-                    // 真实推送：经主进程上传卡片 PNG 到酒馆 /api/characters/import（绕过 CORS，携带可选 API 密码）
-                    const pushRes = await window.electronAPI.pushToTavern({
-                        tavernUrl: inputUrl,
-                        cardPath: item.path,
-                        cardName: item.name,
-                        apiKey: appSettings.value.tavernApiKey || ''
-                    });
-                    if (!pushRes || !pushRes.success) {
-                        throw new Error((pushRes && pushRes.error) || '推送失败');
-                    }
-                    successCount++;
-                    console.log(`已推送 [${item.name}] 到酒馆: ${inputUrl}`);
+            // 3. 执行系统级物理推送
+            try {
+                const res = await window.electronAPI.pushToSillyTavernDir(pathsToPush, stRoot);
 
-                } catch (error) {
-                    console.error(`推送 [${item.name}] 失败:`, error);
-                    failReasons.push(`${item.name}: ${(error && error.message) ? error.message : String(error)}`);
+                if (res && res.success) {
+                    nativeAlert(`🎉 推送完成！共将 ${res.count} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`, 'info');
+                    clearSelection();
+                } else {
+                    // 路径可能错误或版本不兼容，清空错误路径让用户下次重选
+                    appSettings.value.tavernLocalPath = '';
+                    nativeAlert(`推送失败：${(res && res.error) || '未知错误'}\n目录绑定已自动重置，请下次重新选择正确的 SillyTavern 根目录。`, 'error');
                 }
+            } catch (error) {
+                nativeAlert(`推送发生底层异常: ${error.message}`, 'error');
             }
-
-            let pushMsg = `🎉 推送完成！共将 ${successCount} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`;
-            if (failReasons.length > 0) {
-                const shown = failReasons.slice(0, 5);
-                pushMsg += `\n\n❌ 失败 ${failReasons.length} 张：\n` + shown.map(r => '· ' + r).join('\n');
-                if (failReasons.length > 5) pushMsg += `\n... 等共 ${failReasons.length} 条`;
-            }
-            nativeAlert(pushMsg, successCount > 0 ? 'info' : 'warning');
-
-            // 可选：推送完成后清空勾选
-            // clearSelection();
         };
 
         // ================= [ 顶部菜单系统：视图选项与工具函数 ] =================

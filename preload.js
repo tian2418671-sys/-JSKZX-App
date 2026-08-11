@@ -43,5 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 用系统资源管理器打开指定文件夹（查看快照/回收站等；相对路径自动解析）
     openPath: (targetPath) => ipcRenderer.invoke('system:openPath', targetPath),
     // 推送角色卡到酒馆（经主进程以 multipart 上传，绕过 CORS）
-    pushToTavern: (params) => ipcRenderer.invoke('tavern:push', params)
+    pushToTavern: (params) => ipcRenderer.invoke('tavern:push', params),
+    // 通用选择文件夹对话框（绑定酒馆本地根目录）
+    selectGenericFolder: () => ipcRenderer.invoke('dialog:selectGenericFolder'),
+    // 物理拷贝卡片到酒馆 characters 目录（本地直推）
+    pushToSillyTavernDir: (paths, rootPath) => ipcRenderer.invoke('tavern:pushDir', paths, rootPath)
 });
