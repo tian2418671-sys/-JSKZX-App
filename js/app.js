@@ -415,6 +415,51 @@ const app = createApp({
             try { localStorage.setItem('stc-api-model', v || ''); } catch (e) { /* 忽略 */ }
         });
 
+        // API 协议类型：'openai'（OpenAI 兼容，默认）或 'anthropic'（Claude 原生）
+        let savedApiType = '';
+        try { savedApiType = localStorage.getItem('stc-api-type') || ''; } catch (e) { /* 忽略 */ }
+        const apiType = ref(savedApiType === 'anthropic' ? 'anthropic' : 'openai');
+        watch(apiType, (v) => {
+            try { localStorage.setItem('stc-api-type', v || 'openai'); } catch (e) { /* 忽略 */ }
+        });
+
+        // 手动保存 API 配置（按钮触发，立即落盘 + 提示）
+        const saveApiConfig = () => {
+            try {
+                localStorage.setItem('stc-api-endpoint', apiEndpoint.value);
+                localStorage.setItem('stc-api-key', apiKey.value);
+                localStorage.setItem('stc-api-model', apiModel.value);
+                localStorage.setItem('stc-api-type', apiType.value);
+            } catch (e) { /* 忽略 */ }
+            nativeAlert('API 设置已成功保存！', 'info');
+        };
+
+        // 切换 API 类型时自动填充常用默认 Endpoint / Model
+        const handleApiTypeChange = () => {
+            if (apiType.value === 'anthropic') {
+                if (!apiEndpoint.value || apiEndpoint.value.includes('openai') || apiEndpoint.value.includes('1234')) {
+                    apiEndpoint.value = 'https://api.anthropic.com';
+                    apiModel.value = 'claude-3-5-sonnet-20241022';
+                }
+            } else {
+                if (!apiEndpoint.value || apiEndpoint.value.includes('anthropic')) {
+                    apiEndpoint.value = DEFAULT_API_ENDPOINT;
+                    apiModel.value = '';
+                }
+            }
+            saveApiConfig();
+        };
+
+        // 兼容 OpenAI（choices[0].message.content）与 Anthropic（content[0].text）的回复提取
+        const extractReplyContent = (result) => {
+            if (!result || !result.data) return '';
+            const d = result.data;
+            if (apiType.value === 'anthropic') {
+                return (d.content && d.content[0] && d.content[0].text) || '';
+            }
+            return (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
+        };
+
         // ================= [ API 模型列表拉取（GET /v1/models，经主进程转发绕过 CORS）] =================
         const availableModels = ref([]);      // 拉取到的服务端模型列表
         const isFetchingModels = ref(false);  // 是否正在拉取
@@ -431,7 +476,7 @@ const app = createApp({
             availableModels.value = [];
             try {
                 const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
-                const result = await window.electronAPI.fetchModels(ep, authKey);
+                const result = await window.electronAPI.fetchModels(ep, authKey, apiType.value);
                 if (!result || !result.success) {
                     fetchModelStatus.value = `❌ 拉取失败: ${(result && result.error) || '未知错误'}`;
                     return;
@@ -665,10 +710,10 @@ const app = createApp({
             try {
                 // 持久化 API Key（localStorage 可能不可用，做防御性写入）
                 try { localStorage.setItem('stc-api-key', apiKey.value); } catch (e) { /* 忽略 */ }
-                const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, apiKey.value);
+                const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, apiKey.value, apiType.value);
 
-                if (result.success && result.data.choices && result.data.choices.length > 0) {
-                    const reply = result.data.choices[0].message.content;
+                const reply = extractReplyContent(result);
+                if (result.success && reply) {
                     chatHistory.value.push({ role: 'assistant', content: reply, name: safeData.value.name });
                 } else {
                     nativeAlert(result.error || "模型返回了空数据", "error", "API 请求失败");
@@ -2150,11 +2195,11 @@ const app = createApp({
                         temperature: 0.2 // 偏低温度保证 JSON 格式稳定性
                     };
                     const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
-                    const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey);
+                    const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
                     if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
 
-                    // 6. 强力提取 JSON 数组（清洗 markdown 块）
-                    let rawReply = (result.data.choices?.[0]?.message?.content || '').trim();
+                    // 6. 强力提取 JSON 数组（兼容 OpenAI / Anthropic 回复结构）
+                    let rawReply = extractReplyContent(result).trim();
                     rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
                     const jsonMatch = rawReply.match(/\[[\s\S]*\]/);
                     if (!jsonMatch) throw new Error(`模型未返回有效的 JSON 数组: ${rawReply}`);
@@ -2450,7 +2495,7 @@ const app = createApp({
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
-            chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, chatContainer,
+            chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,

@@ -21,10 +21,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     copyToLibrary: (sourcePaths, targetFolder) => ipcRenderer.invoke('file:copyToLibrary', sourcePaths, targetFolder),
     // 获取拖拽文件的真实路径（Electron 33 起 File.path 已废弃，改用 webUtils）
     getPathForFile: (file) => webUtils.getPathForFile(file),
-    // 聊天测试接口（OpenAI 兼容格式，经主进程转发以绕过 CORS）
-    sendChatMessage: (endpoint, payload, apiKey) => ipcRenderer.invoke('chat:send', endpoint, payload, apiKey),
+    // 聊天测试接口（OpenAI 兼容 / Anthropic 双协议，经主进程转发以绕过 CORS；apiType: 'openai' | 'anthropic'）
+    sendChatMessage: (endpoint, payload, apiKey, apiType) => ipcRenderer.invoke('chat:send', endpoint, payload, apiKey, apiType),
     // 拉取服务端可用模型列表（GET /v1/models，经主进程转发以绕过 CORS）
-    fetchModels: (endpoint, apiKey) => ipcRenderer.invoke('models:fetch', endpoint, apiKey),
+    fetchModels: (endpoint, apiKey, apiType) => ipcRenderer.invoke('models:fetch', endpoint, apiKey, apiType),
     // 彻底删除本地文件（高危操作，需前端确认后调用）
     deleteFile: (filePath) => ipcRenderer.invoke('file:delete', filePath),
     // 一键导出角色卡完整整合包（主卡 + 独立世界书 + 正则脚本）

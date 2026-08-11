@@ -1058,6 +1058,13 @@
                     </div>
                     <div class="space-y-3.5 mb-5">
                         <div>
+                            <label class="block text-xs text-zinc-400 mb-1">API 接入格式 / 协议类型：</label>
+                            <select v-model="apiType" @change="handleApiTypeChange" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:border-indigo-500 focus:outline-none cursor-pointer">
+                                <option value="openai">OpenAI 兼容格式 (OpenAI / DeepSeek / Kimi / 聚合中转)</option>
+                                <option value="anthropic">Anthropic 兼容格式 (Claude 官方或兼容中转)</option>
+                            </select>
+                        </div>
+                        <div>
                             <label class="block text-xs text-zinc-400 mb-1">API Endpoint (接口地址)</label>
                             <input v-model="apiEndpoint" type="text" placeholder="http://127.0.0.1:1234/v1/chat/completions" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:border-indigo-500 focus:outline-none">
                         </div>
@@ -1081,7 +1088,8 @@
                         <p class="text-[10px] text-zinc-500 leading-relaxed">设置自动保存，重启后自动恢复；与 AI 打标 / 聊天测卡实时同步。</p>
                     </div>
                     <div class="flex justify-end gap-2 pt-2 border-t border-zinc-800">
-                        <button @click="showApiModal = false" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow">完成并保存</button>
+                        <button @click="showApiModal = false" class="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded shadow">关闭</button>
+                        <button @click="saveApiConfig" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow flex items-center gap-1.5">💾 保存 API 配置</button>
                     </div>
                 </div>
             </div>

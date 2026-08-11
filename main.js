@@ -502,21 +502,45 @@ app.whenReady().then(() => {
     return url;                                                // 其他自定义路径保持原样
   };
 
-  // IPC：发送大模型 API 请求（经主进程转发，绕过前端 CORS 限制）
-  ipcMain.handle('chat:send', async (event, endpoint, payload, apiKey) => {
+  // IPC：发送大模型 API 请求（经主进程转发，绕过前端 CORS 限制；支持 OpenAI 兼容 / Anthropic 双协议）
+  ipcMain.handle('chat:send', async (event, endpoint, payload, apiKey, apiType) => {
     try {
-      // 端点规范化：自动补全 /chat/completions，避免向 /v1 等不存在的路径请求返回 404
-      const chatEndpoint = normalizeChatEndpoint(endpoint);
-      // 鉴权密钥：前端配置了则使用，未配置时回退到 test-key（兼容无需鉴权的本地 API）
-      const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : 'test-key';
-      // Electron 自带的 Node.js fetch
-      const response = await fetch(chatEndpoint, {
-        method: 'POST',
-        headers: {
+      const type = apiType === 'anthropic' ? 'anthropic' : 'openai';
+      let fetchUrl, headers, bodyData;
+
+      if (type === 'anthropic') {
+        // Anthropic 原生协议：POST /v1/messages + x-api-key 鉴权，system 独立字段
+        const base = String(endpoint || '').trim().replace(/\/+$/, '');
+        fetchUrl = /\/v1\/messages$/.test(base) ? base : base + '/v1/messages';
+        headers = {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authKey}`
-        },
-        body: JSON.stringify(payload)
+          'x-api-key': (apiKey && apiKey.trim()) ? apiKey.trim() : '',
+          'anthropic-version': '2023-06-01'
+        };
+        let systemPrompt = '';
+        const filteredMessages = (payload.messages || []).filter(m => {
+          if (m.role === 'system') { systemPrompt = m.content; return false; }
+          return true;
+        });
+        bodyData = {
+          model: payload.model,
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: filteredMessages,
+          temperature: payload.temperature ?? 0.2
+        };
+      } else {
+        // OpenAI 兼容协议（OpenAI / DeepSeek / Kimi / 聚合中转）：/chat/completions + Bearer
+        fetchUrl = normalizeChatEndpoint(endpoint);
+        const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : 'test-key';
+        headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authKey}` };
+        bodyData = payload;
+      }
+
+      const response = await fetch(fetchUrl, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(bodyData)
       });
 
       if (!response.ok) {
@@ -531,27 +555,38 @@ app.whenReady().then(() => {
     }
   });
 
-  // IPC：拉取服务端可用模型列表（GET /v1/models，经主进程转发绕过 CORS）
-  ipcMain.handle('models:fetch', async (event, endpoint, apiKey) => {
+  // IPC：拉取服务端可用模型列表（GET /v1/models，经主进程转发绕过 CORS；支持双协议）
+  ipcMain.handle('models:fetch', async (event, endpoint, apiKey, apiType) => {
     try {
       const ep = String(endpoint || '').trim();
       if (!ep) return { success: false, error: '未填写 API Endpoint 地址' };
 
-      // 智能构建 /v1/models 地址：兼容 OpenAI / LM Studio / Ollama 标准接口
-      let modelsUrl = '';
-      if (/\/models$/.test(ep)) {
-        modelsUrl = ep; // 已是以 /models 结尾的完整列表地址，直接使用
-      } else if (ep.endsWith('/chat/completions')) {
-        modelsUrl = ep.replace(/\/chat\/completions$/, '/models');
-      } else if (/\/v1\/?$/.test(ep)) {
-        modelsUrl = ep.replace(/\/+$/, '') + '/models';
-      } else {
-        modelsUrl = ep.replace(/\/+$/, '') + '/models';
-      }
+      const type = apiType === 'anthropic' ? 'anthropic' : 'openai';
+      let modelsUrl, headers;
 
-      const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : '';
-      const headers = { 'Content-Type': 'application/json' };
-      if (authKey) headers['Authorization'] = `Bearer ${authKey}`;
+      if (type === 'anthropic') {
+        // Anthropic：GET /v1/models + x-api-key
+        const base = ep.replace(/\/+$/, '');
+        modelsUrl = /\/v1\/models$/.test(base) ? base : base + '/v1/models';
+        headers = {
+          'x-api-key': (apiKey && apiKey.trim()) ? apiKey.trim() : '',
+          'anthropic-version': '2023-06-01'
+        };
+      } else {
+        // 智能构建 /v1/models 地址：兼容 OpenAI / LM Studio / Ollama 标准接口
+        if (/\/models$/.test(ep)) {
+          modelsUrl = ep; // 已是以 /models 结尾的完整列表地址，直接使用
+        } else if (ep.endsWith('/chat/completions')) {
+          modelsUrl = ep.replace(/\/chat\/completions$/, '/models');
+        } else if (/\/v1\/?$/.test(ep)) {
+          modelsUrl = ep.replace(/\/+$/, '') + '/models';
+        } else {
+          modelsUrl = ep.replace(/\/+$/, '') + '/models';
+        }
+        const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : '';
+        headers = { 'Content-Type': 'application/json' };
+        if (authKey) headers['Authorization'] = `Bearer ${authKey}`;
+      }
 
       const response = await fetch(modelsUrl, { method: 'GET', headers });
       if (!response.ok) {
