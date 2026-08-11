@@ -1007,6 +1007,25 @@ const app = createApp({
         // ================= [ Electron 专属逻辑 ] =================
 
         // 读取并解析单张卡片文件，成功则加入库中（供文件夹加载 / 磁盘扫描共用）
+        // 判断 JSON 数据是否为真正的角色卡（V2/V3 或 V1 格式），
+        // 过滤掉 config.json 等非卡片文件，防止污染卡片库
+        const isCharacterCardData = (data) => {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+            // V2/V3：spec 标记（chara_card_v2/v3）且带 data 对象
+            if (typeof data.spec === 'string' && /^chara_card_v[23]$/i.test(data.spec.trim())) {
+                return !!(data.data && typeof data.data === 'object');
+            }
+            // V1 / Character.ai 格式：必须有角色名 + 至少一个内容字段
+            if (typeof data.name === 'string' && data.name.trim() !== '') {
+                return typeof data.description === 'string' ||
+                       typeof data.personality === 'string' ||
+                       typeof data.first_mes === 'string' ||
+                       typeof data.scenario === 'string' ||
+                       typeof data.mes_example === 'string';
+            }
+            return false;
+        };
+
         const parseAndAddCard = async (file) => {
             try {
                 let parsedData = null;
@@ -1014,7 +1033,13 @@ const app = createApp({
                 if (file.name.toLowerCase().endsWith('.json')) {
                     // 读取本地 JSON 文本
                     const text = await window.electronAPI.readText(file.path);
-                    parsedData = JSON.parse(text);
+                    const parsed = JSON.parse(text);
+                    // 内容校验：非角色卡的 JSON（如 config.json）直接跳过，不进入解析与入库
+                    if (!isCharacterCardData(parsed)) {
+                        console.warn(`跳过非角色卡 JSON: ${file.name}`);
+                        return false;
+                    }
+                    parsedData = parsed;
                 } else {
                     // 读取本地图片 Buffer
                     const buffer = await window.electronAPI.readBuffer(file.path);
