@@ -94,6 +94,106 @@ body, textarea, input {
 textarea, input, select { transition: border-color 0.15s ease-in-out; }
 
 /* ============ 主题系统 (浅色 / 深色) ============ */
+/* UI 底色为 zinc 系深色硬编码：浅色主题通过 [data-theme] 全面反转层级，
+   深色主题补全灰色系与强调色适配，保证两套主题均完整生效 */
+
+/* ---------- 浅色主题：将 zinc/gray 硬编码深色反转为浅色 ---------- */
+[data-theme="light"] { color-scheme: light; }
+[data-theme="light"] body { background-color: #f4f4f5; color: #27272a; }
+
+/* 背景层级：外层 #f4f4f5 → 面板 #fff → 次级/输入 #f4f4f5 → hover #e4e4e7 */
+[data-theme="light"] .bg-zinc-950 { background-color: #f4f4f5; }
+[data-theme="light"] .bg-zinc-950\/60 { background-color: rgba(244, 244, 245, 0.6); }
+[data-theme="light"] .bg-zinc-900 { background-color: #ffffff; }
+[data-theme="light"] .bg-zinc-900\/90 { background-color: rgba(255, 255, 255, 0.9); }
+[data-theme="light"] .bg-zinc-800 { background-color: #f4f4f5; }
+[data-theme="light"] .bg-zinc-800\/50 { background-color: rgba(244, 244, 245, 0.5); }
+[data-theme="light"] .bg-zinc-800\/60 { background-color: rgba(244, 244, 245, 0.6); }
+[data-theme="light"] .bg-zinc-700 { background-color: #e4e4e7; }
+[data-theme="light"] .bg-zinc-600 { background-color: #d4d4d8; }
+[data-theme="light"] .hover\:bg-zinc-800:hover { background-color: #e4e4e7; }
+[data-theme="light"] .hover\:bg-zinc-700:hover { background-color: #d4d4d8; }
+[data-theme="light"] .hover\:bg-zinc-700\/50:hover { background-color: rgba(212, 212, 216, 0.5); }
+
+/* gray 系同层级适配 */
+[data-theme="light"] .bg-gray-50 { background-color: #fafafa; }
+[data-theme="light"] .bg-gray-100 { background-color: #f4f4f5; }
+[data-theme="light"] .bg-gray-200 { background-color: #e4e4e7; }
+[data-theme="light"] .bg-gray-700 { background-color: #e4e4e7; }
+[data-theme="light"] .bg-gray-800 { background-color: #f4f4f5; }
+[data-theme="light"] .bg-gray-900 { background-color: #ffffff; }
+[data-theme="light"] .hover\:bg-gray-50:hover { background-color: #f4f4f5; }
+[data-theme="light"] .hover\:bg-gray-100:hover { background-color: #e4e4e7; }
+[data-theme="light"] .hover\:bg-gray-700:hover { background-color: #d4d4d8; }
+
+/* 文本层级 */
+[data-theme="light"] .text-zinc-100 { color: #18181b; }
+[data-theme="light"] .text-zinc-200 { color: #27272a; }
+[data-theme="light"] .text-zinc-300 { color: #3f3f46; }
+[data-theme="light"] .text-zinc-400 { color: #52525b; }
+[data-theme="light"] .text-zinc-500 { color: #71717a; }
+[data-theme="light"] .hover\:text-zinc-100:hover { color: #18181b; }
+[data-theme="light"] .hover\:text-zinc-200:hover { color: #27272a; }
+[data-theme="light"] .hover\:text-zinc-300:hover { color: #3f3f46; }
+[data-theme="light"] .placeholder-zinc-500::placeholder { color: #a1a1aa; }
+
+[data-theme="light"] .text-gray-300 { color: #4b5563; }
+[data-theme="light"] .text-gray-400 { color: #6b7280; }
+[data-theme="light"] .text-gray-500 { color: #6b7280; }
+[data-theme="light"] .text-gray-600 { color: #4b5563; }
+[data-theme="light"] .text-gray-700 { color: #374151; }
+[data-theme="light"] .text-gray-800 { color: #1f2937; }
+[data-theme="light"] .text-gray-900 { color: #111827; }
+[data-theme="light"] .hover\:text-gray-600:hover { color: #374151; }
+
+/* 边框层级 */
+[data-theme="light"] .border-zinc-600 { border-color: #d4d4d8; }
+[data-theme="light"] .border-zinc-700 { border-color: #e4e4e7; }
+[data-theme="light"] .border-zinc-700\/50 { border-color: rgba(228, 228, 231, 0.5); }
+[data-theme="light"] .border-zinc-800 { border-color: #e4e4e7; }
+[data-theme="light"] .hover\:border-zinc-500:hover { border-color: #a1a1aa; }
+[data-theme="light"] .hover\:border-zinc-600:hover { border-color: #d4d4d8; }
+
+[data-theme="light"] .border-gray-100 { border-color: #f3f4f6; }
+[data-theme="light"] .border-gray-200 { border-color: #e5e7eb; }
+[data-theme="light"] .border-gray-300 { border-color: #d1d5db; }
+[data-theme="light"] .border-gray-700 { border-color: #e5e7eb; }
+[data-theme="light"] .border-gray-800 { border-color: #e5e7eb; }
+
+/* 输入控件浅色适配 */
+[data-theme="light"] textarea,
+[data-theme="light"] input,
+[data-theme="light"] select { background-color: #ffffff !important; color: #27272a; border-color: #d4d4d8 !important; }
+[data-theme="light"] .focus\:ring-offset-zinc-800:focus { --tw-ring-offset-color: #f4f4f5; }
+
+/* 强调色在浅色底上的对比度加深（保持语义色相） */
+[data-theme="light"] .text-blue-400 { color: #2563eb; }
+[data-theme="light"] .text-indigo-400 { color: #4f46e5; }
+[data-theme="light"] .text-purple-400 { color: #9333ea; }
+[data-theme="light"] .text-emerald-400 { color: #059669; }
+[data-theme="light"] .text-red-400 { color: #dc2626; }
+[data-theme="light"] .text-green-400 { color: #16a34a; }
+[data-theme="light"] .text-amber-400 { color: #d97706; }
+[data-theme="light"] .text-amber-500\/80 { color: #d97706; }
+[data-theme="light"] .hover\:text-blue-300:hover { color: #2563eb; }
+[data-theme="light"] .hover\:text-amber-400:hover { color: #d97706; }
+[data-theme="light"] .hover\:text-red-400:hover { color: #dc2626; }
+[data-theme="light"] .hover\:text-indigo-400:hover { color: #4f46e5; }
+[data-theme="light"] .hover\:text-purple-300:hover { color: #9333ea; }
+[data-theme="light"] .group:hover .group-hover\:text-blue-400 { color: #2563eb; }
+[data-theme="light"] .bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.14); }
+[data-theme="light"] .bg-indigo-500\/10 { background-color: rgba(99, 102, 241, 0.12); }
+[data-theme="light"] .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.1); }
+[data-theme="light"] .bg-green-500\/10 { background-color: rgba(34, 197, 94, 0.12); }
+[data-theme="light"] .bg-blue-900\/20 { background-color: rgba(59, 130, 246, 0.15); }
+[data-theme="light"] .bg-blue-900\/30 { background-color: rgba(59, 130, 246, 0.22); }
+[data-theme="light"] .bg-blue-50\/50 { background-color: rgba(239, 246, 255, 0.7); }
+[data-theme="light"] .border-blue-500\/40 { border-color: rgba(59, 130, 246, 0.5); }
+[data-theme="light"] .border-indigo-500\/30 { border-color: rgba(99, 102, 241, 0.35); }
+[data-theme="light"] .border-purple-500\/40 { border-color: rgba(168, 85, 247, 0.4); }
+[data-theme="light"] .border-red-500\/30 { border-color: rgba(239, 68, 68, 0.35); }
+
+/* ---------- 深色主题：保持 UI 原生深色，补全灰色系与强调色适配 ---------- */
 [data-theme="dark"] { color-scheme: dark; }
 [data-theme="dark"] body { background-color: #111827; color: #d1d5db; }
 [data-theme="dark"] .bg-white,
@@ -106,17 +206,43 @@ textarea, input, select { transition: border-color 0.15s ease-in-out; }
 [data-theme="dark"] .bg-gray-300 { background-color: #4b5563; }
 [data-theme="dark"] .bg-gray-800 { background-color: #111827; }
 [data-theme="dark"] .bg-\[\#1e1e1e\] { background-color: #0b1120; }
+[data-theme="dark"] .text-gray-300 { color: #d1d5db; }
+[data-theme="dark"] .text-gray-400 { color: #9ca3af; }
 [data-theme="dark"] .text-gray-500,
 [data-theme="dark"] .text-gray-600,
 [data-theme="dark"] .text-gray-700,
 [data-theme="dark"] .text-gray-800,
 [data-theme="dark"] .text-gray-900 { color: #e5e7eb; }
-[data-theme="dark"] .text-gray-400 { color: #9ca3af; }
 [data-theme="dark"] .border-gray-100,
 [data-theme="dark"] .border-gray-200,
 [data-theme="dark"] .border-gray-300 { border-color: #374151; }
+[data-theme="dark"] .border-gray-700 { border-color: #4b5563; }
+[data-theme="dark"] .border-gray-800 { border-color: #374151; }
 [data-theme="dark"] textarea,
 [data-theme="dark"] input,
 [data-theme="dark"] select { background-color: #111827 !important; color: #e5e7eb; border-color: #4b5563 !important; }
 [data-theme="dark"] .bg-blue-100 { background-color: #1e3a5f; }
 [data-theme="dark"] .border-blue-300 { border-color: #3b82f6; }
+/* 强调色 -50 背景与浅色文字在深色下加深/提亮 */
+[data-theme="dark"] .bg-blue-50,
+[data-theme="dark"] .bg-blue-50\/50,
+[data-theme="dark"] .bg-amber-50,
+[data-theme="dark"] .bg-green-50,
+[data-theme="dark"] .bg-indigo-50,
+[data-theme="dark"] .bg-purple-50 { background-color: rgba(30, 58, 95, 0.3); }
+[data-theme="dark"] .bg-indigo-500\/10 { background-color: rgba(99, 102, 241, 0.16); }
+[data-theme="dark"] .bg-green-500\/10 { background-color: rgba(34, 197, 94, 0.13); }
+[data-theme="dark"] .bg-blue-900\/20 { background-color: rgba(30, 58, 138, 0.45); }
+[data-theme="dark"] .bg-blue-900\/30 { background-color: rgba(30, 58, 138, 0.55); }
+[data-theme="dark"] .border-blue-200 { border-color: rgba(59, 130, 246, 0.45); }
+[data-theme="dark"] .border-amber-200 { border-color: rgba(245, 158, 11, 0.45); }
+[data-theme="dark"] .border-green-200 { border-color: rgba(34, 197, 94, 0.45); }
+[data-theme="dark"] .border-indigo-200 { border-color: rgba(99, 102, 241, 0.45); }
+[data-theme="dark"] .border-purple-200 { border-color: rgba(168, 85, 247, 0.45); }
+[data-theme="dark"] .text-amber-600 { color: #fbbf24; }
+[data-theme="dark"] .text-green-700 { color: #4ade80; }
+[data-theme="dark"] .text-indigo-700 { color: #818cf8; }
+[data-theme="dark"] .text-purple-700 { color: #c084fc; }
+[data-theme="dark"] .text-blue-800 { color: #93c5fd; }
+[data-theme="dark"] .text-blue-600\/80 { color: #93c5fd; }
+[data-theme="dark"] .text-amber-500\/80 { color: #fbbf24; }

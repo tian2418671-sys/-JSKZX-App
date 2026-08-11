@@ -51,7 +51,7 @@
                     <input ref="importFileInput" type="file" accept=".png,.webp,.jpg,.jpeg,.json" multiple class="hidden" @change="handleImportFiles">
 
                     <div class="relative group">
-                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">文件(F)</button>
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">文件(F)</button>
                         <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[160px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                             <button @click="selectFixedDirectory" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">📁 打开角色库 <span>Ctrl+O</span></button>
                             <button @click="importCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">➕ 导入角色卡 <span>Ctrl+I</span></button>
@@ -65,7 +65,7 @@
                     </div>
 
                     <div class="relative group">
-                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">编辑(E)</button>
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">编辑(E)</button>
                         <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[170px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                             <button @click="isMultiSelectMode = !isMultiSelectMode" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
                                 ☑️ 批量选择模式 <span v-if="isMultiSelectMode">✓</span>
@@ -79,13 +79,13 @@
                     </div>
 
                     <div class="relative group">
-                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">视图(V)</button>
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">视图(V)</button>
                         <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[190px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                             <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
                                 <span>工作区字号</span>
                                 <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
                                     <button @click="appSettings.fontSize = Math.max(12, appSettings.fontSize - 1)" class="hover:text-white px-1">-</button>
-                                    <span class="text-white text-[11px] font-mono">{{ appSettings.fontSize }}px</span>
+                                    <span class="text-zinc-100 text-[11px] font-mono">{{ appSettings.fontSize }}px</span>
                                     <button @click="appSettings.fontSize = Math.min(22, appSettings.fontSize + 1)" class="hover:text-white px-1">+</button>
                                 </div>
                             </div>
@@ -133,7 +133,7 @@
             <div class="flex items-center gap-3">
                 <!-- 你可以把之前的全局搜索框挪到这里，或者保留在侧边栏 -->
                 
-                <button @click="showSettingsModal = true" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded text-sm transition border border-zinc-700 shadow-sm">
+                <button @click="showSettingsModal = true" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 rounded text-sm transition border border-zinc-700 shadow-sm">
                     <span>⚙️</span> 设置
                 </button>
             </div>
@@ -253,10 +253,10 @@
                 </div>
 
                 <!-- 批量操作栏 -->
-                <div v-if="selectedIds.length > 0" class="absolute bottom-0 left-0 right-0 bg-gray-800 text-white p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs z-20 border-t border-gray-700">
+                <div v-if="selectedIds.length > 0" class="absolute bottom-0 left-0 right-0 bg-gray-800 text-zinc-100 p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs z-20 border-t border-gray-700">
                     <div class="flex justify-between items-center px-1">
                         <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
-                        <button @click="clearSelection" class="text-gray-400 hover:text-white">取消选择 ✕</button>
+                        <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
                     </div>
                     <div class="grid grid-cols-4 gap-1">
                         <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1 rounded transition font-medium">📁 移分组</button>
