@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPathForFile: (file) => webUtils.getPathForFile(file),
     // 聊天测试接口（OpenAI 兼容格式，经主进程转发以绕过 CORS）
     sendChatMessage: (endpoint, payload, apiKey) => ipcRenderer.invoke('chat:send', endpoint, payload, apiKey),
+    // 拉取服务端可用模型列表（GET /v1/models，经主进程转发以绕过 CORS）
+    fetchModels: (endpoint, apiKey) => ipcRenderer.invoke('models:fetch', endpoint, apiKey),
     // 彻底删除本地文件（高危操作，需前端确认后调用）
     deleteFile: (filePath) => ipcRenderer.invoke('file:delete', filePath),
     // 一键导出角色卡完整整合包（主卡 + 独立世界书 + 正则脚本）

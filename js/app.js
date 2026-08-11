@@ -40,14 +40,16 @@ const app = createApp({
             const defaults = {
                 // 注：内部用单引号，与设置面板下拉选项的值保持一致，确保初始选中项正确
                 fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif",
-                fontSize: 14,
-                fontWeight: 'normal' // 可选 'normal' 或 '500' (中等加粗)
+                fontSize: 14,           // 工作区字号（右侧编辑区：世界书/设定/聊天气泡/RAW JSON）
+                fontWeight: 'normal',   // 可选 'normal' 或 '500' (中等加粗)
+                uiFontSize: 13          // 界面字号（顶部导航/侧边栏/菜单/弹窗）
             };
-            try {
-                return JSON.parse(localStorage.getItem('appSettings')) || defaults;
-            } catch (e) {
-                return defaults; // localStorage 不可用或数据损坏时回退默认值
-            }
+            let loadedSettings = defaults;
+            try { loadedSettings = JSON.parse(localStorage.getItem('appSettings')) || defaults; } catch (e) { /* 忽略 */ }
+            // 兼容旧存档：缺失双轨字号时补默认值
+            if (loadedSettings.uiFontSize === undefined) loadedSettings.uiFontSize = 13;
+            if (loadedSettings.fontSize === undefined) loadedSettings.fontSize = 14;
+            return loadedSettings;
         })());
 
         // 监听设置变化，自动保存到本地
@@ -56,13 +58,13 @@ const app = createApp({
         }, { deep: true });
 
         // 字体设置应用：fontFamily/fontWeight 全局生效于 body；
-        // 字号不再写死到 body（会破坏 rem/Tailwind 基准单位），改为注入 CSS 变量 --workspace-fs，
-        // 由 index.html 的样式补丁仅接管右侧工作区（main 内 textarea / pre / 聊天气泡）
+        // 双轨字号：--ui-fs 接管外围界面（导航/侧边栏/菜单/弹窗），--workspace-fs 接管右侧工作区
         // （Vue 不会编译挂载容器 #app 自身的 :style 绑定，故此处以 documentElement 兜底保证变量生效）
         watch(appSettings, (s) => {
             document.body.style.fontFamily = s.fontFamily;
             document.body.style.fontWeight = s.fontWeight;
-            document.documentElement.style.setProperty('--workspace-fs', s.fontSize + 'px');
+            document.documentElement.style.setProperty('--ui-fs', (s.uiFontSize || 13) + 'px');
+            document.documentElement.style.setProperty('--workspace-fs', (s.fontSize || 14) + 'px');
         }, { deep: true, immediate: true });
 
         // ================= [ 实验功能与酒馆联动 ] =================
@@ -399,6 +401,52 @@ const app = createApp({
         watch(apiModel, (v) => {
             try { localStorage.setItem('stc-api-model', v || ''); } catch (e) { /* 忽略 */ }
         });
+
+        // ================= [ API 模型列表拉取（GET /v1/models，经主进程转发绕过 CORS）] =================
+        const availableModels = ref([]);      // 拉取到的服务端模型列表
+        const isFetchingModels = ref(false);  // 是否正在拉取
+        const fetchModelStatus = ref('');     // 拉取状态提示
+
+        const fetchAvailableModels = async () => {
+            const ep = (apiEndpoint.value || '').trim();
+            if (!ep) {
+                nativeAlert('请先输入有效的 API Endpoint 地址！', 'warning');
+                return;
+            }
+            isFetchingModels.value = true;
+            fetchModelStatus.value = '⏳ 正在连接服务端拉取模型列表...';
+            availableModels.value = [];
+            try {
+                const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+                const result = await window.electronAPI.fetchModels(ep, authKey);
+                if (!result || !result.success) {
+                    fetchModelStatus.value = `❌ 拉取失败: ${(result && result.error) || '未知错误'}`;
+                    return;
+                }
+                // 兼容 OpenAI / LM Studio 标准格式 { data: [{ id }] } 与裸数组
+                const raw = result.data;
+                let modelList = [];
+                if (Array.isArray(raw.data)) {
+                    modelList = raw.data.map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                } else if (Array.isArray(raw)) {
+                    modelList = raw.map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                }
+                if (modelList.length > 0) {
+                    availableModels.value = modelList;
+                    fetchModelStatus.value = `✅ 成功获取 ${modelList.length} 个模型！`;
+                    if (!modelList.includes(apiModel.value)) {
+                        apiModel.value = modelList[0]; // 当前模型不在列表中时自动选中第一个
+                    }
+                } else {
+                    fetchModelStatus.value = '⚠️ 接口已响应，但未抓取到有效模型列表';
+                }
+            } catch (err) {
+                console.error('拉取模型列表失败:', err);
+                fetchModelStatus.value = `❌ 拉取失败: ${err.message}`;
+            } finally {
+                isFetchingModels.value = false;
+            }
+        };
 
         // 【新增】聊天界面的 渲染/代码 模式开关 (默认 false 为代码模式，true 为渲染模式)
         const isChatRenderMode = ref(false);
@@ -2185,6 +2233,7 @@ const app = createApp({
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, chatContainer,
+            availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,
             showGraph, graphContainer, openGraph, closeGraph,

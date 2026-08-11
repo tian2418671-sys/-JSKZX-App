@@ -515,6 +515,38 @@ app.whenReady().then(() => {
     }
   });
 
+  // IPC：拉取服务端可用模型列表（GET /v1/models，经主进程转发绕过 CORS）
+  ipcMain.handle('models:fetch', async (event, endpoint, apiKey) => {
+    try {
+      const ep = String(endpoint || '').trim();
+      if (!ep) return { success: false, error: '未填写 API Endpoint 地址' };
+
+      // 智能构建 /v1/models 地址：兼容 OpenAI / LM Studio / Ollama 标准接口
+      let modelsUrl = '';
+      if (ep.endsWith('/chat/completions')) {
+        modelsUrl = ep.replace(/\/chat\/completions$/, '/models');
+      } else if (/\/v1\/?$/.test(ep)) {
+        modelsUrl = ep.replace(/\/+$/, '') + '/models';
+      } else {
+        modelsUrl = ep.replace(/\/+$/, '') + '/models';
+      }
+
+      const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : '';
+      const headers = { 'Content-Type': 'application/json' };
+      if (authKey) headers['Authorization'] = `Bearer ${authKey}`;
+
+      const response = await fetch(modelsUrl, { method: 'GET', headers });
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status} ${response.statusText}` };
+      }
+      const data = await response.json();
+      return { success: true, data: data };
+    } catch (e) {
+      console.error('拉取模型列表失败:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：删除卡片（移入本地回收站 .trash 而非物理删除）
   ipcMain.handle('file:delete', (event, filePath) => {
     try {

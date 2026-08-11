@@ -12,11 +12,17 @@
     <link rel="stylesheet" href="css/style.css">
     <style>
         /* ==========================================================
-           工作区专属字号接管：只有右侧内容区放大缩小，外围 UI 绝对不动
+           双轨字号接管：
+           1) --ui-fs 接管外围界面（顶部导航、侧边栏、菜单、按钮、弹窗）
+           2) --workspace-fs 仅接管右侧编辑区（textarea / pre / 聊天气泡）
            ========================================================== */
+        body, #app, nav, aside, header, .ui-text {
+            font-size: var(--ui-fs, 13px) !important;
+        }
         main textarea,          /* 接管所有多行文本输入框 (世界书、设定描述等) */
         main pre,               /* 接管 Raw JSON 原始代码展示区 */
-        main .leading-relaxed { /* 接管聊天测卡界面的对话气泡内容 */
+        main .leading-relaxed,  /* 接管聊天测卡界面的对话气泡内容 */
+        .workspace-editor {     /* 通用工作区编辑器标记 */
             font-size: var(--workspace-fs, 14px) !important;
         }
     </style>
@@ -80,13 +86,22 @@
 
                     <div class="relative group">
                         <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">视图(V)</button>
-                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[190px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                             <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
-                                <span>工作区字号</span>
+                                <span>🖼️ 界面 UI 字号</span>
                                 <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
-                                    <button @click="appSettings.fontSize = Math.max(12, appSettings.fontSize - 1)" class="hover:text-white px-1">-</button>
+                                    <button @click="appSettings.uiFontSize = Math.max(10, appSettings.uiFontSize - 1)" class="hover:text-white px-1">-</button>
+                                    <span class="text-zinc-100 text-[11px] font-mono">{{ appSettings.uiFontSize }}px</span>
+                                    <button @click="appSettings.uiFontSize = Math.min(18, appSettings.uiFontSize + 1)" class="hover:text-white px-1">+</button>
+                                </div>
+                            </div>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
+                                <span>📝 工作区字号</span>
+                                <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
+                                    <button @click="appSettings.fontSize = Math.max(10, appSettings.fontSize - 1)" class="hover:text-white px-1">-</button>
                                     <span class="text-zinc-100 text-[11px] font-mono">{{ appSettings.fontSize }}px</span>
-                                    <button @click="appSettings.fontSize = Math.min(22, appSettings.fontSize + 1)" class="hover:text-white px-1">+</button>
+                                    <button @click="appSettings.fontSize = Math.min(26, appSettings.fontSize + 1)" class="hover:text-white px-1">+</button>
                                 </div>
                             </div>
                             <div class="h-px bg-zinc-700 my-1"></div>
@@ -530,16 +545,24 @@
 
                         <!-- 3. 聊天测卡 (Chat) -->
                         <div v-if="currentTab === 'chat'" class="flex flex-col h-full max-w-4xl mx-auto border border-zinc-700 rounded">
-                            <div class="bg-zinc-900 p-2 text-xs flex items-center justify-between border-b border-zinc-800">
-                                <div class="flex items-center gap-2 flex-1">
+                            <div class="bg-zinc-900 p-2 text-xs flex items-center justify-between border-b border-zinc-800 flex-wrap gap-2">
+                                <div class="flex items-center gap-2 flex-1 flex-wrap">
                                     <span class="font-bold text-zinc-400">API:</span>
-                                    <input v-model="apiEndpoint" type="text" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-1/2 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="http://127.0.0.1:1234/v1/chat/completions">
-                                    <span class="font-bold text-zinc-400 ml-2 shrink-0">Key:</span>
-                                    <input v-model="apiKey" type="password" placeholder="留空则使用 test-key" title="远端 API 的鉴权密钥，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-32 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
-                                    <span class="font-bold text-zinc-400 ml-2 shrink-0">Model:</span>
-                                    <input v-model="apiModel" list="model-suggestions" type="text" placeholder="local-model 或模型 ID" title="OpenAI 兼容接口的模型名称，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-28 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                                    <input v-model="apiEndpoint" type="text" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-64 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="http://127.0.0.1:1234/v1/chat/completions">
+                                    <span class="font-bold text-zinc-400 shrink-0">Key:</span>
+                                    <input v-model="apiKey" type="password" placeholder="留空则使用 test-key" title="远端 API 的鉴权密钥，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-24 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                                    <span class="font-bold text-zinc-400 shrink-0">Model:</span>
+                                    <select v-if="availableModels.length > 0" v-model="apiModel" class="px-2 py-1 bg-zinc-800 border border-indigo-500/80 rounded outline-none text-zinc-200 text-xs max-w-[11rem]">
+                                        <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+                                    </select>
+                                    <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="local-model 或模型 ID" title="OpenAI 兼容接口的模型名称，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-28 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                                    <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[11px] font-medium rounded shadow flex items-center gap-1 transition" title="拉取服务端可用模型列表">
+                                        <span v-if="isFetchingModels" class="animate-spin">🌀</span>
+                                        <span v-else>🔄</span> 拉取模型
+                                    </button>
+                                    <span v-if="fetchModelStatus" class="text-[10px] shrink-0" :class="fetchModelStatus.includes('❌') ? 'text-red-400' : 'text-emerald-400'">{{ fetchModelStatus }}</span>
                                 </div>
-                                <div class="flex items-center">
+                                <div class="flex items-center shrink-0">
                                     <button @click="isChatRenderMode = !isChatRenderMode" 
                                             :class="isChatRenderMode ? 'text-indigo-400' : 'text-zinc-400'" 
                                             class="font-bold mr-4 hover:opacity-80 transition-opacity">
@@ -712,14 +735,40 @@
                             <textarea v-model="aiCustomPrompt" :disabled="isAITagging" rows="3" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500 resize-y text-gray-600 font-mono shadow-sm bg-gray-50"></textarea>
                         </div>
 
-                        <div class="bg-blue-50 border border-blue-200 p-3 rounded-lg flex items-start gap-3">
-                            <span class="text-blue-500 text-lg">💡</span>
-                            <div>
-                                <div class="font-bold text-blue-800 mb-0.5">API 连接提示</div>
-                                <div class="text-blue-600/80 leading-relaxed">
-                                    此功能复用右侧【聊天测试】面板中配置的 API 地址。<br>
-                                    当前使用的 Endpoint: <code class="bg-white/60 px-1.5 py-0.5 rounded font-mono text-blue-800">{{ apiEndpoint || '未填写' }}</code>
+                        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3.5 shadow-inner">
+                            <div class="flex items-center justify-between mb-2.5">
+                                <span class="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                                    ⚡ API 引擎设置 <span class="text-[10px] font-normal text-gray-500">(打标与测卡对话实时同步)</span>
+                                </span>
+                                <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-300 disabled:text-gray-500 text-white text-[11px] font-medium rounded shadow flex items-center gap-1 transition">
+                                    <span v-if="isFetchingModels" class="animate-spin">🌀</span>
+                                    <span v-else>🔄</span> 拉取模型列表
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2.5 mb-2.5">
+                                <div>
+                                    <label class="block text-[11px] text-gray-600 mb-1">API Endpoint</label>
+                                    <input v-model="apiEndpoint" type="text" placeholder="http://127.0.0.1:1234/v1/chat/completions" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
                                 </div>
+                                <div>
+                                    <label class="block text-[11px] text-gray-600 mb-1">API Key</label>
+                                    <input v-model="apiKey" type="password" placeholder="sk-... 或留空" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-gray-600 mb-1 flex justify-between items-center">
+                                    <span>当前选中模型 (Model)</span>
+                                    <span v-if="fetchModelStatus" class="text-[10px]" :class="fetchModelStatus.includes('❌') ? 'text-red-500' : 'text-emerald-600'">{{ fetchModelStatus }}</span>
+                                </label>
+                                <div class="flex gap-2">
+                                    <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-white border border-indigo-400 rounded px-2.5 py-1 text-xs text-gray-800 focus:outline-none">
+                                        <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+                                    </select>
+                                    <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, local-model" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
+                                </div>
+                                <p class="text-[10px] text-gray-500 mt-1.5 leading-relaxed">
+                                    本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-600 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 需严格填写模型 ID。
+                                </p>
                             </div>
                         </div>
 
@@ -999,13 +1048,20 @@
 
                         <!-- 4. AI 模型名称 -->
                         <div>
-                            <label class="block text-sm font-medium text-zinc-300 mb-2 flex justify-between items-center">
+                            <label class="block text-sm font-medium text-zinc-300 mb-2 flex justify-between items-center gap-2">
                                 <span>🤖 AI 模型名称 (Model Name)</span>
-                                <span class="text-zinc-500 text-[11px] font-normal">决定 AI 走哪个大脑</span>
+                                <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[11px] font-medium rounded shadow flex items-center gap-1 transition shrink-0">
+                                    <span v-if="isFetchingModels" class="animate-spin">🌀</span>
+                                    <span v-else>🔄</span> 拉取模型列表
+                                </button>
                             </label>
-                            <input v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, claude-3-5-sonnet, local-model" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                            <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-zinc-800 border border-indigo-500/80 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+                            </select>
+                            <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, claude-3-5-sonnet, local-model" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
                             <p class="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
-                                本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-400 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 必须严格填写对应的模型 ID（如 gpt-4o）。
+                                <span v-if="fetchModelStatus" class="block mb-1" :class="fetchModelStatus.includes('❌') ? 'text-red-400' : 'text-emerald-400'">{{ fetchModelStatus }}</span>
+                                <span>本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-400 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 必须严格填写对应的模型 ID（如 gpt-4o）。</span>
                             </p>
                         </div>
 
