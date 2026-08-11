@@ -476,6 +476,15 @@ const app = createApp({
             return entryUidMap.get(entry);
         };
 
+        // 正则脚本稳定标识（同世界书机制，避免增删时节点错位）
+        const regexUidMap = new Map();
+        let regexUidCounter = 0;
+        const getRegexUid = (script) => {
+            if (!script || typeof script !== 'object') return 'regex-' + (++regexUidCounter);
+            if (!regexUidMap.has(script)) regexUidMap.set(script, 'regex-' + (++regexUidCounter));
+            return regexUidMap.get(script);
+        };
+
         const worldbookEntries = computed(() => {
             // 兼容 V1 和 V2 的存放位置
             const book = safeData.value.character_book || cardData.value?.character_book || {};
@@ -543,10 +552,63 @@ const app = createApp({
                 .replace(/```/g, ''); // 洗掉结尾的 ```
         };
 
-        // 正则脚本（兼容不同存放位置）
+        // 正则脚本（兼容不同存放位置；只读提取，不做副作用，避免无正则卡片保存时写入空数组）
         const regexScripts = computed(() => {
-            return safeData.value.extensions?.regex_scripts || safeData.value.regex_scripts || [];
+            const d = safeData.value;
+            if (!d || typeof d !== 'object') return [];
+            return d.extensions?.regex_scripts || (Array.isArray(d.regex_scripts) ? d.regex_scripts : []);
         });
+
+        // 确保 extensions.regex_scripts 数组存在（仅在用户主动编辑/新增时调用）
+        const ensureRegexScriptsArray = () => {
+            const d = safeData.value;
+            if (!d || typeof d !== 'object') return null;
+            if (!d.extensions) d.extensions = {};
+            if (!Array.isArray(d.extensions.regex_scripts)) {
+                // 兼容旧结构：若顶层有 regex_scripts 数组则迁移进来
+                d.extensions.regex_scripts = Array.isArray(d.regex_scripts) ? d.regex_scripts : [];
+            }
+            return d.extensions.regex_scripts;
+        };
+
+        // 新增一条正则脚本
+        const addRegexScript = () => {
+            if (!cardData.value) return;
+            const arr = ensureRegexScriptsArray();
+            if (!arr) return;
+            arr.push({
+                id: 'regex_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                scriptName: '新建正则脚本',
+                findRegex: '',
+                replaceString: '',
+                placement: [2], // 默认作用于 2: AI 输出
+                disabled: false
+            });
+        };
+
+        // 删除一条正则脚本
+        const deleteRegexScript = (index) => {
+            if (cardData.value && regexScripts.value[index] !== undefined) {
+                regexScripts.value.splice(index, 1);
+            }
+        };
+
+        // 安全规范化单个正则脚本字段（双向同步 camelCase 与 snake_case，兼容不同前端导出）
+        const syncRegexScriptField = (script, field, value) => {
+            if (!script) return;
+            if (field === 'scriptName') {
+                script.scriptName = value;
+                script.script_name = value;
+            } else if (field === 'findRegex') {
+                script.findRegex = value;
+                script.find_regex = value;
+            } else if (field === 'replaceString') {
+                script.replaceString = value;
+                script.replace_string = value;
+            } else if (field === 'disabled') {
+                script.disabled = !!value;
+            }
+        };
 
         // ================= [ 方法：聊天测卡逻辑 ] =================
         // 构造系统提示词 (模拟 Tavern 的基础拼接逻辑)
@@ -2207,7 +2269,8 @@ const app = createApp({
             openBakFolder, openTrashFolder, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
-            safeData, specVersion, worldbookEntries, getEntryUid, regexScripts, formattedJson,
+            safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson,
+            addRegexScript, deleteRegexScript, syncRegexScriptField,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
             getKeysString, updateEntryKeys,
             getRegexPlacement, handleDrop, handleFileUpload, downloadJson, reset,
