@@ -2025,97 +2025,130 @@ const app = createApp({
             aiTaggingProgress.value = { current: 0, total: selectedIds.value.length, status: '等待开始...' };
         };
 
-        // 执行批量打标任务
+        // =========================================================
+        // ⚡ 真·全权限 AI 智能打标与物理落盘引擎（修正版）
+        // 关键适配：① 经 IPC 转发调用 API（renderer 直接 fetch 会被 CORS 拦截）
+        //           ② API 配置为独立 ref（apiEndpoint/apiKey/apiModel，非 appSettings）
+        //           ③ 单卡兜底用 cardData（本项目无 activeCard 变量）
+        //           ④ 标签层级兼容 card.data.data / card.data 两种结构
+        // =========================================================
         const startAITagging = async () => {
             if (isAITagging.value) return;
-            if (aiTagMode.value === 'candidate' && !aiCandidateTags.value.trim()) {
-                return nativeAlert('候选模式下，必须在输入框中提供你的候选标签池！', 'warning');
+
+            // 1. 目标：优先多选选中的卡片 ID；无多选时对当前打开的卡片打标
+            let targetIds = [];
+            if (isMultiSelectMode.value && selectedIds.value.length > 0) {
+                targetIds = [...selectedIds.value];
+            } else if (cardData.value) {
+                const libItem = library.value.find(item => item.data === cardData.value);
+                if (libItem) targetIds = [libItem.id];
+            }
+
+            if (targetIds.length === 0) {
+                nativeAlert('请先选择需要打标的角色卡！', 'warning');
+                return;
             }
 
             isAITagging.value = true;
-            const targetIds = [...selectedIds.value];
-            aiTaggingProgress.value.total = targetIds.length;
-            
+            let successCount = 0;
+            let failCount = 0;
+
             for (let i = 0; i < targetIds.length; i++) {
-                const id = targetIds[i];
-                const item = library.value.find(c => c.id === id);
-                if (!item) continue;
+                const currentId = targetIds[i];
+                const card = library.value.find(c => c.id === currentId);
+                if (!card) continue;
 
                 aiTaggingProgress.value.current = i + 1;
-                aiTaggingProgress.value.status = `正在让 AI 分析: ${item.name}...`;
+                aiTaggingProgress.value.total = targetIds.length;
+                aiTaggingProgress.value.status = `正在分析 (${i + 1}/${targetIds.length}): ${card.name || '未知角色'}`;
 
                 try {
-                    const d = item.data?.data || item.data || {};
-                    // 提取核心描述（为了防止超长溢出，可以稍微截断）
-                    const desc = (d.description || '').substring(0, 2000);
-                    const pers = (d.personality || '').substring(0, 1000);
-                    const charInfo = `【角色名】: ${item.name || '未知'}\n【设定描述】: ${desc}\n【性格特征】: ${pers}`;
+                    // 3. 深度提取卡片设定（防爆 Token 截断）
+                    const d = card.data?.data || card.data || {};
+                    const charDesc = (d.description || card.description || '').substring(0, 1500);
+                    const charMes = (d.first_mes || card.first_mes || '').substring(0, 500);
+                    const charPersonality = (d.personality || card.personality || '').substring(0, 300);
 
-                    let finalPrompt = aiCustomPrompt.value;
-                    if (aiTagMode.value === 'candidate') {
-                        finalPrompt += `\n\n【必须严格从以下候选标签池中选择（最多5个）】: ${aiCandidateTags.value}`;
-                    } else {
-                        finalPrompt += `\n\n【自由发散模式】请根据角色内容自由提取符合角色的精准标签（最多5个）。`;
-                    }
-                    finalPrompt += `\n\n=== 角色数据 ===\n${charInfo}`;
+                    // 4. 构建强约束 Prompt
+                    let modeInstruction = (aiTagMode.value === 'candidate' && aiCandidateTags.value.trim() !== '')
+                        ? `必须严格只从以下候选标签池中挑选最符合的 2-5 个标签：[${aiCandidateTags.value}]。`
+                        : `请自由提取 3-5 个最契合的简短标签。`;
 
+                    const promptText = `${modeInstruction}
+【输出强制规则】：必须只返回格式为 ["标签1", "标签2"] 的纯 JSON 数组，绝不要包含 markdown 标记或任何前导/后置解释文字。
+
+【角色设定提取】：
+名字：${card.name || '未知'}
+描述：${charDesc}
+性格：${charPersonality}
+首句：${charMes}`;
+
+                    // 5. 经主进程 IPC 转发调用 API（绕过 CORS；与聊天测卡共用通道）
                     const payload = {
                         model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
                         messages: [
-                            { role: 'system', content: '你是一个严格输出 JSON 数组的标签提取助手。' },
-                            { role: 'user', content: finalPrompt }
+                            { role: 'system', content: aiCustomPrompt.value || '你是一个专业角色卡分析助手。' },
+                            { role: 'user', content: promptText }
                         ],
-                        temperature: 0.3, // 使用低温度保证输出格式的稳定性
-                        max_tokens: 150
+                        temperature: 0.2 // 偏低温度保证 JSON 格式稳定性
                     };
-
                     const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
                     const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey);
+                    if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
 
-                    if (result.success && result.data.choices && result.data.choices.length > 0) {
-                        const reply = result.data.choices[0].message.content.trim();
-                        let newTags = [];
-                        
-                        try {
-                            // 暴力清洗 AI 可能返回的 markdown 语法 (例如 ```json ... ```)
-                            let jsonStr = reply.replace(/```json/gi, '').replace(/```/g, '').trim();
-                            // 尝试精准定位中括号
-                            const firstBracket = jsonStr.indexOf('[');
-                            const lastBracket = jsonStr.lastIndexOf(']');
-                            if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-                                jsonStr = jsonStr.substring(firstBracket, lastBracket + 1);
-                            }
-                            newTags = JSON.parse(jsonStr);
-                        } catch (err) {
-                            console.warn(`[${item.name}] JSON 解析失败，尝试强制分割 fallback:`, reply);
-                            // 如果 AI 不听话没给 JSON，用 fallback 方案按标点符号暴力拆分
-                            newTags = reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean);
-                        }
+                    // 6. 强力提取 JSON 数组（清洗 markdown 块）
+                    let rawReply = (result.data.choices?.[0]?.message?.content || '').trim();
+                    rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    const jsonMatch = rawReply.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) throw new Error(`模型未返回有效的 JSON 数组: ${rawReply}`);
 
-                        // 将成功提取的标签同步写入两层数据 + 物理落盘（修复重启后标签丢失）
-                        if (Array.isArray(newTags) && newTags.length > 0) {
-                            // (A) 内存显示层：软件自定义视图 customTags
-                            item.customTags = Array.from(new Set([...(item.customTags || []), ...newTags]));
-                            // (B) SillyTavern PNG 元数据层：data.tags（V2/V3 规范内）
-                            const d = item.data?.data || item.data || {};
-                            if (!Array.isArray(d.tags)) d.tags = [];
-                            d.tags = Array.from(new Set([...d.tags, ...newTags]));
-                            // (C) 物理覆写本地 PNG 文件，防止重启/重新扫描后标签丢失
-                            try {
-                                const plainData = JSON.parse(JSON.stringify(item.data));
-                                const saveRes = await window.electronAPI.saveCard(item.path, plainData);
-                                if (!saveRes || !saveRes.success) console.warn(`AI 打标物理保存失败 [${item.name}]:`, saveRes && saveRes.error);
-                            } catch (e) { console.error(`AI 打标物理保存异常 [${item.name}]:`, e); }
-                        }
+                    let newTags;
+                    try {
+                        newTags = JSON.parse(jsonMatch[0]);
+                    } catch (err) {
+                        // 兜底：按标点符号暴力拆分
+                        newTags = rawReply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean);
                     }
-                } catch (e) {
-                    console.error(`AI 打标异常 [${item.name}]:`, e);
+
+                    if (Array.isArray(newTags) && newTags.length > 0) {
+                        // 防错初始化层级（兼容 V2/V3 结构，不强制嵌套 data.data）
+                        if (!Array.isArray(card.customTags)) card.customTags = [];
+                        const dataLayer = card.data?.data || card.data || {};
+                        if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+
+                        let addedAny = false;
+                        newTags.forEach(tag => {
+                            const cleanTag = String(tag).trim();
+                            if (!cleanTag) return;
+                            // 内存显示层（library 深度响应式，push 即触发界面刷新）
+                            if (!card.customTags.includes(cleanTag)) { card.customTags.push(cleanTag); addedAny = true; }
+                            // 酒馆 PNG 元数据层 data.tags
+                            if (!dataLayer.tags.includes(cleanTag)) { dataLayer.tags.push(cleanTag); addedAny = true; }
+                        });
+
+                        // 7. 物理覆写本地 PNG 文件（剥离 Proxy 转纯对象）
+                        if (addedAny) {
+                            const plainData = JSON.parse(JSON.stringify(card.data));
+                            const saveRes = await window.electronAPI.saveCard(card.path, plainData);
+                            if (!saveRes || !saveRes.success) throw new Error((saveRes && saveRes.error) || '物理保存失败');
+                        }
+                        successCount++;
+                    }
+                } catch (err) {
+                    console.error(`❌ 卡片 [${card.name}] 打标失败:`, err);
+                    failCount++;
                 }
             }
 
-            aiTaggingProgress.value.status = '✅ 全部打标完成！';
+            // 8. 扫尾工作
             isAITagging.value = false;
-            nativeAlert(`成功为 ${targetIds.length} 张卡片完成 AI 智能打标！`, 'info');
+            aiTaggingProgress.value.status = '✅ 全部处理完成！';
+            nativeAlert(`🎉 批量处理完成！成功更新: ${successCount} 张，失败: ${failCount} 张`, successCount > 0 ? 'info' : 'warning');
+
+            // 延迟一点关闭弹窗，让用户看到最后的状态
+            setTimeout(() => {
+                showAITagModal.value = false;
+            }, 1500);
         };
 
         // ================= [ 方法：重命名与导出世界书 ] =================
