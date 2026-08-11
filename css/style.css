@@ -109,6 +109,7 @@ textarea, input, select { transition: border-color 0.15s ease-in-out; }
 [data-theme="light"] .bg-zinc-800 { background-color: #f4f4f5; }
 [data-theme="light"] .bg-zinc-800\/50 { background-color: rgba(244, 244, 245, 0.5); }
 [data-theme="light"] .bg-zinc-800\/60 { background-color: rgba(244, 244, 245, 0.6); }
+[data-theme="light"] .bg-zinc-800\/80 { background-color: rgba(244, 244, 245, 0.8); }
 [data-theme="light"] .bg-zinc-700 { background-color: #e4e4e7; }
 [data-theme="light"] .bg-zinc-600 { background-color: #d4d4d8; }
 [data-theme="light"] .hover\:bg-zinc-800:hover { background-color: #e4e4e7; }
@@ -150,6 +151,7 @@ textarea, input, select { transition: border-color 0.15s ease-in-out; }
 [data-theme="light"] .border-zinc-600 { border-color: #d4d4d8; }
 [data-theme="light"] .border-zinc-700 { border-color: #e4e4e7; }
 [data-theme="light"] .border-zinc-700\/50 { border-color: rgba(228, 228, 231, 0.5); }
+[data-theme="light"] .border-zinc-700\/80 { border-color: rgba(228, 228, 231, 0.8); }
 [data-theme="light"] .border-zinc-800 { border-color: #e4e4e7; }
 [data-theme="light"] .hover\:border-zinc-500:hover { border-color: #a1a1aa; }
 [data-theme="light"] .hover\:border-zinc-600:hover { border-color: #d4d4d8; }
@@ -175,6 +177,13 @@ textarea, input, select { transition: border-color 0.15s ease-in-out; }
 [data-theme="light"] .text-green-400 { color: #16a34a; }
 [data-theme="light"] .text-amber-400 { color: #d97706; }
 [data-theme="light"] .text-amber-500\/80 { color: #d97706; }
+[data-theme="light"] .hover\:text-rose-400:hover { color: #e11d48; }
+
+/* 正则编辑器输入框语义色（正则=橙 / 替换=绿；用 !important 覆盖 input 通用文字色） */
+.regex-input-find { color: #f59e0b !important; }
+.regex-input-replace { color: #10b981 !important; }
+[data-theme="light"] .regex-input-find { color: #b45309 !important; }
+[data-theme="light"] .regex-input-replace { color: #047857 !important; }
 [data-theme="light"] .hover\:text-blue-300:hover { color: #2563eb; }
 [data-theme="light"] .hover\:text-amber-400:hover { color: #d97706; }
 [data-theme="light"] .hover\:text-red-400:hover { color: #dc2626; }
