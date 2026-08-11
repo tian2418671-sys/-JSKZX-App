@@ -133,9 +133,9 @@ const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.jso
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'app',
-    // secure: true 使页面成为安全上下文，允许使用 localStorage 等 Web API
-    // 注意：不加 standard，避免改变 app:// 的 URL 解析结构
-    privileges: { secure: true, supportFetchAPI: true, corsEnabled: true }
+    // standard + secure：使 app:// 形成可持久化的 origin（否则 localStorage 每次重启丢失），
+    // 并保持安全上下文以使用 localStorage 等 Web API
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
   },
   {
     scheme: 'local-file',
@@ -151,7 +151,18 @@ protocol.registerSchemesAsPrivileged([
 function registerAppProtocol() {
   protocol.handle('app', (request) => {
     const url = new URL(request.url);
-    let filePath = decodeURIComponent(url.pathname);
+    // standard scheme 下页面 origin 为 app://index.html，其相对资源形如 app://index.html/css/style.css
+    // （host 恒为 index.html，pathname 为项目根下的相对路径）；极少数跨 host 场景按 host 首段拼接
+    const host = url.hostname;
+    let filePath = '';
+    if (host === 'index.html') {
+      filePath = url.pathname; // 页面 origin 内的资源：app://index.html/vendor/x.js -> /vendor/x.js
+    } else if (host) {
+      filePath = '/' + host + url.pathname;
+    } else {
+      filePath = url.pathname;
+    }
+    filePath = decodeURIComponent(filePath);
 
     // 根路径默认加载 index.html
     if (filePath === '/' || filePath === '') filePath = '/index.html';
@@ -163,7 +174,29 @@ function registerAppProtocol() {
       return new Response('Forbidden', { status: 403 });
     }
 
-    return net.fetch(pathToFileURL(resolved).toString());
+    // 直接以 fs 读取本地文件返回（比 net.fetch(file://) 更兼容 standard scheme）
+    try {
+      const content = fs.readFileSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const mime = {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'text/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.woff2': 'font/woff2',
+        '.ico': 'image/x-icon'
+      }[ext] || 'application/octet-stream';
+      return new Response(content, { headers: { 'content-type': mime } });
+    } catch (e) {
+      console.error('[app-proto] 读取失败:', request.url, '->', resolved, e.message);
+      return new Response('Not Found', { status: 404 });
+    }
   });
 
   protocol.handle('local-file', (request) => {
