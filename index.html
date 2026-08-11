@@ -56,7 +56,7 @@
                             <button @click="selectFixedDirectory" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">📁 打开角色库 <span>Ctrl+O</span></button>
                             <button @click="importCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">➕ 导入角色卡 <span>Ctrl+I</span></button>
                             <div class="h-px bg-zinc-700 my-1"></div>
-                            <button @click="saveToLocalDisk" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">💾 保存当前卡片 <span>Ctrl+S</span></button>
+                            <button @click="saveToLocalDisk" :disabled="!cardData" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">💾 保存当前卡片 <span>Ctrl+S</span></button>
                             <button @click="batchExportSelected" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📦 导出选中卡片...</button>
                             <div class="h-px bg-zinc-700 my-1"></div>
                             <button @click="openBakFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">⏱️ 查看历史快照 (.bak)</button>
@@ -98,6 +98,12 @@
                             </button>
                             <button @click="viewOptions.showTokenStats = !viewOptions.showTokenStats" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
                                 📊 显示 Token 消耗分析栏 <span v-if="viewOptions.showTokenStats">✓</span>
+                            </button>
+                            <button @click="viewOptions.showWorldbook = !viewOptions.showWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                🌍 世界书 Lorebook 编辑区 <span v-if="viewOptions.showWorldbook">✓</span>
+                            </button>
+                            <button @click="viewOptions.showRegex = !viewOptions.showRegex" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                ⚡ 正则脚本对照区 <span v-if="viewOptions.showRegex">✓</span>
                             </button>
                         </div>
                     </div>

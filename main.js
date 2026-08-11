@@ -386,13 +386,17 @@ app.whenReady().then(() => {
     return { path: folderToScan, files: cardFiles };
   });
 
-  // IPC：用系统资源管理器打开指定文件夹（查看快照 .bak_history / 回收站 .trash 等）
-  ipcMain.handle('shell:openPath', async (event, targetPath) => {
+  // IPC：唤起系统资源管理器打开指定路径（.bak_history / .trash 等）
+  ipcMain.handle('system:openPath', async (event, targetPath) => {
     try {
-      if (!targetPath || !fs.existsSync(targetPath)) {
-        return { success: false, error: '目标文件夹不存在。' };
+      if (!targetPath) return { success: false, error: '路径为空。' };
+      // 相对路径转为绝对路径（相对项目根目录）；绝对路径原样使用
+      const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(__dirname, targetPath);
+      // 目录不存在则自动创建，防止报错
+      if (!fs.existsSync(fullPath)) {
+        fs.mkdirSync(fullPath, { recursive: true });
       }
-      const err = await shell.openPath(targetPath);
+      const err = await shell.openPath(fullPath);
       return err ? { success: false, error: err } : { success: true };
     } catch (e) {
       return { success: false, error: e.message };

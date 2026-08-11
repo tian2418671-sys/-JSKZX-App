@@ -126,7 +126,9 @@ const app = createApp({
         const viewOptions = ref({
             showRawJson: true,        // 是否显示 Raw JSON 页签
             showAvatarPreview: true,  // 是否显示顶部立绘预览
-            showTokenStats: true      // 是否显示 Token 消耗分析栏
+            showTokenStats: true,     // 是否显示 Token 消耗分析栏
+            showWorldbook: true,      // 是否显示世界书页签
+            showRegex: true           // 是否显示正则脚本页签
         });
 
         // 导入单张/多张角色卡文件（经隐藏文件输入，追加写入当前库）
@@ -869,7 +871,12 @@ const app = createApp({
                 { id: 'chat', name: '聊天测试', icon: '💬', action: initChat },
                 { id: 'raw', name: 'Raw JSON', icon: '💻' }
             ];
-            return list.filter(t => !(t.id === 'raw' && !viewOptions.value.showRawJson));
+            return list.filter(t => {
+                if (t.id === 'raw' && !viewOptions.value.showRawJson) return false;
+                if (t.id === 'worldbook' && !viewOptions.value.showWorldbook) return false;
+                if (t.id === 'regex' && !viewOptions.value.showRegex) return false;
+                return true;
+            });
         });
 
         const currentTabInfo = computed(() => tabs.value.find(t => t.id === currentTab.value) || tabs.value[0]);
@@ -1281,6 +1288,13 @@ const app = createApp({
                 if (k === 's') { e.preventDefault(); saveToLocalDisk(); }
                 else if (k === 'o') { e.preventDefault(); selectFixedDirectory(); }
                 else if (k === 'i') { e.preventDefault(); importCards(); }
+                else if (k === 'a') {
+                    // 批量模式下全选（输入框内不拦截，保留原生全选文本能力）
+                    const tag = document.activeElement?.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+                    e.preventDefault();
+                    selectAllCards();
+                }
             };
             window.addEventListener('keydown', handleGlobalKeys);
 
