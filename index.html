@@ -16,7 +16,8 @@
            1) --ui-fs 接管外围界面（顶部导航、侧边栏、菜单、按钮、弹窗）
            2) --workspace-fs 仅接管右侧编辑区（textarea / pre / 聊天气泡）
            ========================================================== */
-        body, #app, nav, aside, header, .ui-text {
+        body, #app, nav, aside, header, footer,
+        .ui-text, button, select, input:not(textarea) {
             font-size: var(--ui-fs, 13px) !important;
         }
         main textarea,          /* 接管所有多行文本输入框 (世界书、设定描述等) */
@@ -85,41 +86,59 @@
                     </div>
 
                     <div class="relative group">
-                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">视图(V)</button>
-                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
-                            <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
-                                <span>🖼️ 界面 UI 字号</span>
-                                <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
-                                    <button @click="appSettings.uiFontSize = Math.max(10, appSettings.uiFontSize - 1)" class="hover:text-white px-1">-</button>
-                                    <span class="text-zinc-100 text-[11px] font-mono">{{ appSettings.uiFontSize }}px</span>
-                                    <button @click="appSettings.uiFontSize = Math.min(18, appSettings.uiFontSize + 1)" class="hover:text-white px-1">+</button>
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">窗口(W)</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[220px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <button @click="viewOptions.showSidebar = !viewOptions.showSidebar" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>📁 侧边栏 (角色卡列表)</span> <span v-if="viewOptions.showSidebar" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <button @click="viewOptions.showToolbar = !viewOptions.showToolbar" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>🛠️ 快捷工具栏</span> <span v-if="viewOptions.showToolbar" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="viewOptions.showAvatarPreview = !viewOptions.showAvatarPreview" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>🖼️ 高清大立绘面板</span> <span v-if="viewOptions.showAvatarPreview" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <button @click="viewOptions.showTokenStats = !viewOptions.showTokenStats" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>📊 Token 分析看板</span> <span v-if="viewOptions.showTokenStats" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <button @click="viewOptions.showWorldbook = !viewOptions.showWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>🌍 世界书 Lorebook 区域</span> <span v-if="viewOptions.showWorldbook" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <button @click="viewOptions.showRegex = !viewOptions.showRegex" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>⚡ 正则脚本对照区</span> <span v-if="viewOptions.showRegex" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                            <button @click="viewOptions.showRawJson = !viewOptions.showRawJson" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>📄 Raw JSON 代码区</span> <span v-if="viewOptions.showRawJson" class="text-indigo-400 font-bold">✓</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="relative group">
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">设置(S)</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[240px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <div class="px-3 py-2 border-b border-zinc-700/50">
+                                <div class="flex items-center justify-between text-zinc-300 mb-1">
+                                    <span>🖼️ 界面 UI 字号</span>
+                                    <span class="text-indigo-400 font-mono font-bold">{{ appSettings.uiFontSize }}px</span>
                                 </div>
+                                <input type="range" v-model.number="appSettings.uiFontSize" min="10" max="20" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                            </div>
+                            <div class="px-3 py-2 border-b border-zinc-700/50">
+                                <div class="flex items-center justify-between text-zinc-300 mb-1">
+                                    <span>📝 工作区编辑字号</span>
+                                    <span class="text-amber-400 font-mono font-bold">{{ appSettings.fontSize }}px</span>
+                                </div>
+                                <input type="range" v-model.number="appSettings.fontSize" min="10" max="26" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
                             </div>
                             <div class="h-px bg-zinc-700 my-1"></div>
-                            <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
-                                <span>📝 工作区字号</span>
-                                <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
-                                    <button @click="appSettings.fontSize = Math.max(10, appSettings.fontSize - 1)" class="hover:text-white px-1">-</button>
-                                    <span class="text-zinc-100 text-[11px] font-mono">{{ appSettings.fontSize }}px</span>
-                                    <button @click="appSettings.fontSize = Math.min(26, appSettings.fontSize + 1)" class="hover:text-white px-1">+</button>
-                                </div>
-                            </div>
+                            <button @click="showSettingsModal = true" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                                <span>⚡ API 引擎设置...</span> <span class="text-zinc-500">(字体/字号/API)</span>
+                            </button>
                             <div class="h-px bg-zinc-700 my-1"></div>
-                            <button @click="viewOptions.showRawJson = !viewOptions.showRawJson" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
-                                📄 显示 Raw JSON 代码区 <span v-if="viewOptions.showRawJson">✓</span>
-                            </button>
-                            <button @click="viewOptions.showAvatarPreview = !viewOptions.showAvatarPreview" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
-                                🖼️ 显示高分辨立绘面板 <span v-if="viewOptions.showAvatarPreview">✓</span>
-                            </button>
-                            <button @click="viewOptions.showTokenStats = !viewOptions.showTokenStats" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
-                                📊 显示 Token 消耗分析栏 <span v-if="viewOptions.showTokenStats">✓</span>
-                            </button>
-                            <button @click="viewOptions.showWorldbook = !viewOptions.showWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
-                                🌍 世界书 Lorebook 编辑区 <span v-if="viewOptions.showWorldbook">✓</span>
-                            </button>
-                            <button @click="viewOptions.showRegex = !viewOptions.showRegex" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
-                                ⚡ 正则脚本对照区 <span v-if="viewOptions.showRegex">✓</span>
-                            </button>
+                            <button @click="openBakFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">⏱️ 打开历史快照目录 (.bak)</button>
+                            <button @click="openTrashFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 打开回收站目录 (.trash)</button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="resetSettings" class="px-3 py-1.5 text-left hover:bg-rose-600 hover:text-white text-rose-400">🔄 恢复默认系统配置</button>
                         </div>
                     </div>
 
@@ -144,18 +163,10 @@
                 </nav>
             </div>
 
-            <!-- 右侧：全局搜索与设置入口 -->
-            <div class="flex items-center gap-3">
-                <!-- 你可以把之前的全局搜索框挪到这里，或者保留在侧边栏 -->
-                
-                <button @click="showSettingsModal = true" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 rounded text-sm transition border border-zinc-700 shadow-sm">
-                    <span>⚙️</span> 设置
-                </button>
-            </div>
         </header>
 
-        <!-- ================= [ 顶部紧凑工具栏 ] ================= -->
-        <header class="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-3 shrink-0 shadow-sm z-10">
+        <!-- ================= [ 顶部紧凑工具栏（可由 窗口(W) 菜单收起）] ================= -->
+        <header v-if="viewOptions.showToolbar" class="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-3 shrink-0 shadow-sm z-10">
             <div class="flex items-center gap-2 overflow-x-auto custom-scrollbar-x">
                 <span class="font-bold text-zinc-100 flex items-center gap-2 whitespace-nowrap shrink-0">
                     <svg class="w-4 h-4 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/><path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/></svg>
@@ -185,7 +196,7 @@
         <div class="flex-1 flex overflow-hidden">
             
             <!-- 【左侧】资源管理器 (库列表) -->
-            <aside class="w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 relative">
+            <aside v-if="viewOptions.showSidebar" class="w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 relative">
                 <!-- 过滤器 -->
                 <div class="p-2 border-b border-zinc-800 flex flex-col gap-2 bg-zinc-900">
                     <div class="flex gap-1 items-center">
@@ -289,7 +300,6 @@
                     <!-- 编辑器头部: 角色名与保存动作 -->
                     <div class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-900">
                         <div class="flex items-center gap-3 w-1/2">
-                            <img v-if="imgUrl && viewOptions.showAvatarPreview" :src="imgUrl" @click="openImageModal(imgUrl)" class="w-8 h-8 rounded-full object-cover border border-zinc-700 shadow-sm cursor-pointer hover:opacity-80 transition" title="点击查看高清大立绘">
                             <input :value="safeData.name" @input="updateName($event.target.value)" class="font-bold text-base bg-transparent border-b border-transparent hover:border-zinc-600 focus:border-blue-500 outline-none w-full px-1 py-0.5 transition text-zinc-100 placeholder-zinc-500" placeholder="角色名称">
                             <div v-if="viewOptions.showTokenStats" class="hidden md:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-[11px] shrink-0" title="预估总 Token 消耗量">
                                 <span>⚡ 预估 Token:</span>
@@ -308,6 +318,21 @@
                             </button>
                             <div class="w-px h-4 bg-zinc-700 mx-1"></div>
                             <button @click="reset" class="px-2 py-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 rounded transition" title="关闭卡片">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- 高清大立绘展示区（悬浮放大镜 + 点击全屏） -->
+                    <div v-if="imgUrl && viewOptions.showAvatarPreview" class="relative group cursor-pointer overflow-hidden border-b border-zinc-800 bg-zinc-900/60 shrink-0" @click="openImageModal(imgUrl)" title="点击查看高清大立绘">
+                        <img :src="imgUrl" class="w-full h-44 object-cover object-top transition-transform duration-300 group-hover:scale-105" alt="角色立绘">
+                        <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 backdrop-blur-[2px]">
+                            <div class="w-10 h-10 rounded-full bg-amber-500 text-black flex items-center justify-center text-lg shadow-xl font-bold animate-bounce">🔍</div>
+                            <span class="text-xs font-bold text-white tracking-wider bg-black/80 px-3 py-1 rounded-full border border-amber-500/50">点击查看高清大立绘</span>
+                        </div>
+                        <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2 text-center">
+                            <span class="text-[11px] text-amber-300/90 flex items-center justify-center gap-1">
+                                <span>🖼️ 高清立绘大图</span>
+                                <span class="text-[9px] text-zinc-400">(点击全屏放大)</span>
+                            </span>
                         </div>
                     </div>
 

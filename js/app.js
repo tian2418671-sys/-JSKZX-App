@@ -126,6 +126,8 @@ const app = createApp({
         // ================= [ 顶部菜单系统：视图选项与工具函数 ] =================
         // 视图菜单控制状态（控制 Raw JSON 页签 / 立绘预览 / Token 分析栏的显隐）
         const viewOptions = ref({
+            showSidebar: true,        // 左侧侧边栏（角色卡列表）
+            showToolbar: true,        // 顶部快捷工具栏
             showRawJson: true,        // 是否显示 Raw JSON 页签
             showAvatarPreview: true,  // 是否显示顶部立绘预览
             showTokenStats: true,     // 是否显示 Token 消耗分析栏
@@ -1150,6 +1152,39 @@ const app = createApp({
             theme.value = theme.value === 'light' ? 'dark' : 'light';
             try { localStorage.setItem('stc-theme', theme.value); } catch (e) { /* 忽略 */ }
             applyTheme(theme.value);
+        };
+
+        // 恢复默认系统配置（字号/字体/API 三件套；经原生确认框防误触）
+        const resetSettings = async () => {
+            let confirmed = false;
+            if (!window.electronAPI) {
+                confirmed = window.confirm('是否确定恢复默认设置？（界面字号、字体、API 地址 / Key / 模型将全部重置）');
+            } else {
+                const res = await window.electronAPI.showMessage({
+                    type: 'question',
+                    title: '恢复默认设置',
+                    message: '是否确定恢复默认系统配置？（界面字号、字体、API 地址 / Key / 模型 将全部重置）',
+                    buttons: ['取消', '确定'],
+                    defaultId: 1,
+                    cancelId: 0
+                });
+                confirmed = !!(res && res.response === 1);
+            }
+            if (!confirmed) return;
+
+            // 保留酒馆推送地址，避免误重置
+            const prevTavernUrl = appSettings.value.tavernUrl || 'http://127.0.0.1:8000';
+            appSettings.value = {
+                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif",
+                fontSize: 14,
+                fontWeight: 'normal',
+                uiFontSize: 13,
+                tavernUrl: prevTavernUrl
+            };
+            apiEndpoint.value = 'http://127.0.0.1:1234/v1/chat/completions';
+            apiKey.value = '';
+            apiModel.value = '';
+            nativeAlert('设置已恢复为默认状态！', 'info');
         };
 
         // 处理文件读取（含错误提示）
@@ -2272,7 +2307,7 @@ const app = createApp({
         };
 
         return {
-            theme, toggleTheme, appSettings, showSettingsModal,
+            theme, toggleTheme, appSettings, showSettingsModal, resetSettings,
             showExperimentalMenu, pushToTavern,
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openChatTab,
