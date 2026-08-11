@@ -28,5 +28,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 一键导出角色卡完整整合包（主卡 + 独立世界书 + 正则脚本）
     exportPackage: (filePath, cardData) => ipcRenderer.invoke('file:exportPackage', filePath, cardData),
     // 批量打包导出多张卡片
-    exportBatchPackage: (filePaths) => ipcRenderer.invoke('file:exportBatchPackage', filePaths)
+    exportBatchPackage: (filePaths) => ipcRenderer.invoke('file:exportBatchPackage', filePaths),
+    // 磁盘扫描：获取所有存在的盘符
+    getWindowsDrives: () => ipcRenderer.invoke('get-windows-drives'),
+    // 磁盘扫描：扫描指定盘符/文件夹（无参时主进程弹出原生目录选择器；useFilter 控制体积过滤）
+    scanTargetFolder: (targetPath, useFilter) => ipcRenderer.invoke('scan-target-folder', targetPath, useFilter),
+    // 磁盘扫描：接收主进程扫描进度心跳
+    onScanProgress: (callback) => {
+        ipcRenderer.removeAllListeners('scan-progress'); // 防止重复绑定
+        ipcRenderer.on('scan-progress', (event, data) => callback(data));
+    }
 });

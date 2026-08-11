@@ -2,34 +2,45 @@
    SillyTavern 角色卡高级解析中心 - 全局样式
    ============================================ */
 
-/* 自定义滚动条 */
+/* 全局定制滚动条 (Webkit) */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #f3f4f6;
-    border-radius: 4px;
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #d1d5db;
-    border-radius: 4px;
+    background-color: #3f3f46; /* Tailwind zinc-700 */
+    border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #9ca3af;
+    background-color: #52525b; /* Tailwind zinc-600 */
 }
 
-/* 内容区专用滚动条 */
+/* 内容区专用滚动条（保持纤细统一） */
 .custom-scrollbar::-webkit-scrollbar {
-    width: 10px;
+    width: 6px;
+    height: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #d1d5db;
-    border-radius: 5px;
+    background-color: #3f3f46;
+    border-radius: 10px;
+}
+
+/* 输入框选中文本的颜色 */
+::selection {
+    background-color: #3b82f6; /* Tailwind blue-500 */
+    color: white;
+}
+
+/* 隐藏输入框的原生黑色高亮边框 */
+textarea, input {
+    outline: none !important;
 }
 
 /* 拖拽高亮状态 */
@@ -66,6 +77,13 @@
 /* ============ 紧凑版 IDE 风格 ============ */
 html, body, #app { height: 100%; }
 body { overflow: hidden; }
+
+/* 全局字体渲染优化（清晰饱满的中英文显示） */
+body, textarea, input {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
 
 /* 横向超细滚动条 */
 .custom-scrollbar-x::-webkit-scrollbar { height: 4px; }

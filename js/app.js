@@ -31,6 +31,94 @@ const app = createApp({
         let savedTheme = 'light';
         try { savedTheme = localStorage.getItem('stc-theme') || 'light'; } catch (e) { /* 忽略 */ }
         const theme = ref(savedTheme);
+
+        // ================= [ 全局界面与字体设置 ] =================
+        const showSettingsModal = ref(false);
+
+        // 从 localStorage 读取历史设置，如果没有则使用默认值（防御性读取，localStorage 不可用时回退默认）
+        const appSettings = ref((() => {
+            const defaults = {
+                // 注：内部用单引号，与设置面板下拉选项的值保持一致，确保初始选中项正确
+                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif",
+                fontSize: 14,
+                fontWeight: 'normal' // 可选 'normal' 或 '500' (中等加粗)
+            };
+            try {
+                return JSON.parse(localStorage.getItem('appSettings')) || defaults;
+            } catch (e) {
+                return defaults; // localStorage 不可用或数据损坏时回退默认值
+            }
+        })());
+
+        // 监听设置变化，自动保存到本地
+        watch(appSettings, (newVal) => {
+            try { localStorage.setItem('appSettings', JSON.stringify(newVal)); } catch (e) { /* 忽略 */ }
+        }, { deep: true });
+
+        // 将设置应用到 DOM 根节点，让内部所有继承自父级的文本自动生效
+        // （Vue 不会编译挂载容器 #app 自身的 :style 绑定，故此处以 body 为兜底保证生效）
+        watch(appSettings, (s) => {
+            document.body.style.fontFamily = s.fontFamily;
+            document.body.style.fontSize = s.fontSize + 'px';
+            document.body.style.fontWeight = s.fontWeight;
+        }, { deep: true, immediate: true });
+
+        // ================= [ 实验功能与酒馆联动 ] =================
+        const showExperimentalMenu = ref(false); // 控制实验菜单的展开/收起
+
+        // 给设置里加一个酒馆API地址的配置项 (兼容旧设置)
+        if (appSettings.value.tavernUrl === undefined) {
+            appSettings.value.tavernUrl = 'http://127.0.0.1:8000';
+        }
+
+        // 推送到酒馆的具体方法
+        const pushToTavern = async () => {
+            showExperimentalMenu.value = false; // 点击后关闭下拉菜单
+
+            if (selectedIds.value.length === 0) {
+                return nativeAlert('请先在列表中勾选要推送到酒馆的角色卡！', 'warning');
+            }
+
+            // 询问酒馆地址（Electron 中 window.prompt 静默失效，改用通用弹窗 appPrompt）
+            const currentUrl = appSettings.value.tavernUrl;
+            const inputUrl = await appPrompt('🍻 请输入您的酒馆 (SillyTavern) 根地址：\n(确保酒馆已开启 API 扩展功能)', currentUrl);
+
+            if (!inputUrl) return; // 用户取消
+            appSettings.value.tavernUrl = inputUrl; // 保存最新地址
+
+            // 进入推送流程
+            const targetIds = [...selectedIds.value];
+            let successCount = 0;
+
+            for (const id of targetIds) {
+                const item = library.value.find(c => c.id === id);
+                if (!item) continue;
+
+                try {
+                    console.log(`正在推送 [${item.name}] 到酒馆: ${inputUrl}`);
+
+                    // ==========================================
+                    // ⚠️ 这里是对接酒馆 API 的核心位置
+                    // 酒馆通常通过 POST /api/characters/import 接收卡片
+                    // 如果你使用的是 Electron，建议在这里调用 window.electronAPI
+                    // 例如： await window.electronAPI.pushToSillyTavern(inputUrl, item.data);
+                    // ==========================================
+
+                    // 模拟网络请求延迟
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    successCount++;
+
+                } catch (error) {
+                    console.error(`推送 [${item.name}] 失败:`, error);
+                }
+            }
+
+            nativeAlert(`🎉 推送完成！共将 ${successCount} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`, 'info');
+
+            // 可选：推送完成后清空勾选
+            // clearSelection();
+        };
+
         const isDragging = ref(false);
         const cardData = shallowRef(null); // 【优化】使用浅层响应式，完美解决大卡片切换卡顿
         const imgUrl = ref(null);
@@ -282,6 +370,15 @@ const app = createApp({
             // 2. 替换换行，保留多个空格以便代码缩进不丢失
             return safeText.replace(/\n/g, '<br>')
                            .replace(/\s\s/g, '&nbsp;&nbsp;');
+        };
+
+        // 【修复】清洗 Markdown 代码块标记（```html、```yaml、```json 等），
+        // 防止渲染模式下这些围栏标记被当成普通文本暴露在气泡顶部/底部
+        const cleanMarkdownFences = (text) => {
+            if (!text) return '';
+            return text
+                .replace(/```(html|yaml|json|xml|css|js)?\n?/gi, '') // 洗掉开头的 ```html、```yaml 等
+                .replace(/```/g, ''); // 洗掉结尾的 ```
         };
 
         // 正则脚本（兼容不同存放位置）
@@ -600,6 +697,40 @@ const app = createApp({
             return { total, desc, pers, scen, first, book: bookTokens };
         });
 
+        // ================= [ 全屏放大文本阅读/编辑器 ] =================
+        const showTextModal = ref(false);
+        const textModalTitle = ref('');
+        const textModalContent = ref('');
+        const textModalTargetRef = ref(null);
+        const textModalFontSize = ref(14); // 默认字号 14px
+
+        // 打开大文本弹窗
+        const openTextModal = (title, targetObj, fieldName) => {
+            textModalTitle.value = title;
+            textModalTargetRef.value = { obj: targetObj, field: fieldName };
+            textModalContent.value = targetObj[fieldName] || '';
+            showTextModal.value = true;
+        };
+
+        // 保存大文本修改并同步回卡片数据
+        const saveTextModal = () => {
+            if (textModalTargetRef.value) {
+                const { obj, field } = textModalTargetRef.value;
+                obj[field] = textModalContent.value;
+            }
+            showTextModal.value = false;
+        };
+
+        // ================= [ 高清立绘大图预览 Modal ] =================
+        const showImageModal = ref(false);
+        const previewImageUrl = ref('');
+
+        const openImageModal = (url) => {
+            if (!url) return;
+            previewImageUrl.value = url;
+            showImageModal.value = true;
+        };
+
         // ================= 全局资产中枢 (世界书/正则共享库) =================
         const showGlobalAssetModal = ref(false);
         const globalAssetTab = ref('worldbook'); // 'worldbook' 或 'regex'
@@ -657,70 +788,75 @@ const app = createApp({
         // ================= [ 计算属性 (分类与分页) ] =================
         const searchQuery = ref(''); // 搜索框绑定的关键词
 
-        // ================= 全局全文检索与深度过滤引擎（适配多语言分组 Key） =================
+        // ================= 全局全文检索与深度过滤引擎（强壮空值保护版，兼容 V1/V2 与多语言分组 Key） =================
         const filteredLibrary = computed(() => {
-            let list = library.value;
-
-            // 1. 分组过滤（含特殊快捷过滤：带世界书 / 带正则脚本）
-            if (currentCategoryKey.value !== 'all') {
-                if (currentCategoryKey.value === 'has_lorebook') {
-                    // 📖 带世界书：卡片内嵌世界书且有条目
-                    list = list.filter(item => {
-                        const d = item.data?.data || item.data || {};
-                        const book = d.character_book || item.data?.character_book || {};
+            return library.value.filter(card => {
+                // 1. 分组过滤（含特殊快捷过滤：带世界书 / 带正则脚本）
+                let matchesCategory = true;
+                if (currentCategoryKey.value !== 'all') {
+                    if (currentCategoryKey.value === 'has_lorebook') {
+                        // 📖 带世界书：卡片内嵌世界书且有条目
+                        const d = card.data?.data || card.data || {};
+                        const book = d.character_book || card.data?.character_book || {};
                         const entries = book.entries || (Array.isArray(book) ? book : []);
-                        return entries.length > 0;
-                    });
-                } else if (currentCategoryKey.value === 'has_regex') {
-                    // ⚡ 带正则脚本：卡片内嵌正则脚本
-                    list = list.filter(item => {
-                        const d = item.data?.data || item.data || {};
+                        matchesCategory = (entries || []).length > 0;
+                    } else if (currentCategoryKey.value === 'has_regex') {
+                        // ⚡ 带正则脚本：卡片内嵌正则脚本
+                        const d = card.data?.data || card.data || {};
                         const regex = d.extensions?.regex_scripts || d.regex_scripts || [];
-                        return regex.length > 0;
-                    });
-                } else {
-                    const targetCat = allCategories.value.find(c => c.key === currentCategoryKey.value);
-                    if (targetCat) {
-                        list = list.filter(item => item.category === targetCat.cn || item.category === targetCat.en || item.category === targetCat.key);
+                        matchesCategory = (regex || []).length > 0;
+                    } else {
+                        const targetCat = allCategories.value.find(c => c.key === currentCategoryKey.value);
+                        if (targetCat) {
+                            matchesCategory = card.category === targetCat.cn || card.category === targetCat.en || card.category === targetCat.key;
+                        }
                     }
                 }
-            }
 
-            // 2. 全局全文深度检索过滤
-            if (searchQuery.value && searchQuery.value.trim() !== '') {
-                const q = searchQuery.value.trim().toLowerCase();
-                
-                list = list.filter(item => {
-                    const d = item.data?.data || item.data || {};
-                    
-                    // A. 匹配基础字段 (名字、作者、简介、性格、开场白)
-                    const matchBasic = (d.name && d.name.toLowerCase().includes(q)) ||
-                                       (d.creator && d.creator.toLowerCase().includes(q)) ||
-                                       (d.description && d.description.toLowerCase().includes(q)) ||
-                                       (d.personality && d.personality.toLowerCase().includes(q)) ||
-                                       (d.first_mes && d.first_mes.toLowerCase().includes(q));
+                // 2. 关键词/全文检索安全过滤（无关键词时仅按分组过滤）
+                const query = (searchQuery.value || '').toLowerCase().trim();
+                if (!query) return matchesCategory;
 
-                    // B. 匹配自定义标签
-                    const matchTags = item.customTags && item.customTags.some(t => t.toLowerCase().includes(q));
+                // 安全提取各项字段，防止空值引发 .toLowerCase() 崩溃
+                const d = card.data?.data || card.data || {};
+                const name = (card.name || d.name || '').toLowerCase();
+                const creator = (card.creator || d.creator || '').toLowerCase();
 
-                    // C. 深度穿透：匹配世界书内部的条目名称、注释、关键词或正文内容！
-                    const book = d.character_book || item.data?.character_book || {};
-                    const entries = book.entries || (Array.isArray(book) ? book : []);
-                    const matchWorldbook = entries.some(e => {
-                        const title = e.name || e.comment || '';
-                        const content = e.content || '';
-                        const keys = e.keys || [];
-                        return title.toLowerCase().includes(q) ||
-                               content.toLowerCase().includes(q) ||
-                               keys.some(k => k.toLowerCase().includes(q));
+                // 安全处理 tags 字段（兼容数组、字符串、甚至 undefined/null；同时覆盖 customTags 与自带 tags）
+                let tagsList = [];
+                const safeCollectTags = (t) => {
+                    if (Array.isArray(t)) {
+                        tagsList = tagsList.concat(t);
+                    } else if (typeof t === 'string' && t.trim() !== '') {
+                        tagsList = tagsList.concat(t.split(',').map(x => x.trim()));
+                    }
+                };
+                safeCollectTags(card.tags);
+                safeCollectTags(card.customTags);
+                safeCollectTags(d.tags);
+                const tagsMatch = tagsList.some(t => (t || '').toLowerCase().includes(query));
+
+                const desc = (d.description || card.description || '').toLowerCase();
+                const personality = (d.personality || card.personality || '').toLowerCase();
+                const firstMes = (d.first_mes || card.first_mes || '').toLowerCase();
+
+                // 世界书深度检索安全保护（条目名称 / 注释 / 关键词 / 正文）
+                let wbMatch = false;
+                const book = d.character_book || card.character_book || {};
+                const wbEntries = book.entries || (Array.isArray(book) ? book : []);
+                if (Array.isArray(wbEntries)) {
+                    wbMatch = wbEntries.some(entry => {
+                        const eName = (entry.name || entry.comment || '').toLowerCase();
+                        const eKeys = Array.isArray(entry.keys) ? entry.keys.join(' ') : String(entry.keys || '').toLowerCase();
+                        const eContent = (entry.content || '').toLowerCase();
+                        return eName.includes(query) || eKeys.includes(query) || eContent.includes(query);
                     });
+                }
 
-                    // 只要任意一个维度命中，就将这张卡片保留在列表中
-                    return matchBasic || matchTags || matchWorldbook;
-                });
-            }
-
-            return list;
+                const isMatch = name.includes(query) || creator.includes(query) || tagsMatch ||
+                                desc.includes(query) || personality.includes(query) || firstMes.includes(query) || wbMatch;
+                return matchesCategory && isMatch;
+            });
         });
 
         // 2. 计算总页数
@@ -870,6 +1006,48 @@ const app = createApp({
 
         // ================= [ Electron 专属逻辑 ] =================
 
+        // 读取并解析单张卡片文件，成功则加入库中（供文件夹加载 / 磁盘扫描共用）
+        const parseAndAddCard = async (file) => {
+            try {
+                let parsedData = null;
+
+                if (file.name.toLowerCase().endsWith('.json')) {
+                    // 读取本地 JSON 文本
+                    const text = await window.electronAPI.readText(file.path);
+                    parsedData = JSON.parse(text);
+                } else {
+                    // 读取本地图片 Buffer
+                    const buffer = await window.electronAPI.readBuffer(file.path);
+                    // 复用解析函数（Buffer 经 IPC 传递后为 Uint8Array，取 .buffer 为 ArrayBuffer）
+                    parsedData = parsePNGChunk(buffer.buffer) || deepScanForJSON(buffer.buffer);
+                }
+
+                if (parsedData) {
+                    const normalized = normalizeCardData(parsedData);
+                    // 前端专用唯一随机 ID（时间戳 + 随机串），保证 Vue key / 多选 / 图谱标识永不冲突
+                    const cardId = 'card_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 9);
+                    const cardInfo = {
+                        id: cardId,
+                        path: file.path, // 保留真实绝对路径，供保存/删除/导出等文件操作使用
+                        name: normalized.data?.name || parsedData.name || '未命名',
+                        creator: normalized.data?.creator || '未知',
+                        avatar: file.url, // 通过 local-file:// 协议展示本地图片
+                        data: normalized,
+                        category: '未分类',
+                        customTags: []
+                    };
+
+                    // 触发自动标签和分类（会优先应用导入的历史配置）
+                    processAutoTagsAndCategory(cardInfo);
+                    library.value.push(cardInfo);
+                    return true;
+                }
+            } catch (err) {
+                console.warn(`跳过文件 ${file.name}`, err);
+            }
+            return false;
+        };
+
         // 统一处理主进程传来的文件列表
         const processElectronFiles = async (folderData) => {
             if (!folderData || !folderData.files) return;
@@ -879,42 +1057,84 @@ const app = createApp({
             let addedCount = 0;
 
             for (const file of folderData.files) {
-                try {
-                    let parsedData = null;
-
-                    if (file.name.toLowerCase().endsWith('.json')) {
-                        // 读取本地 JSON 文本
-                        const text = await window.electronAPI.readText(file.path);
-                        parsedData = JSON.parse(text);
-                    } else {
-                        // 读取本地图片 Buffer
-                        const buffer = await window.electronAPI.readBuffer(file.path);
-                        // 复用解析函数（Buffer 经 IPC 传递后为 Uint8Array，取 .buffer 为 ArrayBuffer）
-                        parsedData = parsePNGChunk(buffer.buffer) || deepScanForJSON(buffer.buffer);
-                    }
-
-                    if (parsedData) {
-                        const normalized = normalizeCardData(parsedData);
-                        const cardInfo = {
-                            id: file.path, // 绝对路径作为唯一 ID
-                            name: normalized.data?.name || parsedData.name || '未命名',
-                            creator: normalized.data?.creator || '未知',
-                            avatar: file.url, // 通过 local-file:// 协议展示本地图片
-                            data: normalized,
-                            category: '未分类',
-                            customTags: []
-                        };
-
-                        // 触发自动标签和分类（会优先应用导入的历史配置）
-                        processAutoTagsAndCategory(cardInfo);
-                        library.value.push(cardInfo);
-                        addedCount++;
-                    }
-                } catch (err) {
-                    console.warn(`跳过文件 ${file.name}`, err);
-                }
+                if (await parseAndAddCard(file)) addedCount++;
             }
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
+        };
+
+        // ================= [ 磁盘卡片扫描系统 ] =================
+        const isScanningDisk = ref(false);
+        const diskScanProgress = ref({ status: '准备就绪', count: 0 });
+        const useSizeFilter = ref(true); // 默认开启体积过滤（跳过 <40KB 的贴图/图标）
+
+        // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库）
+        const importScanPaths = async (paths) => {
+            let added = 0;
+            for (const absPath of paths) {
+                const name = absPath.split(/[\\/]/).pop() || absPath;
+                const isImage = /\.(png|webp)$/i.test(name);
+                const file = {
+                    name,
+                    path: absPath,
+                    url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
+                };
+                if (await parseAndAddCard(file)) added++;
+            }
+            return added;
+        };
+
+        // 核心扫描执行器
+        const runDiskScan = async (mode) => {
+            if (!window.electronAPI) {
+                return nativeAlert('该功能需要 Electron 桌面环境，请使用 npm start 启动应用。', 'warning');
+            }
+            isScanningDisk.value = true;
+            diskScanProgress.value = { status: '正在初始化扫描引擎...', count: 0 };
+
+            let foundFiles = [];
+
+            // 监听底层发来的扫描进度心跳
+            window.electronAPI.onScanProgress((data) => {
+                diskScanProgress.value = data;
+            });
+
+            try {
+                if (mode === 'specific') {
+                    // 1. 指定盘符/文件夹扫描（主进程弹出原生目录选择器），传递体积过滤开关
+                    const result = await window.electronAPI.scanTargetFolder(null, useSizeFilter.value);
+                    if (result && result.files) foundFiles = result.files;
+
+                } else if (mode === 'all') {
+                    // 2. 暴力全盘扫描
+                    const drives = await window.electronAPI.getWindowsDrives();
+                    diskScanProgress.value.status = `共检测到 ${drives.length} 个本地磁盘，准备遍历...`;
+
+                    for (const drive of drives) {
+                        diskScanProgress.value.status = `正在深度扫描磁盘: ${drive}`;
+                        const result = await window.electronAPI.scanTargetFolder(drive, useSizeFilter.value);
+                        if (result && result.files) {
+                            foundFiles = foundFiles.concat(result.files);
+                        }
+                    }
+                }
+
+                if (foundFiles.length === 0) {
+                    nativeAlert('扫描结束，未在指定区域发现新的 PNG 角色卡文件。', 'info');
+                } else {
+                    diskScanProgress.value.status = `✅ 扫描完成！共发现 ${foundFiles.length} 张卡片，准备导入...`;
+
+                    // 将扫描到的卡片路径逐个解析并追加进库（未识别的文件自动跳过）
+                    const addedCount = await importScanPaths(foundFiles);
+                    diskScanProgress.value.status = `✅ 已成功导入 ${addedCount} 张角色卡！`;
+
+                    nativeAlert(`全盘/指定扫描完成！\n共提取 ${foundFiles.length} 个角色卡文件，成功导入 ${addedCount} 张。\n（无法识别的文件已自动跳过）`, 'info');
+                }
+            } catch (err) {
+                console.error("扫描失败:", err);
+                nativeAlert('扫描过程中发生异常，详情请查看控制台。', 'error');
+            } finally {
+                isScanningDisk.value = false;
+            }
         };
 
         // 按钮绑定的点击事件：通过主进程弹出原生文件夹选择框
@@ -1133,7 +1353,7 @@ const app = createApp({
         const exportCard = async (item) => {
             if (!item) return;
             try {
-                const res = await window.electronAPI.exportBatchPackage([item.id]);
+                const res = await window.electronAPI.exportBatchPackage([item.path]);
                 if (res.success) {
                     nativeAlert(`单卡导出成功！\n已导出至:\n${res.exportDir}`, 'info');
                 } else if (res.error !== "用户取消操作") {
@@ -1153,7 +1373,7 @@ const app = createApp({
                 buttons: ['移入回收站', '取消'], cancelId: 1
             });
             if (response === 0) {
-                const res = await window.electronAPI.deleteFile(item.id);
+                const res = await window.electronAPI.deleteFile(item.path);
                 if (res.success) {
                     library.value = library.value.filter(i => i.id !== item.id);
                     // 如果删除的正是当前打开的卡片，关闭编辑面板
@@ -1225,7 +1445,11 @@ const app = createApp({
         const batchExportSelected = async () => {
             if (selectedIds.value.length === 0) return;
             try {
-                const res = await window.electronAPI.exportBatchPackage(selectedIds.value);
+                // selectedIds 现在存的是前端唯一随机 ID，需映射回真实文件路径再交给主进程
+                const exportPaths = library.value
+                    .filter(item => selectedIds.value.includes(item.id))
+                    .map(item => item.path);
+                const res = await window.electronAPI.exportBatchPackage(exportPaths);
                 if (res.success) {
                     nativeAlert(`批量导出成功！\n共导出 ${res.count} 张卡片至:\n${res.exportDir}`, 'info');
                     clearSelection();
@@ -1340,23 +1564,59 @@ const app = createApp({
             '现代', '古代', '克苏鲁', '日常', '战斗', '病娇', '御姐', '萝莉', '少年'
         ]);
 
-        // 2. 动态计算：从当前所有已导入的卡片中聚合提取出所有的标签（形成动态系统标签库，兼容 V1/V2 的 tags 字段）
+        const newGlobalTagInput = ref(''); // 用于绑定直接新增标签的输入框
+
+        // 2. 动态计算：从当前所有已导入的卡片中聚合提取出所有的标签
         const globalAvailableTags = computed(() => {
             const tagSet = new Set(defaultSystemTags.value);
             library.value.forEach(item => {
+                // 提取自定义标签
                 if (item.customTags && Array.isArray(item.customTags)) {
-                    item.customTags.forEach(t => tagSet.add(t));
+                    item.customTags.forEach(t => { if (t) tagSet.add(t); });
                 }
-                // 如果卡片本身带有的 tags 字段
+                // 提取卡片原生自带标签（兼顾旧版卡片的字符串格式）
                 const d = item.data?.data || item.data || {};
-                if (d.tags && Array.isArray(d.tags)) {
-                    d.tags.forEach(t => tagSet.add(t));
+                if (d.tags) {
+                    if (Array.isArray(d.tags)) {
+                        d.tags.forEach(t => { if (t) tagSet.add(t); });
+                    } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
+                        d.tags.split(',').forEach(t => tagSet.add(t.trim()));
+                    }
                 }
             });
             return Array.from(tagSet);
         });
 
-        // 标签快捷栏展开状态
+        // 3. 允许在系统/常用标签栏直接添加新标签
+        const addTagToGlobalPool = () => {
+            const val = newGlobalTagInput.value.trim();
+            if (val && !defaultSystemTags.value.includes(val)) {
+                defaultSystemTags.value.push(val);
+                newGlobalTagInput.value = '';
+            }
+        };
+
+        // 4. 彻底清洗：点击 × 删除系统标签，并从所有卡片中洗掉这个脏标签
+        const removeTagFromGlobalPool = (tagToRemove) => {
+            // 从预设池移除
+            defaultSystemTags.value = defaultSystemTags.value.filter(t => t !== tagToRemove);
+            
+            // 深度清洗库中所有的该标签
+            library.value.forEach(item => {
+                if (item.customTags) {
+                    item.customTags = item.customTags.filter(t => t !== tagToRemove);
+                }
+                const d = item.data?.data || item.data || {};
+                if (Array.isArray(d.tags)) {
+                    d.tags = d.tags.filter(t => t !== tagToRemove);
+                } else if (typeof d.tags === 'string') {
+                    d.tags = d.tags.split(',').map(t => t.trim()).filter(t => t && t !== tagToRemove).join(', ');
+                }
+            });
+            nativeAlert(`已从系统库及所有卡片中彻底清洗标签：[${tagToRemove}]`, 'info');
+        };
+
+        // 标签快捷栏展开状态（点击展开/收起系统标签面板）
         const isEditingSystemTags = ref(false);
 
         // 点击系统/全局标签快速添加到当前卡片（写入库项目 customTags，与单卡标签栏共用数据源）
@@ -1384,6 +1644,103 @@ const app = createApp({
             showBatchTagModal.value = false;
             batchInputTags.value = '';
             clearSelection();
+        };
+
+        // ================= [ AI 智能批量打标系统 ] =================
+        const showAITagModal = ref(false);
+        const aiTagMode = ref('candidate'); // 'candidate' 候选池模式 或 'free' 自由发散模式
+        const aiCandidateTags = ref('');
+        const aiCustomPrompt = ref('你是一个专业的角色卡分析助手。请阅读以下角色设定，提取最符合角色的标签。请严格只返回一个 JSON 数组格式（例如：["标签1", "标签2"]），绝对不要返回任何其他说明文字。');
+        const aiTaggingProgress = ref({ current: 0, total: 0, status: '' });
+        const isAITagging = ref(false);
+
+        // 打开 AI 打标弹窗
+        const openAITagModal = () => {
+            if (selectedIds.value.length === 0) return;
+            showAITagModal.value = true;
+            aiTaggingProgress.value = { current: 0, total: selectedIds.value.length, status: '等待开始...' };
+        };
+
+        // 执行批量打标任务
+        const startAITagging = async () => {
+            if (isAITagging.value) return;
+            if (aiTagMode.value === 'candidate' && !aiCandidateTags.value.trim()) {
+                return nativeAlert('候选模式下，必须在输入框中提供你的候选标签池！', 'warning');
+            }
+
+            isAITagging.value = true;
+            const targetIds = [...selectedIds.value];
+            aiTaggingProgress.value.total = targetIds.length;
+            
+            for (let i = 0; i < targetIds.length; i++) {
+                const id = targetIds[i];
+                const item = library.value.find(c => c.id === id);
+                if (!item) continue;
+
+                aiTaggingProgress.value.current = i + 1;
+                aiTaggingProgress.value.status = `正在让 AI 分析: ${item.name}...`;
+
+                try {
+                    const d = item.data?.data || item.data || {};
+                    // 提取核心描述（为了防止超长溢出，可以稍微截断）
+                    const desc = (d.description || '').substring(0, 2000);
+                    const pers = (d.personality || '').substring(0, 1000);
+                    const charInfo = `【角色名】: ${item.name || '未知'}\n【设定描述】: ${desc}\n【性格特征】: ${pers}`;
+
+                    let finalPrompt = aiCustomPrompt.value;
+                    if (aiTagMode.value === 'candidate') {
+                        finalPrompt += `\n\n【必须严格从以下候选标签池中选择（最多5个）】: ${aiCandidateTags.value}`;
+                    } else {
+                        finalPrompt += `\n\n【自由发散模式】请根据角色内容自由提取符合角色的精准标签（最多5个）。`;
+                    }
+                    finalPrompt += `\n\n=== 角色数据 ===\n${charInfo}`;
+
+                    const payload = {
+                        model: "local-model",
+                        messages: [
+                            { role: 'system', content: '你是一个严格输出 JSON 数组的标签提取助手。' },
+                            { role: 'user', content: finalPrompt }
+                        ],
+                        temperature: 0.3, // 使用低温度保证输出格式的稳定性
+                        max_tokens: 150
+                    };
+
+                    const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+                    const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey);
+
+                    if (result.success && result.data.choices && result.data.choices.length > 0) {
+                        const reply = result.data.choices[0].message.content.trim();
+                        let newTags = [];
+                        
+                        try {
+                            // 暴力清洗 AI 可能返回的 markdown 语法 (例如 ```json ... ```)
+                            let jsonStr = reply.replace(/```json/gi, '').replace(/```/g, '').trim();
+                            // 尝试精准定位中括号
+                            const firstBracket = jsonStr.indexOf('[');
+                            const lastBracket = jsonStr.lastIndexOf(']');
+                            if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+                                jsonStr = jsonStr.substring(firstBracket, lastBracket + 1);
+                            }
+                            newTags = JSON.parse(jsonStr);
+                        } catch (err) {
+                            console.warn(`[${item.name}] JSON 解析失败，尝试强制分割 fallback:`, reply);
+                            // 如果 AI 不听话没给 JSON，用 fallback 方案按标点符号暴力拆分
+                            newTags = reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean);
+                        }
+
+                        // 将成功提取的标签注入到卡片中
+                        if (Array.isArray(newTags) && newTags.length > 0) {
+                            item.customTags = Array.from(new Set([...(item.customTags || []), ...newTags]));
+                        }
+                    }
+                } catch (e) {
+                    console.error(`AI 打标异常 [${item.name}]:`, e);
+                }
+            }
+
+            aiTaggingProgress.value.status = '✅ 全部打标完成！';
+            isAITagging.value = false;
+            nativeAlert(`成功为 ${targetIds.length} 张卡片完成 AI 智能打标！`, 'info');
         };
 
         // ================= [ 方法：重命名与导出世界书 ] =================
@@ -1458,7 +1815,7 @@ const app = createApp({
             });
 
             if (response === 0) {
-                const res = await window.electronAPI.deleteFile(libItem.id);
+                const res = await window.electronAPI.deleteFile(libItem.path);
                 if (res.success) {
                     library.value = library.value.filter(item => item.id !== libItem.id);
                     reset();
@@ -1570,8 +1927,8 @@ const app = createApp({
             const libItem = library.value.find(item => item.data === cardData.value);
             if (!libItem) return nativeAlert("未找到原文件路径。");
             try {
-                const res = await window.electronAPI.saveCard(libItem.id, getPlainCardData());
-                if (res.success) nativeAlert(`成功保存到本地！\n文件：${libItem.id}`, 'info');
+                const res = await window.electronAPI.saveCard(libItem.path, getPlainCardData());
+                if (res.success) nativeAlert(`成功保存到本地！\n文件：${libItem.path}`, 'info');
                 else nativeAlert(`保存失败: ${res.error}`, 'error');
             } catch (e) { nativeAlert(`发生错误: ${e.message}`, 'error'); }
         };
@@ -1583,7 +1940,7 @@ const app = createApp({
             if (!libItem) return nativeAlert("未找到原文件路径。");
             
             try {
-                const res = await window.electronAPI.exportPackage(libItem.id, getPlainCardData());
+                const res = await window.electronAPI.exportPackage(libItem.path, getPlainCardData());
                 if (res.success) {
                     nativeAlert(`整合包导出成功！\n已归档至目录:\n${res.exportDir}`, "info");
                 } else if (res.error !== "用户取消操作") {
@@ -1595,7 +1952,9 @@ const app = createApp({
         };
 
         return {
-            theme, toggleTheme,
+            theme, toggleTheme, appSettings, showSettingsModal,
+            showExperimentalMenu, pushToTavern,
+            isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, regexScripts, formattedJson,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
@@ -1619,7 +1978,9 @@ const app = createApp({
             showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
             tagLangMode, toggleTagLangMode, getPresetTagText, displayTagText,
             togglePresetTag, executeBatchTagSave,
-            defaultSystemTags, globalAvailableTags, isEditingSystemTags, addGlobalTag,
+            showAITagModal, aiTagMode, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
+            defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
+            isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, chatContainer,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,
@@ -1628,8 +1989,10 @@ const app = createApp({
             isolateCurrentGroup, edgeFilters,
             updateGraphLayout, renderGraph,
             estimateTokens, cardTokenStats,
+            showTextModal, textModalTitle, textModalContent, textModalFontSize, openTextModal, saveTextModal,
+            showImageModal, previewImageUrl, openImageModal,
             showGlobalAssetModal, globalAssetTab, globalAllWorldbooks, globalAllRegexScripts,
-            renderHTML, deleteCard, updateName, saveToLocalDisk, exportPackage,
+            renderHTML, cleanMarkdownFences, deleteCard, updateName, saveToLocalDisk, exportPackage,
             activeCardTags, addSingleTag, removeSingleTag,
             tagModalVisible, tagInput, tagModalTitle,
             confirmSingleTag, closeSingleTagModal,

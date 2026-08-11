@@ -12,6 +12,14 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 
+// ================= 兼容 360 主动防御：禁用 GPU 进程沙箱 =================
+// 症状：安装版在装有 360（ZhuDongFangYu 主动防御内核驱动）的机器上启动即闪退，
+// 表现：GPU 子进程以沙箱(降权)方式加载 DLL 被内核驱动拦截 → 0xC0000135 循环崩溃
+// → FATAL: GPU process isn't usable. Goodbye（无 crash.log，纯原生层崩溃）。
+// 实测：--disable-gpu-sandbox / --no-sandbox 均可正常启动，普通 DLL 加载无异常。
+// 这里仅禁用 GPU 进程沙箱（保留渲染/网络进程沙箱），影响面最小。
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+
 // ================= 全局异常兜底（崩溃不闪退，错误堆栈落盘） =================
 function crashLogPath() {
   return path.join(app.getPath('userData'), 'crash.log');
@@ -230,6 +238,78 @@ function createWindow() {
   return win;
 }
 
+// ================= [ 底层极速扫描引擎：并发递归遍历盘符/文件夹 (V2) ] =================
+// ⚠️ 扩展超级黑名单：跳过各种含有海量无用 PNG 的软件缓存、游戏资源和系统目录
+const skipFolders = [
+    '.git', 'node_modules', 'windows', 'program files', 'program files (x86)', 
+    'appdata', 'system volume information', '$recycle.bin', 'programdata', 
+    'temp', 'cache', 'caches', 'logs', 'steamapps', 'tencent files'
+];
+
+// 角色卡 PNG 因内嵌设定代码（Base64 JSON），体积几乎不可能小于 40KB；
+// 小于该值极大概率是图标/UI 贴图等垃圾文件，在解析前直接丢弃（体积拦截）
+const MIN_CARD_FILE_SIZE = 40960;
+
+// 并发异步递归扫描核心引擎 (V2 极速版，可选体积拦截)
+async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 }, useSizeFilter = false) {
+    try {
+        // 读取当前目录下的所有文件和文件夹对象
+        const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        
+        // 使用 Promise.all 并发处理当前目录下的所有子项
+        const promises = files.map(async (file) => {
+            // 跳过所有以 . 开头的隐藏文件/文件夹
+            if (file.name.startsWith('.')) return [];
+            
+            const fullPath = path.join(dirPath, file.name);
+
+            if (file.isDirectory()) {
+                const lowerName = file.name.toLowerCase();
+                // 拦截黑名单精确匹配，或者名称中包含 temp / cache 的文件夹
+                if (skipFolders.includes(lowerName) || lowerName.includes('cache') || lowerName.includes('temp')) {
+                    return [];
+                }
+                // 递归进入子目录（并发，传递过滤开关）
+                return scanDirectoryForCards(fullPath, event, progressState, useSizeFilter);
+                
+            } else if (file.isFile()) {
+                // 仅收集后缀为 .png (或 .json) 的文件
+                const ext = path.extname(file.name).toLowerCase();
+                if (ext === '.png' || ext === '.json') {
+                    // 体积拦截：仅当开关开启时，过滤过小的 PNG（JSON 不限制，卡片 JSON 可能本来就小）
+                    if (useSizeFilter && ext === '.png') {
+                        try {
+                            const stats = await fs.promises.stat(fullPath);
+                            if (stats.size < MIN_CARD_FILE_SIZE) return []; // 小于 40KB 直接抛弃
+                        } catch (e) {
+                            return []; // stat 失败（文件被占用等）也直接抛弃
+                        }
+                    }
+
+                    progressState.count++;
+                    // 降低通信频率：每找到 100 张卡片才给前端发一次进度，防止主进程阻塞
+                    if (progressState.count % 100 === 0) {
+                        event.sender.send('scan-progress', { 
+                            status: `🚀 极速检索中... 已发现 ${progressState.count} 个目标文件`, 
+                            count: progressState.count 
+                        });
+                    }
+                    return [fullPath];
+                }
+            }
+            return [];
+        });
+
+        // 等待当前层级的所有并发扫描完成，并将多维数组压平返回
+        const results = await Promise.all(promises);
+        return results.flat();
+        
+    } catch (err) {
+        // 静默处理权限不足 (EPERM) 或系统锁定文件夹
+        return [];
+    }
+}
+
 app.whenReady().then(() => {
   registerAppProtocol();
   createWindow();
@@ -268,6 +348,39 @@ app.whenReady().then(() => {
   // IPC：读取单个文件文本（用于 JSON 卡片）
   ipcMain.handle('file:readText', (event, filePath) => {
     return fs.readFileSync(filePath, 'utf-8');
+  });
+
+  // IPC：获取所有存在的盘符 (Windows 专属 C:, D:, E: ...)
+  ipcMain.handle('get-windows-drives', async () => {
+    const drives = [];
+    for (let i = 67; i <= 90; i++) { // 从 C (67) 遍历到 Z (90)
+      const drive = String.fromCharCode(i) + ':' + '\\';
+      try {
+        await fs.promises.access(drive, fs.constants.R_OK);
+        drives.push(drive);
+      } catch (e) { /* 盘符不存在 */ }
+    }
+    return drives;
+  });
+
+  // IPC：指定文件夹/盘符扫描（未传路径时弹出原生文件夹选择器；useSizeFilter 控制体积过滤开关）
+  ipcMain.handle('scan-target-folder', async (event, targetPath, useSizeFilter) => {
+    let folderToScan = targetPath;
+
+    // 如果没有传入路径，则弹出原生文件夹选择器让用户选
+    if (!folderToScan) {
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择要扫描的磁盘或文件夹'
+      });
+      if (result.canceled || result.filePaths.length === 0) return [];
+      folderToScan = result.filePaths[0];
+    }
+
+    event.sender.send('scan-progress', { status: `正在急速遍历: ${folderToScan}`, count: 0 });
+    // 将 useSizeFilter 传递给扫描引擎
+    const cardFiles = await scanDirectoryForCards(folderToScan, event, { count: 0 }, useSizeFilter);
+    return { path: folderToScan, files: cardFiles };
   });
 
   // IPC：原生消息对话框（替代 alert）
