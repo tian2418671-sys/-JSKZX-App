@@ -2035,14 +2035,8 @@ const app = createApp({
         const startAITagging = async () => {
             if (isAITagging.value) return;
 
-            // 1. 目标：优先多选选中的卡片 ID；无多选时对当前打开的卡片打标
-            let targetIds = [];
-            if (isMultiSelectMode.value && selectedIds.value.length > 0) {
-                targetIds = [...selectedIds.value];
-            } else if (cardData.value) {
-                const libItem = library.value.find(item => item.data === cardData.value);
-                if (libItem) targetIds = [libItem.id];
-            }
+            // 1. 目标：多选选中的卡片 ID（openAITagModal 已保证 selectedIds 非空，此处兜底校验）
+            const targetIds = [...selectedIds.value];
 
             if (targetIds.length === 0) {
                 nativeAlert('请先选择需要打标的角色卡！', 'warning');
