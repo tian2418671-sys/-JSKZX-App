@@ -2154,6 +2154,7 @@ const app = createApp({
             isAITagging.value = true;
             let successCount = 0;
             let failCount = 0;
+            const failReasons = []; // 收集失败明细（卡片名 + 原因）
 
             for (let i = 0; i < targetIds.length; i++) {
                 const currentId = targetIds[i];
@@ -2239,13 +2240,22 @@ const app = createApp({
                 } catch (err) {
                     console.error(`❌ 卡片 [${card.name}] 打标失败:`, err);
                     failCount++;
+                    failReasons.push(`${card.name || '未知角色'}: ${(err && err.message) ? err.message : String(err)}`);
                 }
             }
 
             // 8. 扫尾工作
             isAITagging.value = false;
             aiTaggingProgress.value.status = '✅ 全部处理完成！';
-            nativeAlert(`🎉 批量处理完成！成功更新: ${successCount} 张，失败: ${failCount} 张`, successCount > 0 ? 'info' : 'warning');
+
+            // 组装结果提示：失败时逐条展示具体原因（最多 6 条，超长截断防刷屏）
+            let resultMsg = `🎉 批量处理完成！成功更新: ${successCount} 张，失败: ${failCount} 张`;
+            if (failReasons.length > 0) {
+                const shown = failReasons.slice(0, 6);
+                resultMsg += '\n\n❌ 失败原因：\n' + shown.map(r => '· ' + r).join('\n');
+                if (failReasons.length > 6) resultMsg += `\n... 等共 ${failReasons.length} 条`;
+            }
+            nativeAlert(resultMsg, successCount > 0 ? 'info' : 'warning');
 
             // 延迟一点关闭弹窗，让用户看到最后的状态
             setTimeout(() => {
