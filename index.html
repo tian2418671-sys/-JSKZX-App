@@ -536,6 +536,8 @@
                                     <input v-model="apiEndpoint" type="text" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-1/2 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="http://127.0.0.1:1234/v1/chat/completions">
                                     <span class="font-bold text-zinc-400 ml-2 shrink-0">Key:</span>
                                     <input v-model="apiKey" type="password" placeholder="留空则使用 test-key" title="远端 API 的鉴权密钥，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-32 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                                    <span class="font-bold text-zinc-400 ml-2 shrink-0">Model:</span>
+                                    <input v-model="apiModel" list="model-suggestions" type="text" placeholder="local-model 或模型 ID" title="OpenAI 兼容接口的模型名称，本地 API 可留空" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded w-28 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
                                 </div>
                                 <div class="flex items-center">
                                     <button @click="isChatRenderMode = !isChatRenderMode" 
@@ -930,6 +932,16 @@
             </div>
         </transition>
 
+        <!-- 模型名称下拉建议（供聊天面板与设置弹窗共用；置于常驻 DOM 避免被 v-if 移除） -->
+        <datalist id="model-suggestions">
+            <option value="local-model">本地 LM Studio / Ollama 默认</option>
+            <option value="gpt-3.5-turbo">ChatGPT 3.5 速度快</option>
+            <option value="gpt-4o">ChatGPT 4o 最聪明</option>
+            <option value="gpt-4o-mini">ChatGPT 4o mini 经济</option>
+            <option value="claude-3-5-sonnet">Claude 3.5 Sonnet 文本好</option>
+            <option value="qwen2.5-7b-instruct">本地 Qwen 7B</option>
+        </datalist>
+
         <!-- ================= [ 弹窗：全局软件设置 (字体与界面) ] ================= -->
         <transition name="fade">
             <div v-if="showSettingsModal" class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-sm" @click.self="showSettingsModal = false">
@@ -983,6 +995,18 @@
                                     <span class="text-sm text-zinc-300 font-medium">加粗 (Medium)</span>
                                 </label>
                             </div>
+                        </div>
+
+                        <!-- 4. AI 模型名称 -->
+                        <div>
+                            <label class="block text-sm font-medium text-zinc-300 mb-2 flex justify-between items-center">
+                                <span>🤖 AI 模型名称 (Model Name)</span>
+                                <span class="text-zinc-500 text-[11px] font-normal">决定 AI 走哪个大脑</span>
+                            </label>
+                            <input v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, claude-3-5-sonnet, local-model" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                            <p class="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
+                                本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-400 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 必须严格填写对应的模型 ID（如 gpt-4o）。
+                            </p>
                         </div>
 
                     </div>

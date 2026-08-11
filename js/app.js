@@ -387,6 +387,19 @@ const app = createApp({
         try { savedApiKey = localStorage.getItem('stc-api-key') || ''; } catch (e) { /* 忽略 */ }
         const apiKey = ref(savedApiKey);
 
+        // API 模型名称（OpenAI 兼容格式的 model 字段；本地 LM Studio/Ollama 通常忽略，可留空回退 local-model）
+        let savedApiModel = '';
+        try { savedApiModel = localStorage.getItem('stc-api-model') || ''; } catch (e) { /* 忽略 */ }
+        const apiModel = ref(savedApiModel);
+
+        // 生成 API 请求的 model 字段：优先使用配置的模型名称，留空时回退到 local-model
+        const resolveApiModel = () => (apiModel.value && apiModel.value.trim()) ? apiModel.value.trim() : 'local-model';
+
+        // 模型名称变化时自动持久化到 localStorage（与 apiKey 懒保存互补，保证设置即存）
+        watch(apiModel, (v) => {
+            try { localStorage.setItem('stc-api-model', v || ''); } catch (e) { /* 忽略 */ }
+        });
+
         // 【新增】聊天界面的 渲染/代码 模式开关 (默认 false 为代码模式，true 为渲染模式)
         const isChatRenderMode = ref(false);
 
@@ -520,7 +533,7 @@ const app = createApp({
 
             // 过滤掉 UI 用的 name 属性，只保留 OpenAI 标准的 role 和 content
             const payload = {
-                model: "local-model", // 本地模型通常忽略此字段
+                model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
                 messages: chatHistory.value.map(msg => ({ role: msg.role, content: msg.content })),
                 temperature: 0.7,
                 max_tokens: 500
@@ -1884,7 +1897,7 @@ const app = createApp({
                     finalPrompt += `\n\n=== 角色数据 ===\n${charInfo}`;
 
                     const payload = {
-                        model: "local-model",
+                        model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
                         messages: [
                             { role: 'system', content: '你是一个严格输出 JSON 数组的标签提取助手。' },
                             { role: 'user', content: finalPrompt }
@@ -2171,7 +2184,7 @@ const app = createApp({
             showAITagModal, aiTagMode, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
-            chatHistory, chatInput, isChatting, apiEndpoint, apiKey, chatContainer,
+            chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, chatContainer,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,
             showGraph, graphContainer, openGraph, closeGraph,
