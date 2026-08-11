@@ -2015,6 +2015,69 @@ const app = createApp({
         const aiTagMode = ref('candidate'); // 'candidate' 候选池模式 或 'free' 自由发散模式
         const aiCandidateTags = ref('');
         const aiCustomPrompt = ref('你是一个专业的角色卡分析助手。请阅读以下角色设定，提取最符合角色的标签。请严格只返回一个 JSON 数组格式（例如：["标签1", "标签2"]），绝对不要返回任何其他说明文字。');
+
+        // ================= [ 系统级微调全局提示词管理 ] =================
+        // 默认内置几条高频实用的系统提示词（localStorage 持久化）
+        const systemPromptPresets = ref((() => {
+            try {
+                const saved = JSON.parse(localStorage.getItem('jsTavernSysPrompts'));
+                if (Array.isArray(saved) && saved.length > 0) return saved;
+            } catch (e) { /* 忽略 */ }
+            return [
+                {
+                    id: 'preset_1',
+                    name: '标准标签提取助手',
+                    content: '你是一个专业的角色卡分析助手。请阅读以下角色设定，提取最符合角色的标签。请严格只返回一个 JSON 数组格式（例如：["标签1", "标签2"]），绝对不要返回任何其他说明文字。',
+                    expanded: false
+                },
+                {
+                    id: 'preset_2',
+                    name: '精简短标签模式 (2-4个)',
+                    content: '你是一个精准的标签归纳专家。请为该角色提取 2-4 个极度精简的核心短标签。输出必须是纯 JSON 数组格式，形如 ["词1", "词2"]，不要附加任何解释。',
+                    expanded: false
+                }
+            ];
+        })());
+
+        // 当前选中的系统提示词 ID
+        const activeSystemPromptId = ref(systemPromptPresets.value[0]?.id || '');
+
+        // 保存到 localStorage
+        const saveSystemPromptsToStorage = () => {
+            try { localStorage.setItem('jsTavernSysPrompts', JSON.stringify(systemPromptPresets.value)); } catch (e) { /* 忽略 */ }
+        };
+
+        // 新增一条系统提示词
+        const addSystemPromptPreset = () => {
+            const newId = 'preset_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+            systemPromptPresets.value.push({
+                id: newId,
+                name: '新提示词模板',
+                content: '你是一个专业的角色卡分析助手。请严格只返回 JSON 数组格式（例如：["标签1", "标签2"]），不要返回任何其他说明文字。',
+                expanded: true // 默认展开方便编辑
+            });
+            activeSystemPromptId.value = newId;
+            saveSystemPromptsToStorage();
+        };
+
+        // 删除一条系统提示词
+        const deleteSystemPromptPreset = (index) => {
+            if (systemPromptPresets.value.length <= 1) {
+                nativeAlert('至少需要保留一条系统提示词！', 'warning');
+                return;
+            }
+            systemPromptPresets.value.splice(index, 1);
+            if (!systemPromptPresets.value.some(p => p.id === activeSystemPromptId.value)) {
+                activeSystemPromptId.value = systemPromptPresets.value[0].id;
+            }
+            saveSystemPromptsToStorage();
+        };
+
+        // 获取当前生效的系统提示词内容（优先选中预设，回退 aiCustomPrompt）
+        const getCurrentSystemPromptContent = () => {
+            const found = systemPromptPresets.value.find(p => p.id === activeSystemPromptId.value);
+            return found ? found.content : (aiCustomPrompt.value || '你是一个专业的角色卡分析助手。');
+        };
         const aiTaggingProgress = ref({ current: 0, total: 0, status: '' });
         const isAITagging = ref(false);
 
@@ -2081,7 +2144,7 @@ const app = createApp({
                     const payload = {
                         model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
                         messages: [
-                            { role: 'system', content: aiCustomPrompt.value || '你是一个专业角色卡分析助手。' },
+                            { role: 'system', content: getCurrentSystemPromptContent() }, // 动态挂载当前选中的系统提示词预设
                             { role: 'user', content: promptText }
                         ],
                         temperature: 0.2 // 偏低温度保证 JSON 格式稳定性
@@ -2384,6 +2447,7 @@ const app = createApp({
             tagLangMode, toggleTagLangMode, getPresetTagText, displayTagText,
             togglePresetTag, executeBatchTagSave,
             showAITagModal, aiTagMode, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
+            systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, chatContainer,
