@@ -195,45 +195,45 @@
             <!-- 【左侧】资源管理器 (库列表) -->
             <aside v-if="viewOptions.showSidebar" class="w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 relative">
                 <!-- 过滤器 -->
-                <div class="p-2 border-b border-zinc-800 flex flex-col gap-2 bg-zinc-900">
+                <div class="p-1.5 border-b border-zinc-800 flex flex-col gap-1 bg-zinc-900">
                     <div class="flex gap-1 items-center">
-                        <select v-model="currentCategoryKey" class="flex-1 bg-zinc-800 border border-zinc-700 text-xs rounded px-1.5 py-1.5 outline-none text-zinc-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                        <select v-model="currentCategoryKey" class="flex-1 bg-zinc-800 border border-zinc-700 text-xs rounded px-1.5 py-1 outline-none text-zinc-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
                             <option v-for="cat in allCategories" :key="cat.key" :value="cat.key">
                                 📁 {{ getCategoryDisplayName(cat) }}
                             </option>
                         </select>
-                        <button @click="addNewCategory" class="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300" title="新增自定义分组">➕</button>
-                        <button @click="renameCurrentCategory" class="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300" title="重命名当前自定义分组">✏️</button>
-                        <button v-if="selectedIds.length > 0" @click="clearSelection" class="px-2 py-1.5 bg-red-900/40 text-red-400 border border-red-800 rounded hover:bg-red-900/60 text-xs" title="取消多选">取消</button>
+                        <button @click="addNewCategory" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300" title="新增自定义分组">➕</button>
+                        <button @click="renameCurrentCategory" class="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300" title="重命名当前自定义分组">✏️</button>
+                        <button v-if="selectedIds.length > 0" @click="clearSelection" class="px-2 py-1 bg-red-900/40 text-red-400 border border-red-800 rounded hover:bg-red-900/60 text-xs" title="取消多选">取消</button>
                     </div>
                     <div class="relative">
-                        <input v-model="searchQuery" type="text" placeholder="全局搜索名称、世界书、关键词..." class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded pl-7 pr-6 py-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
-                        <svg class="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                        <button v-if="searchQuery" @click="searchQuery = ''" class="absolute right-2.5 top-2 text-zinc-500 hover:text-zinc-300 text-xs">✕</button>
+                        <input v-model="searchQuery" type="text" placeholder="全局搜索名称、世界书、关键词..." class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded pl-7 pr-6 py-1 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                        <svg class="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        <button v-if="searchQuery" @click="searchQuery = ''" class="absolute right-2.5 top-1.5 text-zinc-500 hover:text-zinc-300 text-xs">✕</button>
                     </div>
-                    <div class="flex justify-between items-center text-[10px] px-1">
+                    <div class="flex justify-between items-center text-[9px] px-0.5">
                         <span class="text-zinc-500">显示语言:</span>
-                        <button @click="toggleTagLangMode" class="px-2 py-0.5 bg-zinc-800 hover:bg-blue-600 hover:text-white rounded transition font-bold text-zinc-400">
+                        <button @click="toggleTagLangMode" class="px-1.5 py-0.5 bg-zinc-800 hover:bg-blue-600 hover:text-white rounded transition font-bold text-zinc-400">
                             {{ tagLangMode === 'both' ? '🌐 中英双语' : (tagLangMode === 'cn' ? '🇨🇳 纯中文' : '🇺🇸 纯英文') }}
                         </button>
                     </div>
                 </div>
 
                 <!-- 系统快捷过滤标签 -->
-                <div class="flex flex-wrap gap-1 px-2 py-1.5 bg-zinc-900 border-b border-zinc-800">
+                <div class="flex flex-wrap gap-1 px-1.5 py-1 bg-zinc-900 border-b border-zinc-800">
                     <button @click="currentCategoryKey = 'all'" 
                             :class="currentCategoryKey === 'all' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'"
-                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                            class="text-[10px] px-1.5 py-0.5 rounded transition font-medium">
                         全部卡片 ({{ library.length }})
                     </button>
                     <button @click="currentCategoryKey = 'has_lorebook'" 
                             :class="currentCategoryKey === 'has_lorebook' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'"
-                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                            class="text-[10px] px-1.5 py-0.5 rounded transition font-medium">
                         📖 带世界书
                     </button>
                     <button @click="currentCategoryKey = 'has_regex'" 
                             :class="currentCategoryKey === 'has_regex' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'"
-                            class="text-[10px] px-2 py-1 rounded transition font-medium">
+                            class="text-[10px] px-1.5 py-0.5 rounded transition font-medium">
                         ⚡ 带正则脚本
                     </button>
                 </div>
