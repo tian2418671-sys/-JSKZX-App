@@ -124,6 +124,8 @@ const app = createApp({
         };
 
         // ================= [ 顶部菜单系统：视图选项与工具函数 ] =================
+        // API 设置独立弹窗开关
+        const showApiModal = ref(false);
         // 视图菜单控制状态（控制 Raw JSON 页签 / 立绘预览 / Token 分析栏的显隐）
         const viewOptions = ref({
             showSidebar: true,        // 左侧侧边栏（角色卡列表）
@@ -1154,24 +1156,23 @@ const app = createApp({
             applyTheme(theme.value);
         };
 
-        // 恢复默认系统配置（字号/字体/API 三件套；经原生确认框防误触）
-        const resetSettings = async () => {
-            let confirmed = false;
-            if (!window.electronAPI) {
-                confirmed = window.confirm('是否确定恢复默认设置？（界面字号、字体、API 地址 / Key / 模型将全部重置）');
-            } else {
-                const res = await window.electronAPI.showMessage({
-                    type: 'question',
-                    title: '恢复默认设置',
-                    message: '是否确定恢复默认系统配置？（界面字号、字体、API 地址 / Key / 模型 将全部重置）',
-                    buttons: ['取消', '确定'],
-                    defaultId: 1,
-                    cancelId: 0
-                });
-                confirmed = !!(res && res.response === 1);
-            }
-            if (!confirmed) return;
+        // 原生确认对话框（Electron 中 window.confirm 会静默返回 null，须经 dialog.showMessageBox）
+        const confirmDialog = async (message) => {
+            if (!window.electronAPI) return window.confirm(message);
+            const res = await window.electronAPI.showMessage({
+                type: 'question',
+                title: '确认操作',
+                message: message,
+                buttons: ['取消', '确定'],
+                defaultId: 1,
+                cancelId: 0
+            });
+            return !!(res && res.response === 1);
+        };
 
+        // 重置界面外观与个性化设置（不影响 API 配置）
+        const resetPersonalizationSettings = async () => {
+            if (!(await confirmDialog('是否确定重置界面字号与外观设置？（API 配置将保持不变）'))) return;
             // 保留酒馆推送地址，避免误重置
             const prevTavernUrl = appSettings.value.tavernUrl || 'http://127.0.0.1:8000';
             appSettings.value = {
@@ -1181,10 +1182,18 @@ const app = createApp({
                 uiFontSize: 13,
                 tavernUrl: prevTavernUrl
             };
+            nativeAlert('界面外观设置已恢复默认！', 'info');
+        };
+
+        // 重置 API 接口配置（不影响外观设置）
+        const resetApiSettings = async () => {
+            if (!(await confirmDialog('是否重置 API 接口地址与 Key / 模型参数？'))) return;
             apiEndpoint.value = 'http://127.0.0.1:1234/v1/chat/completions';
             apiKey.value = '';
             apiModel.value = '';
-            nativeAlert('设置已恢复为默认状态！', 'info');
+            availableModels.value = [];
+            fetchModelStatus.value = '';
+            nativeAlert('API 配置已恢复默认！', 'info');
         };
 
         // 处理文件读取（含错误提示）
@@ -2083,9 +2092,20 @@ const app = createApp({
                             newTags = reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean);
                         }
 
-                        // 将成功提取的标签注入到卡片中
+                        // 将成功提取的标签同步写入两层数据 + 物理落盘（修复重启后标签丢失）
                         if (Array.isArray(newTags) && newTags.length > 0) {
+                            // (A) 内存显示层：软件自定义视图 customTags
                             item.customTags = Array.from(new Set([...(item.customTags || []), ...newTags]));
+                            // (B) SillyTavern PNG 元数据层：data.tags（V2/V3 规范内）
+                            const d = item.data?.data || item.data || {};
+                            if (!Array.isArray(d.tags)) d.tags = [];
+                            d.tags = Array.from(new Set([...d.tags, ...newTags]));
+                            // (C) 物理覆写本地 PNG 文件，防止重启/重新扫描后标签丢失
+                            try {
+                                const plainData = JSON.parse(JSON.stringify(item.data));
+                                const saveRes = await window.electronAPI.saveCard(item.path, plainData);
+                                if (!saveRes || !saveRes.success) console.warn(`AI 打标物理保存失败 [${item.name}]:`, saveRes && saveRes.error);
+                            } catch (e) { console.error(`AI 打标物理保存异常 [${item.name}]:`, e); }
                         }
                     }
                 } catch (e) {
@@ -2307,7 +2327,7 @@ const app = createApp({
         };
 
         return {
-            theme, toggleTheme, appSettings, showSettingsModal, resetSettings,
+            theme, toggleTheme, appSettings, showSettingsModal, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openChatTab,
