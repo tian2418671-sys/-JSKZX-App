@@ -10,6 +10,16 @@
     <script src="./vendor/echarts.min.js"></script>
     <!-- 引入自定义样式 -->
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* ==========================================================
+           工作区专属字号接管：只有右侧内容区放大缩小，外围 UI 绝对不动
+           ========================================================== */
+        main textarea,          /* 接管所有多行文本输入框 (世界书、设定描述等) */
+        main pre,               /* 接管 Raw JSON 原始代码展示区 */
+        main .leading-relaxed { /* 接管聊天测卡界面的对话气泡内容 */
+            font-size: var(--workspace-fs, 14px) !important;
+        }
+    </style>
     <!-- Vue 3 依赖映射（ES Modules 导入方式，本地生产版） -->
     <script type="importmap">
         {
@@ -21,10 +31,10 @@
 </head>
 <body class="bg-zinc-950 text-zinc-200 font-sans selection:bg-blue-200">
     <div id="app" :style="{
+        '--workspace-fs': appSettings.fontSize + 'px',
         fontFamily: appSettings.fontFamily,
-        fontSize: appSettings.fontSize + 'px',
         fontWeight: appSettings.fontWeight
-    }" class="h-full flex flex-col">
+    }" class="h-full flex flex-col text-[13px]">
         
         <!-- ================= [ 顶部菜单栏 (Top Menu Bar) ] ================= -->
         <header class="h-12 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 shadow-sm z-30 select-none">

@@ -55,12 +55,14 @@ const app = createApp({
             try { localStorage.setItem('appSettings', JSON.stringify(newVal)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
 
-        // 将设置应用到 DOM 根节点，让内部所有继承自父级的文本自动生效
-        // （Vue 不会编译挂载容器 #app 自身的 :style 绑定，故此处以 body 为兜底保证生效）
+        // 字体设置应用：fontFamily/fontWeight 全局生效于 body；
+        // 字号不再写死到 body（会破坏 rem/Tailwind 基准单位），改为注入 CSS 变量 --workspace-fs，
+        // 由 index.html 的样式补丁仅接管右侧工作区（main 内 textarea / pre / 聊天气泡）
+        // （Vue 不会编译挂载容器 #app 自身的 :style 绑定，故此处以 documentElement 兜底保证变量生效）
         watch(appSettings, (s) => {
             document.body.style.fontFamily = s.fontFamily;
-            document.body.style.fontSize = s.fontSize + 'px';
             document.body.style.fontWeight = s.fontWeight;
+            document.documentElement.style.setProperty('--workspace-fs', s.fontSize + 'px');
         }, { deep: true, immediate: true });
 
         // ================= [ 实验功能与酒馆联动 ] =================
