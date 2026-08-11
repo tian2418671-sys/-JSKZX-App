@@ -83,7 +83,8 @@ export function parsePNGChunk(buffer) {
                 const nullPos = chunkData.indexOf(0);
                 const keyword = new TextDecoder().decode(chunkData.slice(0, nullPos));
 
-                if (keyword === 'chara') {
+                if (keyword === 'chara' || keyword === 'ccv3') {
+                    // 兼容 V2(chara) / V3(ccv3) 两种数据块关键字；
                     // tEXt 为 latin1（或 Base64 字符串），iTXt 为 utf-8
                     const textData = new TextDecoder('utf-8').decode(chunkData.slice(nullPos + (type === 'iTXt' ? 3 : 1)));
                     const base64Str = textData.replace(/\0/g, ''); // 清理空字节

@@ -262,7 +262,8 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
             if (!file.isDirectory()) continue;
             if (file.name.startsWith('.')) continue;
             const lowerName = file.name.toLowerCase();
-            if (skipFolders.includes(lowerName) || lowerName.includes('cache') || lowerName.includes('temp')) continue;
+            // 精准匹配黑名单（'cache'/'temp'/'caches' 等已在列表中），避免误杀含关键词的正常文件夹
+            if (skipFolders.includes(lowerName)) continue;
             const subResults = await scanDirectoryForCards(path.join(dirPath, file.name), event, progressState, useSizeFilter);
             results.push(...subResults);
         }
@@ -278,10 +279,11 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
 
                 const fullPath = path.join(dirPath, file.name);
                 const ext = path.extname(file.name).toLowerCase();
-                if (ext !== '.png' && ext !== '.json') return [];
+                // 白名单：PNG / WebP / JSON 角色卡全部放行
+                if (ext !== '.png' && ext !== '.webp' && ext !== '.json') return [];
 
-                // 体积拦截：仅当开关开启时，过滤过小的 PNG（JSON 不限制，卡片 JSON 可能本来就小）
-                if (useSizeFilter && ext === '.png') {
+                // 体积拦截：仅当开关开启时，过滤过小的图片（PNG/WebP；JSON 不限制，卡片 JSON 可能本来就小）
+                if (useSizeFilter && (ext === '.png' || ext === '.webp')) {
                     try {
                         const stats = await fs.promises.stat(fullPath);
                         if (stats.size < MIN_CARD_FILE_SIZE) return []; // 小于 40KB 直接抛弃
