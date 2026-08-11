@@ -300,9 +300,9 @@
                     <!-- 编辑器头部: 角色名与保存动作 -->
                     <div class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-900">
                         <div class="flex items-center gap-3 w-1/2">
-                            <!-- 立绘缩略卡：悬浮放大镜 + 点击全屏 -->
+                            <!-- 立绘缩略卡：悬浮放大镜 + 点击全屏（w-10 适配 h-12 header 防溢出） -->
                             <div v-if="imgUrl && viewOptions.showAvatarPreview" class="relative group cursor-pointer shrink-0 rounded-lg overflow-hidden border border-zinc-700 shadow-sm" @click="openImageModal(imgUrl)" title="点击查看高清大立绘">
-                                <img :src="imgUrl" class="w-14 h-14 object-cover object-top transition-transform duration-300 group-hover:scale-110" alt="角色立绘">
+                                <img :src="imgUrl" class="w-10 h-10 object-cover object-top transition-transform duration-300 group-hover:scale-110" alt="角色立绘">
                                 <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                     <span class="text-sm">🔍</span>
                                 </div>
