@@ -380,8 +380,11 @@ const app = createApp({
         const chatHistory = ref([]); // 聊天记录
         const chatInput = ref('');   // 用户输入
         const isChatting = ref(false); // 加载状态
-        // 默认地址：兼容 LM Studio 或 Oobabooga 的 OpenAI 格式接口
-        const apiEndpoint = ref('http://127.0.0.1:1234/v1/chat/completions');
+        // 默认地址：兼容 LM Studio 或 Oobabooga 的 OpenAI 格式接口（支持持久化，重启后自动恢复）
+        const DEFAULT_API_ENDPOINT = 'http://127.0.0.1:1234/v1/chat/completions';
+        let savedEndpoint = '';
+        try { savedEndpoint = localStorage.getItem('stc-api-endpoint') || ''; } catch (e) { /* 忽略 */ }
+        const apiEndpoint = ref(savedEndpoint || DEFAULT_API_ENDPOINT);
         const chatContainer = ref(null); // 用于自动滚动
 
         // API 鉴权密钥（可配置，远端 API 需要真实 key；本地 API 可留空，主进程回退到 test-key）
@@ -397,7 +400,13 @@ const app = createApp({
         // 生成 API 请求的 model 字段：优先使用配置的模型名称，留空时回退到 local-model
         const resolveApiModel = () => (apiModel.value && apiModel.value.trim()) ? apiModel.value.trim() : 'local-model';
 
-        // 模型名称变化时自动持久化到 localStorage（与 apiKey 懒保存互补，保证设置即存）
+        // API 三件套（Endpoint / Key / Model）变化时自动持久化，重启软件后自动恢复
+        watch(apiEndpoint, (v) => {
+            try { localStorage.setItem('stc-api-endpoint', v || ''); } catch (e) { /* 忽略 */ }
+        });
+        watch(apiKey, (v) => {
+            try { localStorage.setItem('stc-api-key', v || ''); } catch (e) { /* 忽略 */ }
+        });
         watch(apiModel, (v) => {
             try { localStorage.setItem('stc-api-model', v || ''); } catch (e) { /* 忽略 */ }
         });

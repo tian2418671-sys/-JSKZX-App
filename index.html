@@ -1070,22 +1070,35 @@
                             </div>
                         </div>
 
-                        <!-- 4. AI 模型名称 -->
+                        <!-- 4. API 引擎设置（全域同步：与打标/聊天面板共享同一数据，设置自动保存、重启恢复） -->
                         <div>
                             <label class="block text-sm font-medium text-zinc-300 mb-2 flex justify-between items-center gap-2">
-                                <span>🤖 AI 模型名称 (Model Name)</span>
+                                <span>⚡ API 引擎设置</span>
                                 <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[11px] font-medium rounded shadow flex items-center gap-1 transition shrink-0">
                                     <span v-if="isFetchingModels" class="animate-spin">🌀</span>
                                     <span v-else>🔄</span> 拉取模型列表
                                 </button>
                             </label>
-                            <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-zinc-800 border border-indigo-500/80 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
-                                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
-                            </select>
-                            <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, claude-3-5-sonnet, local-model" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                            <div class="space-y-2.5">
+                                <div>
+                                    <label class="block text-[11px] text-zinc-400 mb-1">API Endpoint</label>
+                                    <input v-model="apiEndpoint" type="text" placeholder="http://127.0.0.1:1234/v1/chat/completions" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] text-zinc-400 mb-1">API Key</label>
+                                    <input v-model="apiKey" type="password" placeholder="sk-... 或留空" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] text-zinc-400 mb-1">🤖 AI 模型名称 (Model Name)</label>
+                                    <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-zinc-800 border border-indigo-500/80 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                                        <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+                                    </select>
+                                    <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, claude-3-5-sonnet, local-model" class="w-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none shadow-inner">
+                                </div>
+                            </div>
                             <p class="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
                                 <span v-if="fetchModelStatus" class="block mb-1" :class="fetchModelStatus.includes('❌') ? 'text-red-400' : 'text-emerald-400'">{{ fetchModelStatus }}</span>
-                                <span>本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-400 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 必须严格填写对应的模型 ID（如 gpt-4o）。</span>
+                                <span>设置自动保存，重启后自动恢复；与 AI 打标 / 聊天测卡面板实时同步。</span>
                             </p>
                         </div>
 
