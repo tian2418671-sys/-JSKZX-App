@@ -442,7 +442,7 @@ app.whenReady().then(() => {
 
   // IPC：推送角色卡到酒馆（经主进程以 multipart/form-data 上传，绕过渲染进程 CORS 限制）
   // 酒馆导入端点：POST {tavernUrl}/api/characters/import，字段名 avatar
-  ipcMain.handle('tavern:push', async (event, { tavernUrl, cardPath, cardName }) => {
+  ipcMain.handle('tavern:push', async (event, { tavernUrl, cardPath, cardName, apiKey }) => {
     try {
       const baseUrl = String(tavernUrl || '').trim().replace(/\/+$/, '');
       if (!baseUrl) return { success: false, error: '酒馆地址为空' };
@@ -457,9 +457,16 @@ app.whenReady().then(() => {
       const safeName = String(cardName || path.basename(cardPath, ext) || 'card').replace(/[\\/:*?"<>|]/g, '_');
       form.append('avatar', blob, safeName + ext);
 
-      const response = await fetch(importUrl, { method: 'POST', body: form });
+      // 若酒馆设置了 API 密码，需携带 Bearer 鉴权
+      const headers = {};
+      if (apiKey && apiKey.trim()) headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+
+      const response = await fetch(importUrl, { method: 'POST', headers, body: form });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
+        if (response.status === 403) {
+          return { success: false, error: 'HTTP 403 Forbidden：请确认酒馆已开启 API 扩展（设置 → Extensions → API → 启用），并检查 API 密码是否正确。' };
+        }
         return { success: false, error: `HTTP ${response.status}: ${String(text).slice(0, 300)}` };
       }
       const text = await response.text();

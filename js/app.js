@@ -90,6 +90,12 @@ const app = createApp({
             if (!inputUrl) return; // 用户取消
             appSettings.value.tavernUrl = inputUrl; // 保存最新地址
 
+            // 询问酒馆 API 密码（酒馆若设置了 API 密码则必须填写；留空表示未设置，取消则中断）
+            const savedTavernKey = appSettings.value.tavernApiKey || '';
+            const inputTavernKey = await appPrompt('🔑 请输入酒馆 API 密码（若酒馆未设置 API 密码可留空）：', savedTavernKey);
+            if (inputTavernKey === null) return; // 用户取消
+            appSettings.value.tavernApiKey = inputTavernKey; // 保存密码（留空即清空）
+
             // 进入推送流程
             const targetIds = [...selectedIds.value];
             let successCount = 0;
@@ -100,11 +106,12 @@ const app = createApp({
                 if (!item) continue;
 
                 try {
-                    // 真实推送：经主进程上传卡片 PNG 到酒馆 /api/characters/import（绕过 CORS）
+                    // 真实推送：经主进程上传卡片 PNG 到酒馆 /api/characters/import（绕过 CORS，携带可选 API 密码）
                     const pushRes = await window.electronAPI.pushToTavern({
                         tavernUrl: inputUrl,
                         cardPath: item.path,
-                        cardName: item.name
+                        cardName: item.name,
+                        apiKey: appSettings.value.tavernApiKey || ''
                     });
                     if (!pushRes || !pushRes.success) {
                         throw new Error((pushRes && pushRes.error) || '推送失败');
