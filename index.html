@@ -455,7 +455,7 @@
                                 </div>
 
                                 <div class="space-y-2">
-                                    <div v-for="(entry, index) in worldbookEntries" :key="index" class="bg-zinc-900 border border-zinc-800 rounded shadow-sm overflow-hidden transition-all">
+                                    <div v-for="(entry, index) in worldbookEntries" :key="getEntryUid(entry)" class="bg-zinc-900 border border-zinc-800 rounded shadow-sm overflow-hidden transition-all">
                                         
                                         <div @click="toggleWorldbookEntry(index)" class="px-3 py-2.5 bg-zinc-800/60 hover:bg-zinc-800 cursor-pointer flex justify-between items-center select-none">
                                             <div class="flex items-center gap-2 overflow-hidden">

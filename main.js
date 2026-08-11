@@ -83,21 +83,25 @@ function writeTavernPNGChunk(buffer, updatedJson) {
     const type = buffer.subarray(offset + 4, offset + 8).toString('latin1');
     const data = buffer.subarray(offset + 8, offset + 8 + length);
 
-    // 找到第一个 chara/ccv3 文本块，替换为新数据（统一写为 tEXt + Base64）
-    if ((type === 'tEXt' || type === 'iTXt') && !found) {
+    // chara/ccv3 数据块：保留第一个用于替换为新数据（统一写为 tEXt + Base64），
+    // 其余所有旧的 chara/ccv3 块一律剔除——防止 V3 幽灵数据残留（酒馆优先读 ccv3，残留会导致修改不生效）
+    if (type === 'tEXt' || type === 'iTXt') {
       const nullPos = data.indexOf(0);
       if (nullPos > 0) {
         const keyword = data.subarray(0, nullPos).toString('latin1');
         if (keyword === 'chara' || keyword === 'ccv3') {
-          chunks.push({
-            type: 'tEXt',
-            data: Buffer.concat([
-              Buffer.from(keyword, 'latin1'),
-              Buffer.from([0]),
-              Buffer.from(base64, 'latin1')
-            ])
-          });
-          found = true;
+          if (!found) {
+            chunks.push({
+              type: 'tEXt',
+              data: Buffer.concat([
+                Buffer.from(keyword, 'latin1'),
+                Buffer.from([0]),
+                Buffer.from(base64, 'latin1')
+              ])
+            });
+            found = true;
+          }
+          // 无论是否作为替换目标，旧的 chara/ccv3 块都不再保留（大扫除）
           offset += 12 + length;
           continue;
         }

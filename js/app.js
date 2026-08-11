@@ -406,6 +406,15 @@ const app = createApp({
         });
 
         // 世界书条目（兼容 V1/V2 层级与 comment 字段）
+        // 世界书条目稳定标识：为每个条目对象分配唯一 uid（v-for :key 使用，避免增删时节点错位）
+        const entryUidMap = new Map();
+        let entryUidCounter = 0;
+        const getEntryUid = (entry) => {
+            if (!entry || typeof entry !== 'object') return 'entry-' + (++entryUidCounter);
+            if (!entryUidMap.has(entry)) entryUidMap.set(entry, 'entry-' + (++entryUidCounter));
+            return entryUidMap.get(entry);
+        };
+
         const worldbookEntries = computed(() => {
             // 兼容 V1 和 V2 的存放位置
             const book = safeData.value.character_book || cardData.value?.character_book || {};
@@ -594,11 +603,17 @@ const app = createApp({
             });
         };
 
+        // 窗口尺寸变化时自适应图谱（避免拉伸畸变）
+        const handleGraphResize = () => {
+            if (echartsInstance) echartsInstance.resize();
+        };
+
         const openGraph = () => {
             if (library.value.length < 2) {
                 return nativeAlert('库中至少需要有 2 张卡片才能生成关系图谱。', 'warning');
             }
             showGraph.value = true;
+            window.addEventListener('resize', handleGraphResize); // 绑定窗口 resize 自适应
 
             // 等待 DOM 渲染完成后初始化 ECharts
             nextTick(() => {
@@ -612,6 +627,7 @@ const app = createApp({
 
         const closeGraph = () => {
             showGraph.value = false;
+            window.removeEventListener('resize', handleGraphResize); // 解绑 resize，防止泄漏
             if (echartsInstance) {
                 echartsInstance.dispose();
                 echartsInstance = null;
@@ -2130,7 +2146,7 @@ const app = createApp({
             openBakFolder, openTrashFolder, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
-            safeData, specVersion, worldbookEntries, regexScripts, formattedJson,
+            safeData, specVersion, worldbookEntries, getEntryUid, regexScripts, formattedJson,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
             getKeysString, updateEntryKeys,
             getRegexPlacement, handleDrop, handleFileUpload, downloadJson, reset,
