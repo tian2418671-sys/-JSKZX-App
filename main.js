@@ -429,13 +429,43 @@ app.whenReady().then(() => {
       if (!targetPath) return { success: false, error: '路径为空。' };
       // 相对路径转为绝对路径（相对项目根目录）；绝对路径原样使用
       const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(__dirname, targetPath);
-      // 目录不存在则自动创建，防止报错
-      if (!fs.existsSync(fullPath)) {
+      // 目录不存在则自动创建（防御：仅当非文件路径时自动建目录，避免把 "1.png" 这类文件路径误建成文件夹）
+      if (!fs.existsSync(fullPath) && !path.extname(fullPath)) {
         fs.mkdirSync(fullPath, { recursive: true });
       }
       const err = await shell.openPath(fullPath);
       return err ? { success: false, error: err } : { success: true };
     } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC：推送角色卡到酒馆（经主进程以 multipart/form-data 上传，绕过渲染进程 CORS 限制）
+  // 酒馆导入端点：POST {tavernUrl}/api/characters/import，字段名 avatar
+  ipcMain.handle('tavern:push', async (event, { tavernUrl, cardPath, cardName }) => {
+    try {
+      const baseUrl = String(tavernUrl || '').trim().replace(/\/+$/, '');
+      if (!baseUrl) return { success: false, error: '酒馆地址为空' };
+      if (!cardPath || !fs.existsSync(cardPath)) return { success: false, error: '卡片文件不存在: ' + cardPath };
+
+      const importUrl = baseUrl + '/api/characters/import';
+      const fileBuf = fs.readFileSync(cardPath);
+      const blob = new Blob([fileBuf]);
+      const form = new FormData();
+      // 用卡片名作为上传文件名（保留原扩展名），酒馆导入后即为该角色名
+      const ext = path.extname(cardPath) || '.png';
+      const safeName = String(cardName || path.basename(cardPath, ext) || 'card').replace(/[\\/:*?"<>|]/g, '_');
+      form.append('avatar', blob, safeName + ext);
+
+      const response = await fetch(importUrl, { method: 'POST', body: form });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        return { success: false, error: `HTTP ${response.status}: ${String(text).slice(0, 300)}` };
+      }
+      const text = await response.text();
+      return { success: true, data: text };
+    } catch (e) {
+      console.error('推送酒馆失败:', e);
       return { success: false, error: e.message };
     }
   });

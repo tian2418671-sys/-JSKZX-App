@@ -41,5 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('scan-progress', (event, data) => callback(data));
     },
     // 用系统资源管理器打开指定文件夹（查看快照/回收站等；相对路径自动解析）
-    openPath: (targetPath) => ipcRenderer.invoke('system:openPath', targetPath)
+    openPath: (targetPath) => ipcRenderer.invoke('system:openPath', targetPath),
+    // 推送角色卡到酒馆（经主进程以 multipart 上传，绕过 CORS）
+    pushToTavern: (params) => ipcRenderer.invoke('tavern:push', params)
 });

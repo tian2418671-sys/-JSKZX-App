@@ -93,31 +93,38 @@ const app = createApp({
             // 进入推送流程
             const targetIds = [...selectedIds.value];
             let successCount = 0;
+            const failReasons = [];
 
             for (const id of targetIds) {
                 const item = library.value.find(c => c.id === id);
                 if (!item) continue;
 
                 try {
-                    console.log(`正在推送 [${item.name}] 到酒馆: ${inputUrl}`);
-
-                    // ==========================================
-                    // ⚠️ 这里是对接酒馆 API 的核心位置
-                    // 酒馆通常通过 POST /api/characters/import 接收卡片
-                    // 如果你使用的是 Electron，建议在这里调用 window.electronAPI
-                    // 例如： await window.electronAPI.pushToSillyTavern(inputUrl, item.data);
-                    // ==========================================
-
-                    // 模拟网络请求延迟
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    // 真实推送：经主进程上传卡片 PNG 到酒馆 /api/characters/import（绕过 CORS）
+                    const pushRes = await window.electronAPI.pushToTavern({
+                        tavernUrl: inputUrl,
+                        cardPath: item.path,
+                        cardName: item.name
+                    });
+                    if (!pushRes || !pushRes.success) {
+                        throw new Error((pushRes && pushRes.error) || '推送失败');
+                    }
                     successCount++;
+                    console.log(`已推送 [${item.name}] 到酒馆: ${inputUrl}`);
 
                 } catch (error) {
                     console.error(`推送 [${item.name}] 失败:`, error);
+                    failReasons.push(`${item.name}: ${(error && error.message) ? error.message : String(error)}`);
                 }
             }
 
-            nativeAlert(`🎉 推送完成！共将 ${successCount} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`, 'info');
+            let pushMsg = `🎉 推送完成！共将 ${successCount} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`;
+            if (failReasons.length > 0) {
+                const shown = failReasons.slice(0, 5);
+                pushMsg += `\n\n❌ 失败 ${failReasons.length} 张：\n` + shown.map(r => '· ' + r).join('\n');
+                if (failReasons.length > 5) pushMsg += `\n... 等共 ${failReasons.length} 条`;
+            }
+            nativeAlert(pushMsg, successCount > 0 ? 'info' : 'warning');
 
             // 可选：推送完成后清空勾选
             // clearSelection();
