@@ -1028,6 +1028,11 @@ const app = createApp({
 
         const parseAndAddCard = async (file) => {
             try {
+                // 去重拦截：同一路径的卡片已在库中则跳过（防止重复扫描/重复导入产生“影分身”）
+                if (library.value.some(c => c.path === file.path)) {
+                    return false;
+                }
+
                 let parsedData = null;
 
                 if (file.name.toLowerCase().endsWith('.json')) {
@@ -1621,24 +1626,48 @@ const app = createApp({
             }
         };
 
-        // 4. 彻底清洗：点击 × 删除系统标签，并从所有卡片中洗掉这个脏标签
-        const removeTagFromGlobalPool = (tagToRemove) => {
+        // 4. 彻底清洗：点击 × 删除系统标签，从所有卡片中洗掉脏标签，并将受影响的卡片物理落盘
+        const removeTagFromGlobalPool = async (tagToRemove) => {
             // 从预设池移除
             defaultSystemTags.value = defaultSystemTags.value.filter(t => t !== tagToRemove);
-            
-            // 深度清洗库中所有的该标签
+
+            // 深度清洗库中所有卡片的该标签，并记录被修改的卡片
+            const modifiedItems = [];
             library.value.forEach(item => {
-                if (item.customTags) {
-                    item.customTags = item.customTags.filter(t => t !== tagToRemove);
+                let isModified = false;
+
+                if (Array.isArray(item.customTags)) {
+                    const filtered = item.customTags.filter(t => t !== tagToRemove);
+                    if (filtered.length !== item.customTags.length) { item.customTags = filtered; isModified = true; }
                 }
+
                 const d = item.data?.data || item.data || {};
                 if (Array.isArray(d.tags)) {
-                    d.tags = d.tags.filter(t => t !== tagToRemove);
+                    const filtered = d.tags.filter(t => t !== tagToRemove);
+                    if (filtered.length !== d.tags.length) { d.tags = filtered; isModified = true; }
                 } else if (typeof d.tags === 'string') {
-                    d.tags = d.tags.split(',').map(t => t.trim()).filter(t => t && t !== tagToRemove).join(', ');
+                    const cleaned = d.tags.split(',').map(t => t.trim()).filter(t => t && t !== tagToRemove).join(', ');
+                    if (cleaned !== d.tags) { d.tags = cleaned; isModified = true; }
                 }
+
+                if (isModified) modifiedItems.push(item);
             });
-            nativeAlert(`已从系统库及所有卡片中彻底清洗标签：[${tagToRemove}]`, 'info');
+
+            // 将受影响的卡片物理保存到本地（防止重启/重新扫描后脏标签复活）
+            let savedCount = 0;
+            for (const item of modifiedItems) {
+                try {
+                    // 剥离 Vue 响应式 Proxy，经 IPC 写回物理文件
+                    const plainData = JSON.parse(JSON.stringify(item.data));
+                    const res = await window.electronAPI.saveCard(item.path, plainData);
+                    if (res && res.success) savedCount++;
+                    else console.warn(`清洗标签后保存失败 [${item.name}]:`, res && res.error);
+                } catch (e) {
+                    console.error(`清洗标签后物理保存失败 [${item.name}]:`, e);
+                }
+            }
+
+            nativeAlert(`已从系统库彻底清洗标签：[${tagToRemove}]\n${savedCount > 0 ? `并已将 ${savedCount} 张受影响卡片物理保存到本地！` : '（库中未发现残留该标签的卡片）'}`, 'info');
         };
 
         // 标签快捷栏展开状态（点击展开/收起系统标签面板）

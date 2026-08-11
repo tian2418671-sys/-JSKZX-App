@@ -250,60 +250,61 @@ const skipFolders = [
 // 小于该值极大概率是图标/UI 贴图等垃圾文件，在解析前直接丢弃（体积拦截）
 const MIN_CARD_FILE_SIZE = 40960;
 
-// 并发异步递归扫描核心引擎 (V2 极速版，可选体积拦截)
+// 递归扫描核心引擎（目录串行递归 + 文件批并发，彻底避免 EMFILE 句柄爆炸崩溃）
 async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 }, useSizeFilter = false) {
     try {
         // 读取当前目录下的所有文件和文件夹对象
         const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
-        
-        // 使用 Promise.all 并发处理当前目录下的所有子项
-        const promises = files.map(async (file) => {
-            // 跳过所有以 . 开头的隐藏文件/文件夹
-            if (file.name.startsWith('.')) return [];
-            
-            const fullPath = path.join(dirPath, file.name);
+        const results = [];
 
-            if (file.isDirectory()) {
-                const lowerName = file.name.toLowerCase();
-                // 拦截黑名单精确匹配，或者名称中包含 temp / cache 的文件夹
-                if (skipFolders.includes(lowerName) || lowerName.includes('cache') || lowerName.includes('temp')) {
-                    return [];
-                }
-                // 递归进入子目录（并发，传递过滤开关）
-                return scanDirectoryForCards(fullPath, event, progressState, useSizeFilter);
-                
-            } else if (file.isFile()) {
-                // 仅收集后缀为 .png (或 .json) 的文件
+        // 1. 子目录：串行递归（保证任意时刻并发深度为 1，杜绝 EMFILE）
+        for (const file of files) {
+            if (!file.isDirectory()) continue;
+            if (file.name.startsWith('.')) continue;
+            const lowerName = file.name.toLowerCase();
+            if (skipFolders.includes(lowerName) || lowerName.includes('cache') || lowerName.includes('temp')) continue;
+            const subResults = await scanDirectoryForCards(path.join(dirPath, file.name), event, progressState, useSizeFilter);
+            results.push(...subResults);
+        }
+
+        // 2. 文件：分批并发收集（单批上限 64，兼顾 SSD 并行与文件句柄安全）
+        const fileEntries = files.filter(f => f.isFile());
+        const BATCH = 64;
+        for (let i = 0; i < fileEntries.length; i += BATCH) {
+            const batch = fileEntries.slice(i, i + BATCH);
+            const batchResults = await Promise.all(batch.map(async (file) => {
+                // 跳过隐藏文件
+                if (file.name.startsWith('.')) return [];
+
+                const fullPath = path.join(dirPath, file.name);
                 const ext = path.extname(file.name).toLowerCase();
-                if (ext === '.png' || ext === '.json') {
-                    // 体积拦截：仅当开关开启时，过滤过小的 PNG（JSON 不限制，卡片 JSON 可能本来就小）
-                    if (useSizeFilter && ext === '.png') {
-                        try {
-                            const stats = await fs.promises.stat(fullPath);
-                            if (stats.size < MIN_CARD_FILE_SIZE) return []; // 小于 40KB 直接抛弃
-                        } catch (e) {
-                            return []; // stat 失败（文件被占用等）也直接抛弃
-                        }
-                    }
+                if (ext !== '.png' && ext !== '.json') return [];
 
-                    progressState.count++;
-                    // 降低通信频率：每找到 100 张卡片才给前端发一次进度，防止主进程阻塞
-                    if (progressState.count % 100 === 0) {
-                        event.sender.send('scan-progress', { 
-                            status: `🚀 极速检索中... 已发现 ${progressState.count} 个目标文件`, 
-                            count: progressState.count 
-                        });
+                // 体积拦截：仅当开关开启时，过滤过小的 PNG（JSON 不限制，卡片 JSON 可能本来就小）
+                if (useSizeFilter && ext === '.png') {
+                    try {
+                        const stats = await fs.promises.stat(fullPath);
+                        if (stats.size < MIN_CARD_FILE_SIZE) return []; // 小于 40KB 直接抛弃
+                    } catch (e) {
+                        return []; // stat 失败（文件被占用等）也直接抛弃
                     }
-                    return [fullPath];
                 }
-            }
-            return [];
-        });
 
-        // 等待当前层级的所有并发扫描完成，并将多维数组压平返回
-        const results = await Promise.all(promises);
-        return results.flat();
-        
+                progressState.count++;
+                // 降低通信频率：每找到 100 张卡片才给前端发一次进度，防止主进程阻塞
+                if (progressState.count % 100 === 0) {
+                    event.sender.send('scan-progress', { 
+                        status: `🚀 极速检索中... 已发现 ${progressState.count} 个目标文件`, 
+                        count: progressState.count 
+                    });
+                }
+                return [fullPath];
+            }));
+            for (const r of batchResults) results.push(...r);
+        }
+
+        return results;
+
     } catch (err) {
         // 静默处理权限不足 (EPERM) 或系统锁定文件夹
         return [];
@@ -431,6 +432,17 @@ app.whenReady().then(() => {
 
       // 复制当前老文件到备份目录
       fs.copyFileSync(filePath, bakPath);
+
+      // --- 【新增】备份数量上限：每张卡只保留最近 5 份快照，防止 .bak_history 磁盘膨胀 ---
+      try {
+        const baks = fs.readdirSync(bakDir).filter(f => f.includes(fileName));
+        if (baks.length > 5) {
+          // 文件名以 ISO 时间戳开头，字典序即时间序；删除最旧的超出部分
+          baks.sort().slice(0, baks.length - 5).forEach(oldBak => {
+            fs.unlinkSync(path.join(bakDir, oldBak));
+          });
+        }
+      } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
       // --------------------------------------------------
 
       const ext = path.extname(filePath).toLowerCase();
