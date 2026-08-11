@@ -1085,6 +1085,14 @@
                             <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, local-model" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200">
                         </div>
                         <p v-if="fetchModelStatus" class="text-[10px]" :class="fetchModelStatus.includes('❌') ? 'text-red-400' : 'text-emerald-400'">{{ fetchModelStatus }}</p>
+                        <div class="border-t border-zinc-800 pt-3">
+                            <label class="block text-xs text-zinc-400 mb-1">🍻 酒馆本地目录（物理推送绑定）：</label>
+                            <div class="flex items-center gap-2">
+                                <input :value="appSettings.tavernLocalPath || '（未绑定）'" readonly type="text" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-300 truncate focus:outline-none" :title="appSettings.tavernLocalPath">
+                                <button @click="rebindTavernPath" class="px-2 py-1.5 bg-zinc-700 hover:bg-indigo-600 text-white rounded text-[11px] shrink-0 transition" title="重新选择酒馆根目录">📁 重新选择</button>
+                                <button v-if="appSettings.tavernLocalPath" @click="appSettings.tavernLocalPath = ''" class="px-2 py-1.5 bg-zinc-700 hover:bg-rose-600 text-white rounded text-[11px] shrink-0 transition" title="解除绑定">✕</button>
+                            </div>
+                        </div>
                         <p class="text-[10px] text-zinc-500 leading-relaxed">设置自动保存，重启后自动恢复；与 AI 打标 / 聊天测卡实时同步。</p>
                     </div>
                     <div class="flex justify-end gap-2 pt-2 border-t border-zinc-800">

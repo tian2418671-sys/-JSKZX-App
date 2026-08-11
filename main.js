@@ -10,6 +10,7 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { pathToFileURL } = require('url');
 
 // ================= 兼容 360 主动防御：禁用 GPU 进程沙箱 =================
@@ -475,6 +476,41 @@ app.whenReady().then(() => {
       console.error('推送酒馆失败:', e);
       return { success: false, error: e.message };
     }
+  });
+
+  // IPC：酒馆路径智能嗅探（遍历常见位置，通过 server.js + public 指纹验证）
+  ipcMain.handle('tavern:autoDetectPath', async () => {
+    const homeDir = os.homedir(); // 当前用户家目录 (C:\Users\Username)
+
+    // 罗列绝大多数用户习惯放置酒馆的常见路径
+    const candidatePaths = [
+      path.join(homeDir, 'Desktop', 'SillyTavern'),
+      path.join(homeDir, 'Desktop', 'SillyTavern-main'),
+      path.join(homeDir, 'Downloads', 'SillyTavern'),
+      path.join(homeDir, 'Downloads', 'SillyTavern-main'),
+      path.join(homeDir, 'Documents', 'SillyTavern'),
+      path.join(homeDir, 'Documents', 'SillyTavern-main'),
+      'C:\\SillyTavern',
+      'D:\\SillyTavern',
+      'E:\\SillyTavern'
+    ];
+
+    // 遍历路径，通过“指纹文件”验证是否真的是酒馆目录
+    for (const testPath of candidatePaths) {
+      try {
+        // 酒馆目录的独特特征：根目录下一定有 server.js 并且有 public 文件夹
+        const hasServerJs = fs.existsSync(path.join(testPath, 'server.js'));
+        const hasPublicDir = fs.existsSync(path.join(testPath, 'public'));
+        if (hasServerJs && hasPublicDir) {
+          console.log('✅ 智能嗅探到酒馆路径:', testPath);
+          return testPath;
+        }
+      } catch (e) {
+        // 忽略没有权限访问的文件夹报错
+        continue;
+      }
+    }
+    return null; // 未找到
   });
 
   // IPC：通用选择文件夹对话框（用于绑定酒馆本地根目录）

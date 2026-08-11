@@ -89,15 +89,30 @@ const app = createApp({
 
             // 1. 检查或请求酒馆的本地绝对路径
             let stRoot = appSettings.value.tavernLocalPath;
+
+            // ===== 如果还没有绑定路径：先智能嗅探，再手动选择兜底 =====
             if (!stRoot) {
-                const confirmed = await confirmDialog('尚未绑定 SillyTavern 本地目录。\n是否现在去选择你的酒馆根文件夹？\n(选对一次即可永久免密一键推送)');
-                if (!confirmed) return;
+                // 1) 先尝试让主进程静默嗅探常见位置
+                const autoDetected = await window.electronAPI.autoDetectTavernPath();
+                if (autoDetected) {
+                    const confirmAuto = await confirmDialog(`🎉 系统自动检测到了你的酒馆路径：\n\n${autoDetected}\n\n是否直接使用该路径？(选确定将自动永久绑定)`);
+                    if (confirmAuto) {
+                        stRoot = autoDetected;
+                        appSettings.value.tavernLocalPath = stRoot;
+                    }
+                }
 
-                const folderPath = await window.electronAPI.selectGenericFolder();
-                if (!folderPath) return; // 用户取消选择
+                // 2) 嗅探失败或用户拒绝 → 手动选择
+                if (!stRoot) {
+                    const confirmManual = await confirmDialog('尚未绑定 SillyTavern 本地目录，且未自动检索到。\n是否现在手动选择你的酒馆【根文件夹】？\n(选对一次即可永久免密一键推送)');
+                    if (!confirmManual) return;
 
-                stRoot = folderPath;
-                appSettings.value.tavernLocalPath = stRoot; // 自动持久化保存
+                    const folderPath = await window.electronAPI.selectGenericFolder();
+                    if (!folderPath) return; // 用户取消选择
+
+                    stRoot = folderPath;
+                    appSettings.value.tavernLocalPath = stRoot; // 自动持久化保存
+                }
             }
 
             // 2. 收集目标文件的真实物理路径
@@ -125,6 +140,15 @@ const app = createApp({
                 }
             } catch (error) {
                 nativeAlert(`推送发生底层异常: ${error.message}`, 'error');
+            }
+        };
+
+        // 重新绑定酒馆本地目录（设置面板内使用）
+        const rebindTavernPath = async () => {
+            const folderPath = await window.electronAPI.selectGenericFolder();
+            if (folderPath) {
+                appSettings.value.tavernLocalPath = folderPath;
+                nativeAlert('酒馆目录已重新绑定：' + folderPath, 'info');
             }
         };
 
@@ -2511,6 +2535,7 @@ const app = createApp({
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
+            rebindTavernPath,
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,

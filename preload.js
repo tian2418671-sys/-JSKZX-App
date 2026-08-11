@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pushToTavern: (params) => ipcRenderer.invoke('tavern:push', params),
     // 通用选择文件夹对话框（绑定酒馆本地根目录）
     selectGenericFolder: () => ipcRenderer.invoke('dialog:selectGenericFolder'),
+    // 智能嗅探酒馆本地根目录（遍历常见路径 + 指纹验证）
+    autoDetectTavernPath: () => ipcRenderer.invoke('tavern:autoDetectPath'),
     // 物理拷贝卡片到酒馆 characters 目录（本地直推）
     pushToSillyTavernDir: (paths, rootPath) => ipcRenderer.invoke('tavern:pushDir', paths, rootPath)
 });
