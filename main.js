@@ -7,7 +7,7 @@
  * - `local-file://` 特权协议安全读取磁盘图片：无需关闭 webSecurity 即可展示本地立绘；
  * - 文件夹选择通过原生 dialog 弹出，选中的路径静默保存到系统 userData 目录。
  */
-const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -384,6 +384,19 @@ app.whenReady().then(() => {
     // 将 useSizeFilter 传递给扫描引擎
     const cardFiles = await scanDirectoryForCards(folderToScan, event, { count: 0 }, useSizeFilter);
     return { path: folderToScan, files: cardFiles };
+  });
+
+  // IPC：用系统资源管理器打开指定文件夹（查看快照 .bak_history / 回收站 .trash 等）
+  ipcMain.handle('shell:openPath', async (event, targetPath) => {
+    try {
+      if (!targetPath || !fs.existsSync(targetPath)) {
+        return { success: false, error: '目标文件夹不存在。' };
+      }
+      const err = await shell.openPath(targetPath);
+      return err ? { success: false, error: err } : { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   });
 
   // IPC：原生消息对话框（替代 alert）

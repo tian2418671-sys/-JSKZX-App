@@ -37,5 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onScanProgress: (callback) => {
         ipcRenderer.removeAllListeners('scan-progress'); // 防止重复绑定
         ipcRenderer.on('scan-progress', (event, data) => callback(data));
-    }
+    },
+    // 用系统资源管理器打开指定文件夹（查看快照/回收站等）
+    openPath: (targetPath) => ipcRenderer.invoke('shell:openPath', targetPath)
 });

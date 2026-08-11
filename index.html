@@ -45,61 +45,80 @@
                     <span>角色卡管理中心</span>
                 </div>
                 
-                <!-- 经典顶部菜单 -->
-                <nav class="hidden md:flex items-center gap-1 text-sm font-medium">
-                    <button class="px-3 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition">文件</button>
-                    <button class="px-3 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition">编辑</button>
-                    <button class="px-3 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition">视图</button>
-                    
-                    <!-- 🧪 实验功能 (带下拉菜单) -->
-                    <div class="relative">
-                        <button @click="showExperimentalMenu = !showExperimentalMenu" class="px-3 py-1.5 text-amber-500/80 hover:text-amber-400 hover:bg-zinc-800 rounded transition flex items-center gap-1">
-                            <span>🧪 实验功能</span>
-                            <!-- 下拉小箭头 -->
-                            <svg class="w-3 h-3 transition-transform" :class="showExperimentalMenu ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        </button>
-                        
-                        <!-- 透明全屏遮罩：用于点击空白处关闭菜单 -->
-                        <div v-if="showExperimentalMenu" @click="showExperimentalMenu = false" class="fixed inset-0 z-40 cursor-default"></div>
+                <!-- 顶部下拉菜单系统 -->
+                <nav class="flex items-center gap-1 text-xs text-zinc-300 border-b border-zinc-800 bg-zinc-900/90 px-3 py-1.5 shrink-0 select-none z-30">
+                    <!-- 隐藏文件输入：供【文件→导入角色卡】使用 -->
+                    <input ref="importFileInput" type="file" accept=".png,.webp,.jpg,.jpeg,.json" multiple class="hidden" @change="handleImportFiles">
 
-                        <!-- 下拉菜单面板 -->
-                        <transition name="fade">
-                            <div v-if="showExperimentalMenu" class="absolute left-0 mt-2 w-72 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden py-1.5">
-                                
-                                <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">
-                                    本地资产检索 (I/O)
-                                </div>
-                                
-                                <!-- 体积过滤开关 -->
-                                <div class="px-4 py-2 text-sm text-zinc-300 flex items-center justify-between hover:bg-zinc-700/50 transition cursor-pointer" @click.stop="useSizeFilter = !useSizeFilter">
-                                    <span class="flex items-center gap-2" title="开启后自动跳过小于 40KB 的贴图和图标">
-                                        <span class="text-base text-emerald-400">⚖️</span> 
-                                        <span>屏蔽非卡片小图 (< 40KB)</span>
-                                    </span>
-                                    <!-- 动态滑动开关 -->
-                                    <div class="w-8 h-4 bg-zinc-600 rounded-full relative transition-colors shadow-inner" :class="{'bg-emerald-500': useSizeFilter}">
-                                        <div class="w-4 h-4 bg-white rounded-full absolute top-0 shadow transition-transform" :class="useSizeFilter ? 'translate-x-4' : 'translate-x-0'"></div>
-                                    </div>
-                                </div>
+                    <div class="relative group">
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">文件(F)</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[160px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <button @click="selectFixedDirectory" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">📁 打开角色库 <span>Ctrl+O</span></button>
+                            <button @click="importCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">➕ 导入角色卡 <span>Ctrl+I</span></button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="saveToLocalDisk" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">💾 保存当前卡片 <span>Ctrl+S</span></button>
+                            <button @click="batchExportSelected" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📦 导出选中卡片...</button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="openBakFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">⏱️ 查看历史快照 (.bak)</button>
+                            <button @click="openTrashFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 查看回收站 (.trash)</button>
+                        </div>
+                    </div>
 
-                                <button @click="runDiskScan('specific')" class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white transition flex items-center gap-2">
-                                    <span class="text-base text-blue-400">📂</span> 
-                                    <span>指定文件夹/盘符扫描</span>
-                                </button>
-                                <button @click="runDiskScan('all')" class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white transition flex items-center gap-2">
-                                    <span class="text-base text-purple-400">💽</span> 
-                                    <span>全盘暴力检索卡片</span>
-                                </button>
+                    <div class="relative group">
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">编辑(E)</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[170px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <button @click="isMultiSelectMode = !isMultiSelectMode" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                ☑️ 批量选择模式 <span v-if="isMultiSelectMode">✓</span>
+                            </button>
+                            <button @click="selectAllCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">全选所有卡片</button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="openAITagModal" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🏷️ AI 智能批量打标</button>
+                            <button @click="batchChangeCategoryModal" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 批量修改分类分组</button>
+                            <button @click="cleanGlobalTagsPrompt" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🧹 清理无效全局标签</button>
+                        </div>
+                    </div>
 
-                                <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 my-1">
-                                    外部联动
+                    <div class="relative group">
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-white transition">视图(V)</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[190px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <div class="px-3 py-1.5 flex items-center justify-between text-zinc-400">
+                                <span>工作区字号</span>
+                                <div class="flex items-center gap-1 bg-zinc-900 rounded px-1">
+                                    <button @click="appSettings.fontSize = Math.max(12, appSettings.fontSize - 1)" class="hover:text-white px-1">-</button>
+                                    <span class="text-white text-[11px] font-mono">{{ appSettings.fontSize }}px</span>
+                                    <button @click="appSettings.fontSize = Math.min(22, appSettings.fontSize + 1)" class="hover:text-white px-1">+</button>
                                 </div>
-                                <button @click="pushToTavern" class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white transition flex items-center gap-2 group">
-                                    <span class="text-base group-hover:scale-110 transition-transform">🍻</span> 
-                                    <span>推送到酒馆 (Tavern)</span>
-                                </button>
                             </div>
-                        </transition>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="viewOptions.showRawJson = !viewOptions.showRawJson" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                📄 显示 Raw JSON 代码区 <span v-if="viewOptions.showRawJson">✓</span>
+                            </button>
+                            <button @click="viewOptions.showAvatarPreview = !viewOptions.showAvatarPreview" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                🖼️ 显示高分辨立绘面板 <span v-if="viewOptions.showAvatarPreview">✓</span>
+                            </button>
+                            <button @click="viewOptions.showTokenStats = !viewOptions.showTokenStats" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                                📊 显示 Token 消耗分析栏 <span v-if="viewOptions.showTokenStats">✓</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="relative group">
+                        <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-amber-400 transition font-bold">🧪 实验与工具</button>
+                        <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                            <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">本地资产检索 (I/O)</div>
+                            <div class="px-3 py-1.5 text-zinc-300 flex items-center justify-between cursor-pointer hover:bg-zinc-700/50 transition" @click.stop="useSizeFilter = !useSizeFilter" title="开启后自动跳过小于 40KB 的贴图和图标">
+                                <span class="flex items-center gap-2"><span class="text-emerald-400">⚖️</span> 屏蔽非卡片小图 (< 40KB)</span>
+                                <div class="w-8 h-4 bg-zinc-600 rounded-full relative transition-colors shadow-inner" :class="{'bg-emerald-500': useSizeFilter}">
+                                    <div class="w-4 h-4 bg-white rounded-full absolute top-0 shadow transition-transform" :class="useSizeFilter ? 'translate-x-4' : 'translate-x-0'"></div>
+                                </div>
+                            </div>
+                            <button @click="runDiskScan('specific')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 指定文件夹/盘符扫描</button>
+                            <button @click="runDiskScan('all')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">💽 全盘暴力检索卡片</button>
+                            <div class="h-px bg-zinc-700 my-1"></div>
+                            <button @click="openGraph" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">🌌 星系关系图 (ECharts)</button>
+                            <button @click="openChatTab" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">💬 本地 AI 对话测卡</button>
+                            <button @click="pushToTavern" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🚀 一键推送至酒馆</button>
+                        </div>
                     </div>
                 </nav>
             </div>
@@ -249,9 +268,9 @@
                     <!-- 编辑器头部: 角色名与保存动作 -->
                     <div class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-900">
                         <div class="flex items-center gap-3 w-1/2">
-                            <img v-if="imgUrl" :src="imgUrl" @click="openImageModal(imgUrl)" class="w-8 h-8 rounded-full object-cover border border-zinc-700 shadow-sm cursor-pointer hover:opacity-80 transition" title="点击查看高清大立绘">
+                            <img v-if="imgUrl && viewOptions.showAvatarPreview" :src="imgUrl" @click="openImageModal(imgUrl)" class="w-8 h-8 rounded-full object-cover border border-zinc-700 shadow-sm cursor-pointer hover:opacity-80 transition" title="点击查看高清大立绘">
                             <input :value="safeData.name" @input="updateName($event.target.value)" class="font-bold text-base bg-transparent border-b border-transparent hover:border-zinc-600 focus:border-blue-500 outline-none w-full px-1 py-0.5 transition text-zinc-100 placeholder-zinc-500" placeholder="角色名称">
-                            <div class="hidden md:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-[11px] shrink-0" title="预估总 Token 消耗量">
+                            <div v-if="viewOptions.showTokenStats" class="hidden md:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-[11px] shrink-0" title="预估总 Token 消耗量">
                                 <span>⚡ 预估 Token:</span>
                                 <span class="font-bold">{{ cardTokenStats.total }}</span>
                             </div>
@@ -369,7 +388,7 @@
                                 <textarea v-model="safeData.first_mes" rows="8" class="w-full text-xs p-2 border border-blue-500/40 rounded outline-none bg-zinc-900 text-zinc-200 resize-y leading-relaxed font-medium custom-scrollbar transition-all focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500"></textarea>
                             </div>
 
-                            <div class="mt-6 p-3 bg-zinc-900 border border-zinc-800 rounded text-xs space-y-2">
+                            <div v-if="viewOptions.showTokenStats" class="mt-6 p-3 bg-zinc-900 border border-zinc-800 rounded text-xs space-y-2">
                                 <div class="font-bold text-zinc-300 flex justify-between items-center">
                                     <span>📊 卡片重量与 Token 消耗明细</span>
                                     <span class="text-amber-400 font-bold">总计: ~{{ cardTokenStats.total }} Tokens</span>

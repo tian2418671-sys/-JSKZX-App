@@ -121,6 +121,94 @@ const app = createApp({
             // clearSelection();
         };
 
+        // ================= [ 顶部菜单系统：视图选项与工具函数 ] =================
+        // 视图菜单控制状态（控制 Raw JSON 页签 / 立绘预览 / Token 分析栏的显隐）
+        const viewOptions = ref({
+            showRawJson: true,        // 是否显示 Raw JSON 页签
+            showAvatarPreview: true,  // 是否显示顶部立绘预览
+            showTokenStats: true      // 是否显示 Token 消耗分析栏
+        });
+
+        // 导入单张/多张角色卡文件（经隐藏文件输入，追加写入当前库）
+        const importFileInput = ref(null);
+        const handleImportFiles = async (e) => {
+            const files = Array.from(e.target.files || []);
+            e.target.value = ''; // 允许重复选择同一文件
+            let added = 0;
+            for (const f of files) {
+                try {
+                    // Electron 33 起 File.path 已移除，经 preload 获取真实绝对路径
+                    const realPath = window.electronAPI ? window.electronAPI.getPathForFile(f) : null;
+                    const isImage = /\.(png|webp)$/i.test(f.name);
+                    const file = {
+                        name: f.name,
+                        path: realPath || f.name,
+                        url: isImage ? URL.createObjectURL(f) : null
+                    };
+                    if (await parseAndAddCard(file)) added++;
+                } catch (err) {
+                    console.warn(`导入失败 ${f.name}`, err);
+                }
+            }
+            if (added > 0) nativeAlert(`成功导入 ${added} 张角色卡！`, 'info');
+            else nativeAlert('未识别到有效的角色卡文件。', 'warning');
+        };
+        const importCards = () => { if (importFileInput.value) importFileInput.value.click(); };
+
+        // 全选当前过滤列表中的所有卡片（并自动进入多选模式）
+        const selectAllCards = () => {
+            if (!isMultiSelectMode.value) isMultiSelectMode.value = true;
+            selectedIds.value = filteredLibrary.value.map(i => i.id);
+            nativeAlert(`已全选 ${selectedIds.value.length} 张卡片。`, 'info');
+        };
+
+        // 清理全库所有卡片中的无效标签（空字符串/纯空白），并物理落盘
+        const cleanGlobalTagsPrompt = async () => {
+            const modifiedItems = [];
+            library.value.forEach(item => {
+                let isModified = false;
+                const cleanArr = (arr) => arr.filter(t => t && String(t).trim() !== '');
+                if (Array.isArray(item.customTags)) {
+                    const filtered = cleanArr(item.customTags);
+                    if (filtered.length !== item.customTags.length) { item.customTags = filtered; isModified = true; }
+                }
+                const d = item.data?.data || item.data || {};
+                if (Array.isArray(d.tags)) {
+                    const filtered = cleanArr(d.tags);
+                    if (filtered.length !== d.tags.length) { d.tags = filtered; isModified = true; }
+                }
+                if (isModified) modifiedItems.push(item);
+            });
+
+            if (modifiedItems.length === 0) {
+                return nativeAlert('库中未发现无效标签（空字符串等）。', 'info');
+            }
+
+            let saved = 0;
+            for (const item of modifiedItems) {
+                try {
+                    const res = await window.electronAPI.saveCard(item.path, JSON.parse(JSON.stringify(item.data)));
+                    if (res && res.success) saved++;
+                } catch (err) { console.error(`清理无效标签保存失败 [${item.name}]`, err); }
+            }
+            nativeAlert(`已清理 ${modifiedItems.length} 张卡片中的无效标签，并物理保存 ${saved} 张。`, 'info');
+        };
+
+        // 用系统资源管理器打开当前库的快照 / 回收站文件夹
+        const openBakFolder = async () => {
+            if (!currentFolderPath.value) return nativeAlert('请先打开角色库文件夹。', 'warning');
+            const res = await window.electronAPI.openPath(currentFolderPath.value + '\\.bak_history');
+            if (!res.success) nativeAlert(res.error || '打开失败', 'error');
+        };
+        const openTrashFolder = async () => {
+            if (!currentFolderPath.value) return nativeAlert('请先打开角色库文件夹。', 'warning');
+            const res = await window.electronAPI.openPath(currentFolderPath.value + '\\.trash');
+            if (!res.success) nativeAlert(res.error || '打开失败', 'error');
+        };
+
+        // 打开聊天测卡（映射到聊天 Tab）
+        const openChatTab = () => { currentTab.value = 'chat'; initChat(); };
+
         const isDragging = ref(false);
         const cardData = shallowRef(null); // 【优化】使用浅层响应式，完美解决大卡片切换卡顿
         const imgUrl = ref(null);
@@ -771,15 +859,18 @@ const app = createApp({
             return list;
         });
 
-        // 导航标签（含图标与数量徽标）
-        const tabs = computed(() => [
-            { id: 'basic', name: '基础设定', icon: '📖' },
-            { id: 'advanced', name: '进阶设定', icon: '🛠️' },
-            { id: 'worldbook', name: '世界书', icon: '🌍', badge: worldbookEntries.value.length || null },
-            { id: 'regex', name: '正则脚本', icon: '⚙️', badge: regexScripts.value.length || null },
-            { id: 'chat', name: '聊天测试', icon: '💬', action: initChat },
-            { id: 'raw', name: 'Raw JSON', icon: '💻' }
-        ]);
+        // 导航标签（含图标与数量徽标；Raw JSON 页签可按视图设置隐藏）
+        const tabs = computed(() => {
+            const list = [
+                { id: 'basic', name: '基础设定', icon: '📖' },
+                { id: 'advanced', name: '进阶设定', icon: '🛠️' },
+                { id: 'worldbook', name: '世界书', icon: '🌍', badge: worldbookEntries.value.length || null },
+                { id: 'regex', name: '正则脚本', icon: '⚙️', badge: regexScripts.value.length || null },
+                { id: 'chat', name: '聊天测试', icon: '💬', action: initChat },
+                { id: 'raw', name: 'Raw JSON', icon: '💻' }
+            ];
+            return list.filter(t => !(t.id === 'raw' && !viewOptions.value.showRawJson));
+        });
 
         const currentTabInfo = computed(() => tabs.value.find(t => t.id === currentTab.value) || tabs.value[0]);
 
@@ -1182,6 +1273,17 @@ const app = createApp({
         onMounted(async () => {
             window.addEventListener('click', handleGlobalClick); // 点击任意处关闭右键菜单
             applyTheme(theme.value); // 应用已保存的主题
+
+            // 全局快捷键：Ctrl+S 保存 / Ctrl+O 打开角色库 / Ctrl+I 导入卡片
+            const handleGlobalKeys = (e) => {
+                if (!(e.ctrlKey || e.metaKey)) return;
+                const k = e.key.toLowerCase();
+                if (k === 's') { e.preventDefault(); saveToLocalDisk(); }
+                else if (k === 'o') { e.preventDefault(); selectFixedDirectory(); }
+                else if (k === 'i') { e.preventDefault(); importCards(); }
+            };
+            window.addEventListener('keydown', handleGlobalKeys);
+
             if (!window.electronAPI) return; // 浏览器环境直接跳过
             try {
                 const lastData = await window.electronAPI.loadConfig();
@@ -2010,6 +2112,8 @@ const app = createApp({
         return {
             theme, toggleTheme, appSettings, showSettingsModal,
             showExperimentalMenu, pushToTavern,
+            viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
+            openBakFolder, openTrashFolder, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, regexScripts, formattedJson,
