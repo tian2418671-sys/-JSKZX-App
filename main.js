@@ -488,13 +488,29 @@ app.whenReady().then(() => {
     }
   });
 
+  // 智能规范化 OpenAI 兼容聊天端点：兼容只填 /v1、误填 /v1/models、或完整 /chat/completions 三种情况
+  const normalizeChatEndpoint = (endpoint) => {
+    let url = String(endpoint || '').trim().replace(/\/+$/, '');
+    if (!url) return url;
+    if (/\/chat\/completions$/.test(url)) return url;        // 已是完整聊天端点
+    if (/\/v1\/models$/.test(url)) {                          // 误填了 models 列表地址 → 转回聊天端点
+      return url.replace(/\/v1\/models$/, '/v1/chat/completions');
+    }
+    if (/\/v1$/.test(url)) {                                   // 形如 /v1 → 补 /chat/completions
+      return url + '/chat/completions';
+    }
+    return url;                                                // 其他自定义路径保持原样
+  };
+
   // IPC：发送大模型 API 请求（经主进程转发，绕过前端 CORS 限制）
   ipcMain.handle('chat:send', async (event, endpoint, payload, apiKey) => {
     try {
+      // 端点规范化：自动补全 /chat/completions，避免向 /v1 等不存在的路径请求返回 404
+      const chatEndpoint = normalizeChatEndpoint(endpoint);
       // 鉴权密钥：前端配置了则使用，未配置时回退到 test-key（兼容无需鉴权的本地 API）
       const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : 'test-key';
       // Electron 自带的 Node.js fetch
-      const response = await fetch(endpoint, {
+      const response = await fetch(chatEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -523,7 +539,9 @@ app.whenReady().then(() => {
 
       // 智能构建 /v1/models 地址：兼容 OpenAI / LM Studio / Ollama 标准接口
       let modelsUrl = '';
-      if (ep.endsWith('/chat/completions')) {
+      if (/\/models$/.test(ep)) {
+        modelsUrl = ep; // 已是以 /models 结尾的完整列表地址，直接使用
+      } else if (ep.endsWith('/chat/completions')) {
         modelsUrl = ep.replace(/\/chat\/completions$/, '/models');
       } else if (/\/v1\/?$/.test(ep)) {
         modelsUrl = ep.replace(/\/+$/, '') + '/models';
