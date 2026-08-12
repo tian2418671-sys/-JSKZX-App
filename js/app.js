@@ -27,9 +27,9 @@ window.addEventListener('unhandledrejection', (event) => {
 const app = createApp({
     components: { Section },
     setup() {
-        // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取）
-        let savedTheme = 'light';
-        try { savedTheme = localStorage.getItem('stc-theme') || 'light'; } catch (e) { /* 忽略 */ }
+        // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
+        let savedTheme = 'dark';
+        try { savedTheme = localStorage.getItem('stc-theme') || 'dark'; } catch (e) { /* 忽略 */ }
         const theme = ref(savedTheme);
 
         // ================= [ 全局界面与字体设置 ] =================
@@ -1266,14 +1266,19 @@ const app = createApp({
             });
         };
 
-        // 主题切换（浅色/深色）
+        // 主题切换（暗夜极客 dark / 雅致青灰 slate / 明亮白昼 light）
         const applyTheme = (t) => {
             document.documentElement.setAttribute('data-theme', t);
         };
+        const setTheme = (t) => {
+            theme.value = t;
+            try { localStorage.setItem('stc-theme', t); } catch (e) { /* 忽略 */ }
+            applyTheme(t);
+        };
         const toggleTheme = () => {
-            theme.value = theme.value === 'light' ? 'dark' : 'light';
-            try { localStorage.setItem('stc-theme', theme.value); } catch (e) { /* 忽略 */ }
-            applyTheme(theme.value);
+            const order = ['dark', 'slate', 'light'];
+            const idx = order.indexOf(theme.value);
+            setTheme(order[(idx + 1) % order.length]);
         };
 
         // 原生确认对话框（Electron 中 window.confirm 会静默返回 null，须经 dialog.showMessageBox）
@@ -1618,6 +1623,16 @@ const app = createApp({
                 }
             } catch (err) {
                 console.warn('自动加载上次文件夹失败', err);
+            }
+
+            // 🌍 自动记忆恢复上次的世界书目录（静默扫描，无需手动选择）
+            if (lastWorldbookDirPath.value) {
+                try {
+                    await scanWorldbookDir(lastWorldbookDirPath.value);
+                    addLog(`📂 自动记忆载入世界书库: ${lastWorldbookDirPath.value}`);
+                } catch (err) {
+                    console.warn('自动加载世界书目录失败', err);
+                }
             }
         });
 
@@ -2555,20 +2570,37 @@ const app = createApp({
 
         const worldbooks = ref([]);          // 世界书列表
         const activeWorldbook = ref(null);   // 当前正在深度编辑的世界书
-        const editorLogs = ref([]);          // 开发与运行调试日志面板数据
 
-        // 记录操作日志的辅助函数
+        // 记忆上次打开的世界书目录（localStorage 持久化，重启自动静默恢复）
+        const lastWorldbookDirPath = ref((() => {
+            try { return localStorage.getItem('jsTavern_lastWbDir') || ''; } catch (e) { return ''; }
+        })());
+
+        // =========================================================
+        // 📟 全局终端控制台与日志状态（角色卡/世界书双模式共用）
+        // =========================================================
+        const editorLogs = ref([]);
+        const showEditorLogs = ref(false); // 默认收起，点击控制杆可随时展开
+
+        // 全局日志打印辅助函数
         const addLog = (msg, type = 'info') => {
-            const time = new Date().toLocaleTimeString();
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
             editorLogs.value.unshift({ time, msg, type });
-            if (editorLogs.value.length > 50) editorLogs.value.pop(); // 保留最近 50 条
+            if (editorLogs.value.length > 100) editorLogs.value.pop(); // 保留最新 100 条
         };
 
-        // 扫描世界书文件夹
-        // ⚠️ 复用 selectGenericFolder（返回纯路径字符串）；selectFolder 返回的是角色卡扫描结果对象，不适用于世界书
+        // 扫描世界书文件夹（弹目录选择；复用 selectGenericFolder 返回纯路径字符串，selectFolder 返回扫描结果对象不适用）
         const loadWorldbooks = async () => {
             const dirPath = await window.electronAPI.selectGenericFolder();
             if (!dirPath) return;
+            await scanWorldbookDir(dirPath);
+        };
+
+        // 扫描指定世界书目录（供手动选择与启动自动恢复共用；自动持久化记忆路径）
+        const scanWorldbookDir = async (dirPath) => {
+            if (!dirPath) return;
+            lastWorldbookDirPath.value = dirPath;
+            try { localStorage.setItem('jsTavern_lastWbDir', dirPath); } catch (e) { /* 忽略 */ }
 
             addLog(`开始扫描世界书目录: ${dirPath}`);
             const res = await window.electronAPI.scanWorldbooks(dirPath);
@@ -2586,8 +2618,11 @@ const app = createApp({
             if (!activeWorldbook.value) return;
             addLog(`准备落盘保存世界书: ${activeWorldbook.value.name}...`);
 
-            // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"）
+            // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"），并剔除 IDE 展示字段 _collapsed 防污染
             const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
+            if (Array.isArray(plainData.entries)) {
+                plainData.entries.forEach(e => { if (e && e._collapsed !== undefined) delete e._collapsed; });
+            }
             const res = await window.electronAPI.saveWorldbook({
                 filePath: activeWorldbook.value.path,
                 data: plainData
@@ -2602,10 +2637,14 @@ const app = createApp({
             }
         };
 
-        // 提供独立的世界书本地导出功能（方便开发测试时脱离环境发给别人）
+        // 提供独立的世界书本地导出功能（方便开发测试时脱离环境发给别人；导出前剔除 _collapsed 防污染）
         const exportActiveWorldbook = () => {
             if (!activeWorldbook.value) return;
-            const blob = new Blob([JSON.stringify(activeWorldbook.value.data, null, 2)], { type: 'application/json' });
+            const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
+            if (Array.isArray(plainData.entries)) {
+                plainData.entries.forEach(e => { if (e && e._collapsed !== undefined) delete e._collapsed; });
+            }
+            const blob = new Blob([JSON.stringify(plainData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -2613,6 +2652,13 @@ const app = createApp({
             a.click();
             URL.revokeObjectURL(url);
             addLog(`已触发本地独立导出: ${a.download}`);
+        };
+
+        // 智能保存：世界书模式下保存世界书，角色卡模式下保存当前卡片（文件菜单共用入口）
+        const saveCurrentAsset = async () => {
+            if (appMode.value === 'worldbooks' && activeWorldbook.value) return saveActiveWorldbook();
+            if (cardData.value) return saveToLocalDisk();
+            nativeAlert('当前没有可保存的内容。', 'warning');
         };
 
         // =========================================================
@@ -2639,22 +2685,73 @@ const app = createApp({
                 insertion_order: 50, // 插入顺序
                 order: 100,         // 权重
                 position: 1,        // 插入位置 (0: 顶部, 1: 底部, 2: 聊天前等)
-                enabled: true       // 启用状态
+                enabled: true,      // 启用状态
+                _collapsed: false   // 折叠状态（仅 IDE 展示用，保存时剔除）
             });
 
             addLog(`➕ 新增了一条空白世界书词条 (UID: ${newUid})`, 'info');
         };
 
         // 删除一条词条（⚠️ Electron 中 window.confirm 静默返回 null，必须走 confirmDialog 原生确认框）
-        const deleteWorldbookEntry = async (index) => {
+        // 接收词条对象而非索引——列表可能处于搜索过滤态，索引会错位
+        const deleteWorldbookEntry = async (entry) => {
             if (!activeWorldbook.value) return;
-            const entry = activeWorldbook.value.data.entries[index];
-            if (!entry) return;
+            const entries = activeWorldbook.value.data.entries;
+            const index = entries.indexOf(entry);
+            if (index === -1) return;
             const ok = await confirmDialog('确定要删除这条世界书设定吗？操作不可逆！');
             if (ok) {
-                activeWorldbook.value.data.entries.splice(index, 1);
+                entries.splice(index, 1);
                 addLog(`🗑️ 删除了第 ${index + 1} 个词条`, 'warning');
             }
+        };
+
+        // =========================================================
+        // 🎛️ 世界书词条 IDE 控制栏（搜索 / 折叠 / 克隆）
+        // =========================================================
+        const entrySearchQuery = ref('');         // 词条关键字实时搜索
+        const isAllEntriesCollapsed = ref(false); // 词条全局折叠状态
+
+        // 动态过滤搜索后的词条（触发词 / 次级触词 / 正文 / 备注 全字段匹配）
+        const filteredWorldbookEntries = computed(() => {
+            if (!activeWorldbook.value || !Array.isArray(activeWorldbook.value.data.entries)) return [];
+            const q = entrySearchQuery.value.trim().toLowerCase();
+            if (!q) return activeWorldbook.value.data.entries;
+
+            return activeWorldbook.value.data.entries.filter(entry => {
+                const keysStr = Array.isArray(entry.key) ? entry.key.join(' ') : String(entry.key || '');
+                const secKeysStr = Array.isArray(entry.keysecondary) ? entry.keysecondary.join(' ') : '';
+                const contentStr = entry.content || '';
+                const commentStr = entry.comment || '';
+                return keysStr.toLowerCase().includes(q) ||
+                       secKeysStr.toLowerCase().includes(q) ||
+                       contentStr.toLowerCase().includes(q) ||
+                       commentStr.toLowerCase().includes(q);
+            });
+        });
+
+        // 一键全部折叠/展开
+        const toggleAllEntriesCollapse = () => {
+            isAllEntriesCollapsed.value = !isAllEntriesCollapsed.value;
+            if (activeWorldbook.value && Array.isArray(activeWorldbook.value.data.entries)) {
+                activeWorldbook.value.data.entries.forEach(e => { e._collapsed = isAllEntriesCollapsed.value; });
+            }
+        };
+
+        // 克隆指定词条（在后方插入副本）
+        const duplicateWorldbookEntry = (entry) => {
+            if (!activeWorldbook.value) return;
+            const entries = activeWorldbook.value.data.entries;
+            const index = entries.indexOf(entry);
+            if (index === -1) return;
+
+            const cloned = JSON.parse(JSON.stringify(entry));
+            cloned.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+            cloned.comment = (cloned.comment || '词条') + ' (副本)';
+            cloned._collapsed = false;
+
+            entries.splice(index + 1, 0, cloned);
+            addLog(`📋 成功复制了第 ${index + 1} 条词条`, 'info');
         };
 
         // =========================================================
@@ -2670,8 +2767,14 @@ const app = createApp({
             return estimateTokens(text);
         };
 
-        // 启动全库查重扫描
-        const startDedupeScan = () => {
+        // 提取核心描述以便于对比差异
+        const getCoreDescription = (card) => {
+            const d = card.data?.data || card.data || {};
+            return d.description || '';
+        };
+
+        // 启动全库查重扫描（升级版：综合 Token 丰度 + 物理文件修改时间判定）
+        const startDedupeScan = async () => {
             if (library.value.length === 0) {
                 nativeAlert('卡片库为空，无法查重！', 'warning');
                 return;
@@ -2685,23 +2788,67 @@ const app = createApp({
                 groups[name].push(card);
             });
 
-            // 2. 筛选并排序：只保留有重复的组，组内按 Token 丰度从高到低排序
-            duplicateGroups.value = Object.entries(groups)
-                .filter(([name, cards]) => cards.length > 1)
-                .map(([name, cards]) => {
-                    cards.forEach(c => {
-                        c._tokens = estimateCardTokens(c);
-                    });
-                    // Token 最丰富的排在最前面，作为“推荐保留项”
-                    cards.sort((a, b) => b._tokens - a._tokens);
-                    return { name, cards };
+            const potentialGroups = Object.entries(groups).filter(([name, cards]) => cards.length > 1);
+
+            if (potentialGroups.length === 0) {
+                nativeAlert('🎉 恭喜！当前库中极为整洁，未发现同名重复的角色卡！', 'info');
+                return;
+            }
+
+            // 2. 收集所有需要获取 stats 的文件路径
+            const pathsToStat = [];
+            potentialGroups.forEach(([name, cards]) => cards.forEach(c => pathsToStat.push(c.path)));
+
+            // 3. 批量获取文件物理状态 (修改时间/大小)；失败时降级为仅 Token 判定
+            let fileStats = {};
+            try {
+                const statsRes = await window.electronAPI.getFileStats(pathsToStat);
+                if (statsRes && statsRes.success) fileStats = statsRes.data || {};
+            } catch (e) {
+                console.warn('获取文件信息失败，将仅依据 Token 判定:', e);
+            }
+
+            // 4. 组装查重分组并综合排序
+            duplicateGroups.value = potentialGroups.map(([name, cards]) => {
+                cards.forEach(c => {
+                    c._tokens = estimateCardTokens(c);
+                    c._desc = getCoreDescription(c);
+                    // 优先使用物理文件修改时间，兜底使用内部数据时间
+                    const fallback = (c.data && c.data.create_date) ? new Date(c.data.create_date).getTime() : 0;
+                    c._mtime = (fileStats[c.path] && fileStats[c.path].mtimeMs) || fallback || 0;
+                    c._dateStr = new Date(c._mtime).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
                 });
 
-            if (duplicateGroups.value.length === 0) {
-                nativeAlert('🎉 恭喜！当前库中极为整洁，未发现同名重复的角色卡！', 'info');
-            } else {
-                showDedupeModal.value = true;
-            }
+                // 【综合排序策略】
+                // Token 差异 > 5% 视为有实质差异，Token 多者优先；
+                // Token 相近（≤5%）则比较物理修改时间，越新越优先
+                cards.sort((a, b) => {
+                    const tokenDiff = b._tokens - a._tokens;
+                    const tokenRatio = Math.abs(tokenDiff) / Math.max(a._tokens, b._tokens, 1);
+                    if (tokenRatio > 0.05) {
+                        return tokenDiff;
+                    } else {
+                        return b._mtime - a._mtime;
+                    }
+                });
+
+                // 【差异计算】将第一张（推荐保留）与其他卡片对比描述长度差异
+                cards.forEach((c, idx) => {
+                    if (idx === 0) {
+                        c._diffType = '推荐版';
+                        return;
+                    }
+                    const diffLen = c._desc.length - cards[0]._desc.length;
+                    if (diffLen > 100) c._diffType = '可能包含更多设定';
+                    else if (diffLen < -100) c._diffType = '设定可能有缺失';
+                    else if (c._desc !== cards[0]._desc) c._diffType = '设定细节不同';
+                    else c._diffType = '设定完全一致';
+                });
+
+                return { name, cards };
+            });
+
+            showDedupeModal.value = true;
         };
 
         // 一键清理：保留指定卡片，其余送入回收站
@@ -2795,10 +2942,13 @@ const app = createApp({
             promptModalVisible, promptModalTitle, promptInput,
             confirmPrompt, cancelPrompt,
             // 🌍 世界书双引擎模式
-            appMode, worldbooks, activeWorldbook, editorLogs,
-            loadWorldbooks, saveActiveWorldbook, exportActiveWorldbook,
+            appMode, worldbooks, activeWorldbook, lastWorldbookDirPath, editorLogs, showEditorLogs, addLog,
+            loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, saveCurrentAsset,
             // 🌍 世界书词条深度编辑 (Entry IDE)
-            addWorldbookEntry, deleteWorldbookEntry,
+            addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
+            entrySearchQuery, isAllEntriesCollapsed, filteredWorldbookEntries, toggleAllEntriesCollapse,
+            // 🎨 三主题切换（暗夜/青灰/白昼）
+            setTheme,
             // 🔍 智能查重与版本清洗
             showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup
         };

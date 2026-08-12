@@ -255,3 +255,95 @@ textarea, input, select { transition: border-color 0.15s ease-in-out; }
 [data-theme="dark"] .text-blue-800 { color: #93c5fd; }
 [data-theme="dark"] .text-blue-600\/80 { color: #93c5fd; }
 [data-theme="dark"] .text-amber-500\/80 { color: #fbbf24; }
+
+/* ---------- 雅致青灰 (Slate) 主题：zinc 硬编码整体映射为 slate 色系 ---------- */
+[data-theme="slate"] { color-scheme: dark; }
+[data-theme="slate"] body { background-color: #0f172a; color: #e2e8f0; }
+
+/* 背景层级：#0f172a → 面板 #1e293b → 次级/输入 #334155 → hover #475569 */
+[data-theme="slate"] .bg-zinc-950 { background-color: #0f172a; }
+[data-theme="slate"] .bg-zinc-950\/60 { background-color: rgba(15, 23, 42, 0.6); }
+[data-theme="slate"] .bg-zinc-900 { background-color: #1e293b; }
+[data-theme="slate"] .bg-zinc-900\/90 { background-color: rgba(30, 41, 59, 0.9); }
+[data-theme="slate"] .bg-zinc-900\/80 { background-color: rgba(30, 41, 59, 0.8); }
+[data-theme="slate"] .bg-zinc-900\/60 { background-color: rgba(30, 41, 59, 0.6); }
+[data-theme="slate"] .bg-zinc-900\/50 { background-color: rgba(30, 41, 59, 0.5); }
+[data-theme="slate"] .bg-zinc-800 { background-color: #334155; }
+[data-theme="slate"] .bg-zinc-800\/50 { background-color: rgba(51, 65, 85, 0.5); }
+[data-theme="slate"] .bg-zinc-800\/60 { background-color: rgba(51, 65, 85, 0.6); }
+[data-theme="slate"] .bg-zinc-800\/80 { background-color: rgba(51, 65, 85, 0.8); }
+[data-theme="slate"] .bg-zinc-700 { background-color: #475569; }
+[data-theme="slate"] .bg-zinc-600 { background-color: #64748b; }
+[data-theme="slate"] .hover\:bg-zinc-800:hover { background-color: #334155; }
+[data-theme="slate"] .hover\:bg-zinc-700:hover { background-color: #475569; }
+[data-theme="slate"] .hover\:bg-zinc-700\/50:hover { background-color: rgba(71, 85, 105, 0.5); }
+
+/* gray 系同层级适配 */
+[data-theme="slate"] .bg-gray-50 { background-color: #0f172a; }
+[data-theme="slate"] .bg-gray-100 { background-color: #1e293b; }
+[data-theme="slate"] .bg-gray-200 { background-color: #334155; }
+[data-theme="slate"] .bg-gray-700 { background-color: #475569; }
+[data-theme="slate"] .bg-gray-800 { background-color: #1e293b; }
+[data-theme="slate"] .bg-gray-900 { background-color: #0f172a; }
+
+/* 文本层级 */
+[data-theme="slate"] .text-zinc-100 { color: #f8fafc; }
+[data-theme="slate"] .text-zinc-200 { color: #e2e8f0; }
+[data-theme="slate"] .text-zinc-300 { color: #cbd5e1; }
+[data-theme="slate"] .text-zinc-400 { color: #94a3b8; }
+[data-theme="slate"] .text-zinc-500 { color: #64748b; }
+[data-theme="slate"] .hover\:text-zinc-100:hover { color: #f8fafc; }
+[data-theme="slate"] .hover\:text-zinc-200:hover { color: #e2e8f0; }
+[data-theme="slate"] .hover\:text-zinc-300:hover { color: #cbd5e1; }
+[data-theme="slate"] .placeholder-zinc-500::placeholder { color: #94a3b8; }
+
+[data-theme="slate"] .text-gray-300 { color: #cbd5e1; }
+[data-theme="slate"] .text-gray-400 { color: #94a3b8; }
+[data-theme="slate"] .text-gray-500 { color: #94a3b8; }
+[data-theme="slate"] .text-gray-600 { color: #cbd5e1; }
+[data-theme="slate"] .text-gray-700 { color: #e2e8f0; }
+[data-theme="slate"] .text-gray-800 { color: #f1f5f9; }
+[data-theme="slate"] .text-gray-900 { color: #f8fafc; }
+
+/* 边框层级 */
+[data-theme="slate"] .border-zinc-600 { border-color: #64748b; }
+[data-theme="slate"] .border-zinc-700 { border-color: #475569; }
+[data-theme="slate"] .border-zinc-700\/50 { border-color: rgba(71, 85, 105, 0.5); }
+[data-theme="slate"] .border-zinc-700\/80 { border-color: rgba(71, 85, 105, 0.8); }
+[data-theme="slate"] .border-zinc-800 { border-color: #1e293b; }
+[data-theme="slate"] .hover\:border-zinc-500:hover { border-color: #64748b; }
+[data-theme="slate"] .hover\:border-zinc-600:hover { border-color: #64748b; }
+
+[data-theme="slate"] .border-gray-100 { border-color: #334155; }
+[data-theme="slate"] .border-gray-200 { border-color: #334155; }
+[data-theme="slate"] .border-gray-300 { border-color: #475569; }
+[data-theme="slate"] .border-gray-700 { border-color: #475569; }
+[data-theme="slate"] .border-gray-800 { border-color: #1e293b; }
+
+/* 输入控件 */
+[data-theme="slate"] textarea,
+[data-theme="slate"] input,
+[data-theme="slate"] select { background-color: #334155 !important; color: #f1f5f9; border-color: #475569 !important; }
+[data-theme="slate"] .focus\:ring-offset-zinc-800:focus { --tw-ring-offset-color: #0f172a; }
+
+/* 强调色微调（slate 底上稍提亮） */
+[data-theme="slate"] .text-blue-400 { color: #38bdf8; }
+[data-theme="slate"] .text-indigo-400 { color: #818cf8; }
+[data-theme="slate"] .text-purple-400 { color: #a78bfa; }
+[data-theme="slate"] .text-emerald-400 { color: #34d399; }
+[data-theme="slate"] .text-red-400 { color: #f87171; }
+[data-theme="slate"] .text-green-400 { color: #4ade80; }
+[data-theme="slate"] .text-amber-400 { color: #fbbf24; }
+[data-theme="slate"] .text-amber-500\/80 { color: #fbbf24; }
+[data-theme="slate"] .bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.15); }
+[data-theme="slate"] .bg-indigo-500\/10 { background-color: rgba(99, 102, 241, 0.16); }
+[data-theme="slate"] .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.12); }
+[data-theme="slate"] .bg-green-500\/10 { background-color: rgba(34, 197, 94, 0.14); }
+[data-theme="slate"] .bg-blue-900\/20 { background-color: rgba(30, 58, 138, 0.45); }
+[data-theme="slate"] .bg-blue-900\/30 { background-color: rgba(30, 58, 138, 0.55); }
+
+/* ---------- 补充 light 主题遗漏的新增组件覆盖（世界书IDE/查重弹窗等） ---------- */
+[data-theme="light"] .bg-zinc-900\/50 { background-color: rgba(255, 255, 255, 0.5); }
+[data-theme="light"] .bg-zinc-900\/60 { background-color: rgba(255, 255, 255, 0.6); }
+[data-theme="light"] .bg-zinc-900\/80 { background-color: rgba(255, 255, 255, 0.8); }
+[data-theme="light"] .bg-zinc-950\/60 { background-color: rgba(244, 244, 245, 0.6); }

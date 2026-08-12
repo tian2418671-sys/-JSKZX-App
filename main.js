@@ -641,10 +641,39 @@ app.whenReady().then(() => {
   });
 
   // ==========================================
-  // 🌍 世界书专属文件系统操作接口
+  // 🌍 世界书 (Worldbook) 专属物理文件接口 (严格过滤版)
   // ==========================================
 
-  // 扫描世界书目录 (仅限 .json，且需符合酒馆世界书标准规范：含 entries 字段)
+  // 智能校验：是否为标准的酒馆世界书 JSON
+  function isValidWorldbook(wbData) {
+    if (!wbData || typeof wbData !== 'object') return false;
+
+    // 1. 过滤掉标准酒馆角色卡 JSON (V2/V3 导出 JSON 文件)
+    if (wbData.spec === 'chara_card_v2' || wbData.spec === 'chara_card_v3') return false;
+    if (wbData.data && (wbData.data.description !== undefined || wbData.data.first_mes !== undefined)) return false;
+
+    // 2. 必须存在 entries 字段
+    if (!wbData.entries) return false;
+
+    // 3. 兼容处理：某些酒馆版本将 entries 存为对象字典 {"0":{...},"1":{...}}，统一清洗为数组
+    if (typeof wbData.entries === 'object' && !Array.isArray(wbData.entries)) {
+      wbData.entries = Object.values(wbData.entries);
+    }
+
+    if (!Array.isArray(wbData.entries)) return false;
+
+    // 4. 若包含词条，抽取校验是否含世界书词条特有字段 (key / keys / content / comment / uid)
+    if (wbData.entries.length > 0) {
+      const sample = wbData.entries[0];
+      if (!sample || typeof sample !== 'object') return false;
+      const isWbEntry = ('key' in sample) || ('keys' in sample) || ('content' in sample) || ('comment' in sample) || ('uid' in sample);
+      if (!isWbEntry) return false;
+    }
+
+    return true;
+  }
+
+  // 扫描世界书目录 (仅限 .json，经 isValidWorldbook 严格防伪过滤)
   ipcMain.handle('wb:scan', async (event, dirPath) => {
     try {
       if (!dirPath || !fs.existsSync(dirPath)) {
@@ -652,20 +681,28 @@ app.whenReady().then(() => {
       }
       const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
       const results = [];
+
       for (const file of files) {
-        // 仅处理 .json 文件
-        if (!file.isFile() || path.extname(file.name).toLowerCase() !== '.json') continue;
-        const fullPath = path.join(dirPath, file.name);
-        try {
-          const content = await fs.promises.readFile(fullPath, 'utf-8');
-          const wbData = JSON.parse(content);
-          // 仅筛选符合酒馆世界书标准规范的 JSON（含 entries 字段）
-          if (wbData && typeof wbData === 'object' && wbData.entries) {
-            results.push({ path: fullPath, name: file.name, data: wbData });
+        if (file.name.startsWith('.')) continue; // 忽略隐藏文件
+
+        if (file.isFile() && path.extname(file.name).toLowerCase() === '.json') {
+          const fullPath = path.join(dirPath, file.name);
+          try {
+            const content = await fs.promises.readFile(fullPath, 'utf-8');
+            const wbData = JSON.parse(content);
+
+            // 严格防伪校验：确保只拦截真正的世界书 JSON
+            if (isValidWorldbook(wbData)) {
+              results.push({
+                path: fullPath,
+                name: file.name,
+                data: wbData
+              });
+            }
+          } catch (parseErr) {
+            // 静默跳过损坏或非标准 JSON 文件
+            console.warn('[wb:scan] 跳过非世界书文件:', file.name, parseErr.message);
           }
-        } catch (parseErr) {
-          // 单文件解析失败（非 JSON / 非世界书）静默跳过，不影响整个目录扫描
-          console.warn('[wb:scan] 跳过非世界书文件:', file.name, parseErr.message);
         }
       }
       return { success: true, data: results };
@@ -725,6 +762,26 @@ app.whenReady().then(() => {
         }
       }
       return { success: true, count: trashedCount };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 批量获取文件物理状态（修改时间/创建时间/大小），供智能查重综合判定使用
+  ipcMain.handle('sys:getFileStats', async (event, filePaths) => {
+    try {
+      const stats = {};
+      for (const p of (Array.isArray(filePaths) ? filePaths : [])) {
+        if (p && fs.existsSync(p)) {
+          const stat = await fs.promises.stat(p);
+          stats[p] = {
+            mtimeMs: stat.mtimeMs,       // 修改时间戳
+            birthtimeMs: stat.birthtimeMs, // 创建时间戳
+            size: stat.size              // 文件大小
+          };
+        }
+      }
+      return { success: true, data: stats };
     } catch (err) {
       return { success: false, error: err.message };
     }

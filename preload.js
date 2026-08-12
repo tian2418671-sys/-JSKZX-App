@@ -55,5 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 🌍 世界书专属通道：物理覆写世界书文件（保存前自动 .bak_history 快照备份）
     saveWorldbook: (params) => ipcRenderer.invoke('wb:save', params),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
-    trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths)
+    trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
+    // 🕒 智能查重：批量获取文件物理状态（修改时间/创建时间/大小）
+    getFileStats: (paths) => ipcRenderer.invoke('sys:getFileStats', paths)
 });
