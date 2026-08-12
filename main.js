@@ -222,7 +222,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 640,
     autoHideMenuBar: true, // 隐藏顶部菜单栏
-    backgroundColor: '#f3f4f6',
+    show: false, // 初始隐藏视窗，防止加载完成前出现白屏/错乱闪烁
+    backgroundColor: '#09090b', // 背景色与暗色主题一致，防白屏
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'), // 安全桥梁
       contextIsolation: true,
@@ -233,6 +234,11 @@ function createWindow() {
 
   // 通过自定义协议加载页面（支持 ES Modules 与 CDN）
   win.loadURL('app://index.html');
+
+  // DOM 与 CSS 完全就绪后再显示视窗，杜绝启动闪烁
+  win.once('ready-to-show', () => {
+    win.show();
+  });
 
   // ===== 【临时】截图脚本：生成 screenshots/ 后移除 =====
   win.webContents.on('did-finish-load', () => {
@@ -733,7 +739,13 @@ app.whenReady().then(() => {
       } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
       // --------------------------------------------------
 
-      await fs.promises.writeFile(filePath, JSON.stringify(data, null, 4), 'utf-8');
+      // 深度清洗 UI 临时字段（如 _collapsed / _tokens 等），保证落盘 JSON 100% 符合酒馆原生规范
+      const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
+        if (key.startsWith('_')) return undefined; // 剔除所有 UI 内部临时字段
+        return value;
+      }));
+
+      await fs.promises.writeFile(filePath, JSON.stringify(cleanData, null, 4), 'utf-8');
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
@@ -741,7 +753,7 @@ app.whenReady().then(() => {
   });
 
   // ==========================================
-  // 🗑️ 系统级安全回收站接口 (Trash)
+  // 🗑️ 系统级安全回收站接口 (跨盘移动防崩溃升级版)
   // ==========================================
   // 智能查重清洗用：绝不物理删除，而是把冗余文件移动到 userData 下的专属回收站目录
   ipcMain.handle('sys:trashFiles', async (event, filePaths) => {
@@ -757,12 +769,26 @@ app.whenReady().then(() => {
           const fileName = path.basename(p);
           // 加上时间戳前缀防重名覆盖
           const dest = path.join(trashDir, `${Date.now()}_${fileName}`);
-          await fs.promises.rename(p, dest);
+
+          try {
+            // 1. 首选：尝试直接重命名（同盘移动极快）
+            await fs.promises.rename(p, dest);
+          } catch (renameErr) {
+            // 2. 核心修复：如果是跨盘移动（EXDEV: cross-device link），降级为【复制 + 删除】策略
+            if (renameErr && renameErr.code === 'EXDEV') {
+              await fs.promises.copyFile(p, dest);
+              await fs.promises.unlink(p);
+            } else {
+              // 其他错误（如文件被占用 EBUSY / 权限 EPERM）原样抛出，让前端看到明确报错
+              throw renameErr;
+            }
+          }
           trashedCount++;
         }
       }
       return { success: true, count: trashedCount };
     } catch (err) {
+      console.error('🗑️ 移入回收站失败:', err);
       return { success: false, error: err.message };
     }
   });
@@ -782,6 +808,41 @@ app.whenReady().then(() => {
         }
       }
       return { success: true, data: stats };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==========================================
+  // 🖱️ 右键菜单专属增强系统接口
+  // ==========================================
+
+  // 1. 在系统资源管理器中打开并定位到该文件（shell 已在顶部引入）
+  ipcMain.handle('sys:showItemInFolder', (event, filePath) => {
+    try {
+      if (!filePath) return { success: false, error: '路径为空。' };
+      shell.showItemInFolder(filePath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 2. 物理复制文件（创建带时间戳的副本，供大改前留档）
+  ipcMain.handle('sys:duplicateFile', async (event, sourcePath) => {
+    try {
+      if (!sourcePath || !fs.existsSync(sourcePath)) {
+        return { success: false, error: '源文件不存在: ' + sourcePath };
+      }
+      const dir = path.dirname(sourcePath);
+      const ext = path.extname(sourcePath); // .png / .webp / .json
+      const baseName = path.basename(sourcePath, ext);
+
+      // 生成副本名称，如: 角色名_copy_16234567.png
+      const destPath = path.join(dir, `${baseName}_copy_${Math.floor(Date.now() / 1000)}${ext}`);
+
+      await fs.promises.copyFile(sourcePath, destPath);
+      return { success: true, destPath };
     } catch (err) {
       return { success: false, error: err.message };
     }

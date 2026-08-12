@@ -57,5 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
     trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
     // 🕒 智能查重：批量获取文件物理状态（修改时间/创建时间/大小）
-    getFileStats: (paths) => ipcRenderer.invoke('sys:getFileStats', paths)
+    getFileStats: (paths) => ipcRenderer.invoke('sys:getFileStats', paths),
+    // 🖱️ 右键菜单：在系统资源管理器中打开并定位文件
+    showItemInFolder: (filePath) => ipcRenderer.invoke('sys:showItemInFolder', filePath),
+    // 🖱️ 右键菜单：物理复制文件（创建带时间戳的副本）
+    duplicateFile: (filePath) => ipcRenderer.invoke('sys:duplicateFile', filePath)
 });
