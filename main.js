@@ -177,7 +177,9 @@ function registerAppProtocol() {
     const resolved = path.normalize(path.join(__dirname, filePath));
 
     // 安全校验：确保解析后的路径始终位于项目根目录内（防止路径穿越）
-    if (!resolved.startsWith(path.join(__dirname))) {
+    // 【修复】必须追加 path.sep，否则 "C:\App_Hacked".startsWith("C:\App") 会误判合法，导致跨目录越权读取
+    const rootPrefix = path.join(__dirname) + path.sep;
+    if (resolved !== path.join(__dirname) && !resolved.startsWith(rootPrefix)) {
       return new Response('Forbidden', { status: 403 });
     }
 
@@ -401,8 +403,15 @@ app.whenReady().then(() => {
       if (!fs.existsSync(fullPath) && !path.extname(fullPath)) {
         fs.mkdirSync(fullPath, { recursive: true });
       }
-      const err = await shell.openPath(fullPath);
-      return err ? { success: false, error: err } : { success: true };
+      // 【修复】安全化：目录用 openPath 直接打开窗口；文件一律用 showItemInFolder 高亮定位，绝不执行（防恶意 .exe/.bat 被 openPath 运行）
+      let isDir = false;
+      try { isDir = fs.statSync(fullPath).isDirectory(); } catch (e) { /* 路径不存在或无法读取 */ }
+      if (isDir) {
+        const err = await shell.openPath(fullPath);
+        return err ? { success: false, error: err } : { success: true };
+      }
+      shell.showItemInFolder(fullPath);
+      return { success: true };
     } catch (e) {
       return { success: false, error: e.message };
     }

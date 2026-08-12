@@ -478,8 +478,12 @@ const app = createApp({
         try { savedApiModel = localStorage.getItem('stc-api-model') || ''; } catch (e) { /* 忽略 */ }
         const apiModel = ref(savedApiModel);
 
-        // 生成 API 请求的 model 字段：优先使用配置的模型名称，留空时回退到 local-model
-        const resolveApiModel = () => (apiModel.value && apiModel.value.trim()) ? apiModel.value.trim() : 'local-model';
+        // 生成 API 请求的 model 字段：优先使用配置的模型名称，留空时按协议回退
+        // 【修复】Anthropic 协议必须回退到 Claude 模型，否则网关返回 400；OpenAI 兼容协议才用 local-model
+        const resolveApiModel = () => {
+            if (apiModel.value && apiModel.value.trim()) return apiModel.value.trim();
+            return apiType.value === 'anthropic' ? 'claude-3-haiku-20240307' : 'local-model';
+        };
 
         // API 三件套（Endpoint / Key / Model）变化时自动持久化，重启软件后自动恢复
         watch(apiEndpoint, (v) => {
@@ -507,8 +511,12 @@ const app = createApp({
                 localStorage.setItem('stc-api-key', apiKey.value);
                 localStorage.setItem('stc-api-model', apiModel.value);
                 localStorage.setItem('stc-api-type', apiType.value);
-            } catch (e) { /* 忽略 */ }
-            nativeAlert('API 设置已成功保存！', 'info');
+                nativeAlert('API 设置已成功保存！', 'info');
+            } catch (e) {
+                // 【修复】存储失败（配额超限/权限禁用）时必须如实告知，杜绝假成功
+                console.error('API 设置存储失败:', e);
+                nativeAlert('保存失败：可能是本地存储权限被禁用或存储空间已满。', 'error');
+            }
         };
 
         // 切换 API 类型时自动填充常用默认 Endpoint / Model
@@ -764,6 +772,8 @@ const app = createApp({
             } else if (field === 'disabled') {
                 script.disabled = !!value;
             }
+            // 【修复】shallowRef 深层编辑不触发响应式，手动刷新视图（防 Checkbox/文字假死）
+            if (cardData.value) triggerRef(cardData);
         };
 
         // ================= [ 方法：聊天测卡逻辑 ] =================
@@ -1106,6 +1116,8 @@ const app = createApp({
                 obj[field] = textModalContent.value;
             }
             showTextModal.value = false;
+            // 【修复】shallowRef 深层编辑不触发响应式，手动刷新（全屏编辑器保存后 Token/正文实时更新）
+            if (cardData.value) triggerRef(cardData);
         };
 
         // ================= [ 高清立绘大图预览 Modal ] =================
@@ -1444,7 +1456,9 @@ const app = createApp({
         // 导出 JSON
         const downloadJson = () => {
             if (!cardData.value) return;
-            const jsonStr = JSON.stringify(cardData.value, null, 2);
+            // 【修复】深拷贝时用 replacer 递归剔除 Vue 前端专属字段（_collapsed 折叠状态 / uid 列表防错位 ID），避免污染酒馆标准 JSON 格式
+            const cleanData = JSON.parse(JSON.stringify(cardData.value, (k, v) => (k === '_collapsed' || k === 'uid') ? undefined : v));
+            const jsonStr = JSON.stringify(cleanData, null, 2);
             const blob = new Blob([jsonStr], { type: "application/json" });
             const a = document.createElement("a");
             a.href = URL.createObjectURL(blob);
@@ -1671,7 +1685,7 @@ const app = createApp({
             const handleGlobalKeys = (e) => {
                 if (!(e.ctrlKey || e.metaKey)) return;
                 const k = e.key.toLowerCase();
-                if (k === 's') { e.preventDefault(); saveToLocalDisk(); }
+                if (k === 's') { e.preventDefault(); saveCurrentAsset(); } // 【修复】Ctrl+S 走智能保存路由，避免世界书模式下误保存角色卡
                 else if (k === 'o') { e.preventDefault(); selectFixedDirectory(); }
                 else if (k === 'i') { e.preventDefault(); importCards(); }
                 else if (k === 'a') {
@@ -2840,9 +2854,13 @@ const app = createApp({
 
         // 智能保存：世界书模式下保存世界书，角色卡模式下保存当前卡片（文件菜单共用入口）
         const saveCurrentAsset = async () => {
-            if (appMode.value === 'worldbooks' && activeWorldbook.value) return saveActiveWorldbook();
+            // 【修复】严格隔离双模式保存上下文，杜绝跨模式幽灵误保存
+            if (appMode.value === 'worldbooks') {
+                if (activeWorldbook.value) return saveActiveWorldbook();
+                return nativeAlert('当前没有打开的世界书。', 'warning');
+            }
             if (cardData.value) return saveToLocalDisk();
-            nativeAlert('当前没有可保存的内容。', 'warning');
+            return nativeAlert('当前没有打开的角色卡。', 'warning');
         };
 
         // =========================================================
@@ -3396,13 +3414,13 @@ const app = createApp({
                 const nodes = [];
                 const links = [];
 
-                // 构建节点 (Nodes)
+                // 构建节点 (Nodes) —— 300+ 节点需调小球体（按内容长度微调区分大小，范围 10-22）
                 entries.forEach((e, idx) => {
                     const label = e.comment || (Array.isArray(e.key) ? e.key.join('/') : e.key) || `词条 #${idx + 1}`;
                     nodes.push({
                         id: String(e.uid || idx),
                         name: label,
-                        symbolSize: Math.max(22, Math.min(48, 18 + (e.content || '').length / 25)),
+                        symbolSize: Math.max(10, Math.min(22, 8 + (e.content || '').length / 40)),
                         entryIndex: idx,
                         itemStyle: {
                             color: e.enabled === false ? '#71717a' : (e.constant ? '#6366f1' : '#d97706')
@@ -3444,9 +3462,37 @@ const app = createApp({
                         layout: 'force',
                         data: nodes,
                         links: links,
-                        roam: true,
-                        label: { show: true, position: 'right', fontSize: 11, color: theme.value === 'light' ? '#18181b' : '#f4f4f5' },
-                        force: { repulsion: 140, edgeLength: 90, gravity: 0.08 },
+                        roam: true,        // 滚轮缩放 + 鼠标平移
+                        draggable: true,   // 允许单独拖拽球体
+
+                        // 1. 🎛️ 尺寸控制：300 节点球体调小（series 级默认；节点级按内容长度微调区分）
+                        symbolSize: 12,
+
+                        // 2. 👁️ 视觉降噪：默认不显示文字，避免 300 个名字糊成黑影
+                        label: { show: false, position: 'right' },
+
+                        // 3. ✨ 聚光灯效应：悬浮只高亮当前节点与邻居，其余全部变暗沉寂
+                        emphasis: {
+                            focus: 'adjacency',
+                            lineStyle: { width: 3 },
+                            label: {
+                                show: true,
+                                fontSize: 13,
+                                color: '#34d399',
+                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                padding: [4, 8],
+                                borderRadius: 4
+                            }
+                        },
+
+                        // 4. ⚙️ 物理引擎镇定剂：friction 0.6 让 300 节点迅速冷静停稳，杜绝鬼畜抖动
+                        force: {
+                            repulsion: 150,
+                            edgeLength: [20, 70],
+                            gravity: 0.15,
+                            layoutAnimation: true,
+                            friction: 0.6
+                        },
                         edgeSymbol: ['none', 'arrow'],
                         edgeSymbolSize: [4, 7],
                         lineStyle: { color: '#a1a1aa', width: 1.2 }
@@ -3455,13 +3501,26 @@ const app = createApp({
 
                 wbChartInstance.setOption(option);
 
-                // 点击节点事件：关闭图谱，直接高亮/展开指定词条
+                // 点击节点事件：关闭图谱，展开并平滑滚动定位 + 高亮闪烁目标词条
                 wbChartInstance.off('click');
                 wbChartInstance.on('click', (params) => {
                     if (params.dataType === 'node' && params.data.entryIndex !== undefined) {
                         showWbGraphModal.value = false;
                         const targetEntry = activeWorldbook.value.data.entries[params.data.entryIndex];
-                        if (targetEntry) targetEntry._collapsed = false; // 自动展开
+                        if (!targetEntry) return;
+                        targetEntry._collapsed = false; // 自动展开
+
+                        // ✅ 增强：平滑滚动到词条卡片并高亮闪烁（用 getEntryUid 做稳定锚点，不受搜索过滤影响）
+                        nextTick(() => {
+                            const dom = document.getElementById('wb-entry-' + getEntryUid(targetEntry));
+                            if (dom) {
+                                dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                dom.classList.add('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
+                                setTimeout(() => {
+                                    dom.classList.remove('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
+                                }, 1800);
+                            }
+                        });
                         addLog(`📍 通过图谱定位到词条: #${params.data.entryIndex + 1}`, 'info');
                     }
                 });
@@ -3532,7 +3591,69 @@ const app = createApp({
         };
 
         // =========================================================
-        // 🚀 系统版本更新检测系统（GitHub API 轻量探测 + 浏览器跳转下载）
+        // � 条目级合并引擎：从其他世界书按需导入词条到当前书（弹窗 → 勾选 → 确认）
+        // =========================================================
+        const showWbImportModal = ref(false);      // 导入弹窗显隐
+        const importSourceBook = ref(null);        // 当前选中的源世界书
+        const importCandidates = ref([]);          // 源书词条候选（带临时 _srcUid 做勾选 key）
+        const selectedImportEntries = ref([]);     // 用户勾选的词条 _srcUid 集合
+
+        // 可导入的源书列表（排除当前正在编辑的世界书）
+        const importableSourceBooks = computed(() => {
+            if (!activeWorldbook.value) return worldbooks.value;
+            return worldbooks.value.filter(wb => wb.path !== activeWorldbook.value.path);
+        });
+
+        const openWbImportModal = () => {
+            if (!activeWorldbook.value) {
+                nativeAlert('请先打开/选中一本世界书作为合并目标。', 'warning');
+                return;
+            }
+            importSourceBook.value = null;
+            importCandidates.value = [];
+            selectedImportEntries.value = [];
+            showWbImportModal.value = true;
+        };
+
+        // 选中源世界书后，展开其词条候选
+        const pickImportSource = (wb) => {
+            importSourceBook.value = wb;
+            importCandidates.value = ((wb.data && wb.data.entries) || []).map((e, i) => ({
+                ...e,
+                _srcIndex: i,
+                _srcUid: e.uid || ('src-' + i)
+            }));
+            selectedImportEntries.value = [];
+        };
+
+        // 确认导入：深拷贝选中词条 → 清洗临时字段 → 追加到当前世界书
+        const confirmImportEntries = () => {
+            if (!importSourceBook.value) { nativeAlert('请先选择源世界书。', 'warning'); return; }
+            if (selectedImportEntries.value.length === 0) {
+                nativeAlert('请至少勾选一个词条。', 'warning');
+                return;
+            }
+            const targetEntries = activeWorldbook.value.data.entries;
+            if (!Array.isArray(targetEntries)) activeWorldbook.value.data.entries = [];
+
+            let count = 0;
+            importCandidates.value.forEach(c => {
+                if (!selectedImportEntries.value.includes(c._srcUid)) return;
+                // 深拷贝并剔除 _ 前缀临时字段（_collapsed/_srcIndex/_srcUid），重新生成前端 uid
+                const clean = JSON.parse(JSON.stringify(c, (k, v) => k.startsWith('_') ? undefined : v));
+                clean.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                clean._collapsed = false;
+                activeWorldbook.value.data.entries.push(clean);
+                count++;
+            });
+
+            showWbImportModal.value = false;
+            nativeAlert(`🎉 成功从 [${importSourceBook.value.name}] 导入 ${count} 个词条到当前世界书！`, 'info');
+            addLog(`🔀 从 ${importSourceBook.value.name} 导入 ${count} 个词条`, 'success');
+        };
+
+        // =========================================================
+        // �🚀 系统版本更新检测系统（GitHub API 轻量探测 + 浏览器跳转下载）
         // =========================================================
         const showUpdateModal = ref(false);
         const updateInfo = ref({
@@ -3657,8 +3778,10 @@ const app = createApp({
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
             // ⚖️ 双屏差异比对器 (Diff Inspector)
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal,
-            // 🌐 世界书关系图谱 + 🔗 多书合并
+            // 🌐 世界书关系图谱 + 🔗 多书合并 + 🔀 条目导入
             showWbGraphModal, openWbGraphModal, showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge,
+            showWbImportModal, importSourceBook, importCandidates, selectedImportEntries, importableSourceBooks,
+            openWbImportModal, pickImportSource, confirmImportEntries,
             // 🚀 系统版本更新检测
             showUpdateModal, updateInfo, checkForUpdatesManual, openExternalUrl
         };

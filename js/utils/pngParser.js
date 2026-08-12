@@ -48,13 +48,33 @@ export function deepScanForJSON(buffer) {
         }
     }
 
-    // 纯 JSON 文本扫描兜底
-    const jsonMatch = binary.match(/\{[\s\S]*"name"[\s\S]*\}/);
-    if (jsonMatch) {
-        try {
-            const parsed = JSON.parse(jsonMatch[0]);
-            if (parsed.name || parsed.data) return parsed;
-        } catch (e) { /* 忽略解析失败 */ }
+    // 纯 JSON 文本扫描兜底（【修复】杜绝贪婪正则对超大二进制的灾难性回溯）
+    // 策略：① 只扫描前 1MB（防止整图暴力匹配）；② 用 indexOf/lastIndexOf 线性定位 + 花括号深度配平，完全避免回溯
+    const scanWindow = Math.min(binary.length, 1024 * 1024);
+    const searchable = binary.slice(0, scanWindow);
+    const nameIdx = searchable.indexOf('"name"');
+    if (nameIdx !== -1) {
+        const start = searchable.lastIndexOf('{', nameIdx);
+        if (start !== -1) {
+            // 从 start 的 '{' 起，向后做花括号深度配平，找到完整 JSON 结尾
+            let depth = 0;
+            let end = -1;
+            const maxEnd = Math.min(searchable.length, start + 500 * 1024);
+            for (let i = start; i < maxEnd; i++) {
+                const ch = searchable[i];
+                if (ch === '{') depth++;
+                else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) { end = i; break; }
+                }
+            }
+            if (end > start) {
+                try {
+                    const parsed = JSON.parse(searchable.slice(start, end + 1));
+                    if (parsed.name || parsed.data) return parsed;
+                } catch (e) { /* 忽略解析失败 */ }
+            }
+        }
     }
 
     return null;
