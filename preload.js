@@ -61,5 +61,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 🖱️ 右键菜单：在系统资源管理器中打开并定位文件
     showItemInFolder: (filePath) => ipcRenderer.invoke('sys:showItemInFolder', filePath),
     // 🖱️ 右键菜单：物理复制文件（创建带时间戳的副本）
-    duplicateFile: (filePath) => ipcRenderer.invoke('sys:duplicateFile', filePath)
+    duplicateFile: (filePath) => ipcRenderer.invoke('sys:duplicateFile', filePath),
+    // 🚀 版本更新检测：用系统默认浏览器打开外部链接
+    openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
+    // 🚀 版本更新检测：探测 GitHub 最新 Release 版本
+    checkUpdate: () => ipcRenderer.invoke('sys:checkUpdate')
 });

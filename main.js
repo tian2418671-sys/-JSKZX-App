@@ -859,6 +859,56 @@ app.whenReady().then(() => {
     }
   });
 
+  // ==========================================
+  // 🚀 系统更新检测与外部链接打开接口
+  // ==========================================
+
+  // 1. 调用系统默认浏览器打开外部网页（跳转 GitHub Releases 下载页）
+  ipcMain.handle('sys:openExternal', async (event, url) => {
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 2. 检测 GitHub 最新 Release 版本（轻量探测，无需 electron-updater）
+  ipcMain.handle('sys:checkUpdate', async () => {
+    try {
+      const currentVersion = app.getVersion(); // 自动读取 package.json 中的 version
+
+      // ⚠️ 本项目 GitHub 仓库路径（Release 发布时同步 tag 为 vX.Y.Z）
+      const repoPath = 'tian2418671-sys/JSKZX';
+
+      const response = await fetch(`https://api.github.com/repos/${repoPath}/releases/latest`, {
+        headers: { 'User-Agent': 'SillyTavern-Manager-App' } // GitHub API 要求带 UA
+      });
+
+      if (!response.ok) {
+        return { success: false, error: `GitHub API 请求失败: ${response.status}` };
+      }
+
+      const data = await response.json();
+      // 剥离版本号前面的 'v'，例如 'v1.0.1' -> '1.0.1'
+      const latestVersion = (data.tag_name || '').replace(/^v/i, '');
+
+      // 简单的语义化版本号比较 (例如: 1.0.1 > 1.0.0)
+      const isNewer = latestVersion.localeCompare(currentVersion, undefined, { numeric: true, sensitivity: 'base' }) > 0;
+
+      return {
+        success: true,
+        hasUpdate: isNewer,
+        currentVersion: currentVersion,
+        latestVersion: latestVersion,
+        releaseNotes: data.body, // GitHub 上的 Release 描述
+        downloadUrl: data.html_url
+      };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // 智能规范化 OpenAI 兼容聊天端点：兼容只填 /v1、误填 /v1/models、或完整 /chat/completions 三种情况
   const normalizeChatEndpoint = (endpoint) => {
     let url = String(endpoint || '').trim().replace(/\/+$/, '');

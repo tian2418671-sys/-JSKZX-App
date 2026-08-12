@@ -1711,6 +1711,9 @@ const app = createApp({
 
             // 数据加载完毕，淡出启动加载蒙版
             isAppLoading.value = false;
+
+            // 🚀 后台静默检测更新（延迟 3 秒，不卡首屏；无新版本不打扰）
+            setTimeout(() => { silentCheckForUpdates(); }, 3000);
         });
 
         // 手动贴标签
@@ -3525,6 +3528,60 @@ const app = createApp({
             addLog(`🔗 完成多书合并: ${mergeName}`, 'success');
         };
 
+        // =========================================================
+        // 🚀 系统版本更新检测系统（GitHub API 轻量探测 + 浏览器跳转下载）
+        // =========================================================
+        const showUpdateModal = ref(false);
+        const updateInfo = ref({
+            hasUpdate: false,
+            currentVersion: '1.0.0',
+            latestVersion: '',
+            releaseNotes: '',
+            downloadUrl: ''
+        });
+
+        // 手动检测更新（用于设置菜单里的按钮）
+        const checkForUpdatesManual = async () => {
+            addLog('🔄 正在向 GitHub 请求最新版本信息...', 'info');
+            try {
+                const res = await window.electronAPI.checkUpdate();
+                if (res && res.success) {
+                    if (res.hasUpdate) {
+                        updateInfo.value = res;
+                        showUpdateModal.value = true;
+                        addLog(`🎉 发现新版本: v${res.latestVersion}`, 'success');
+                    } else {
+                        nativeAlert(`当前已是最新版本 (v${res.currentVersion})，无需更新！`, 'info');
+                    }
+                } else {
+                    nativeAlert(`更新检测失败: ${res?.error || '网络错误'}`, 'error');
+                }
+            } catch (err) {
+                nativeAlert(`更新检测失败: ${err.message || '网络错误'}`, 'error');
+            }
+        };
+
+        // 后台静默检测（开机时自动调用，有更新才弹窗，没更新不打扰）
+        const silentCheckForUpdates = async () => {
+            if (!window.electronAPI || typeof window.electronAPI.checkUpdate !== 'function') return;
+            try {
+                const res = await window.electronAPI.checkUpdate();
+                if (res && res.success && res.hasUpdate) {
+                    updateInfo.value = res;
+                    showUpdateModal.value = true;
+                    addLog(`🎉 开机检测到新版本: v${res.latestVersion}`, 'success');
+                }
+            } catch (err) {
+                console.warn('静默检测更新失败', err); // 网络异常时静默忽略，不打扰用户
+            }
+        };
+
+        // 打开外部链接（跳转系统浏览器前往 GitHub 下载）
+        const openExternalUrl = (url) => {
+            if (!url) return;
+            window.electronAPI.openExternal(url);
+        };
+
         return {
             theme, toggleTheme, appSettings, showSettingsModal, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
@@ -3598,7 +3655,9 @@ const app = createApp({
             // ⚖️ 双屏差异比对器 (Diff Inspector)
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal,
             // 🌐 世界书关系图谱 + 🔗 多书合并
-            showWbGraphModal, openWbGraphModal, showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge
+            showWbGraphModal, openWbGraphModal, showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge,
+            // 🚀 系统版本更新检测
+            showUpdateModal, updateInfo, checkForUpdatesManual, openExternalUrl
         };
     }
 });

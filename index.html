@@ -233,6 +233,10 @@
                             </div>
                             <button @click="resetPersonalizationSettings" class="px-3 py-1.5 text-left hover:bg-zinc-700 text-zinc-300 mt-1">🎨 重置界面外观与字号</button>
                             <button @click="resetApiSettings" class="px-3 py-1.5 text-left hover:bg-rose-600 hover:text-white text-rose-400">🔄 重置 API 接口参数</button>
+                            <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
+                            <button @click="checkForUpdatesManual" class="px-3 py-1.5 text-left hover:bg-emerald-600 hover:text-white flex items-center justify-between text-emerald-400 font-bold transition">
+                                <span>🔄 检查应用更新...</span>
+                            </button>
                         </div>
                     </div>
 
@@ -1894,6 +1898,46 @@
                     <button @click="executeWorldbookMerge" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shadow transition">🚀 开始合并</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- ================= [ 弹窗：版本更新检测 ] ================= -->
+    <div v-if="showUpdateModal" class="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showUpdateModal = false">
+        <div class="theme-surface border border-emerald-500/50 rounded-xl max-w-lg w-full flex flex-col shadow-[0_0_40px_rgba(16,185,129,0.15)] overflow-hidden">
+
+            <div class="px-5 py-4 bg-gradient-to-r from-emerald-900/40 to-transparent border-b border-zinc-800 flex items-start justify-between shrink-0">
+                <div>
+                    <h3 class="text-lg font-bold text-emerald-400 flex items-center gap-2 mb-1">
+                        <span>🚀 发现新版本可用！</span>
+                    </h3>
+                    <div class="flex items-center gap-2 text-xs font-mono">
+                        <span class="text-zinc-500 line-through">v{{ updateInfo.currentVersion }}</span>
+                        <span class="text-emerald-500">➔</span>
+                        <span class="text-white font-bold bg-emerald-600 px-1.5 py-0.5 rounded">v{{ updateInfo.latestVersion }}</span>
+                    </div>
+                </div>
+                <button @click="showUpdateModal = false" class="text-zinc-400 hover:text-white transition text-xl">✕</button>
+            </div>
+
+            <div class="p-5 flex-1 max-h-[40vh] overflow-y-auto custom-scrollbar bg-zinc-950/30">
+                <h4 class="text-xs font-bold text-zinc-400 mb-2">📄 更新日志 (Release Notes):</h4>
+                <div class="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed font-mono">
+                    {{ updateInfo.releaseNotes || '作者很懒，没有留下更新说明...' }}
+                </div>
+            </div>
+
+            <div class="px-5 py-3 border-t border-zinc-800 bg-zinc-900/90 flex items-center justify-between shrink-0">
+                <span class="text-[10px] text-zinc-500">点击下载后，将打开浏览器前往 GitHub Releases 页面。</span>
+                <div class="flex gap-2">
+                    <button @click="showUpdateModal = false" class="px-4 py-1.5 theme-element hover:bg-zinc-700 border border-zinc-700 rounded text-xs transition">
+                        下次再说
+                    </button>
+                    <button @click="openExternalUrl(updateInfo.downloadUrl)" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center gap-1">
+                        ⬇️ 前往下载更新
+                    </button>
+                </div>
+            </div>
+
         </div>
     </div>
 
