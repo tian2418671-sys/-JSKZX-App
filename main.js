@@ -240,51 +240,6 @@ function createWindow() {
     win.show();
   });
 
-  // ===== 【临时】截图脚本：生成 screenshots/ 后移除 =====
-  win.webContents.on('did-finish-load', () => {
-    setTimeout(async () => {
-      const log = (msg) => { win.webContents.executeJavaScript(`console.log(${JSON.stringify(msg)})`).catch(() => { }); };
-      try {
-        log('截图脚本启动');
-        const shotDir = path.join(__dirname, 'screenshots');
-        fs.mkdirSync(shotDir, { recursive: true });
-        const wait = (ms) => new Promise(r => setTimeout(r, ms));
-        const ev = async (code) => await win.webContents.executeJavaScript(code);
-        const snap = async (name) => {
-          await wait(1200);
-          const img = await win.capturePage();
-          fs.writeFileSync(path.join(shotDir, name + '.png'), img.toPNG());
-          log('截图完成: ' + name);
-        };
-        // 等待卡片加载
-        for (let i = 0; i < 90; i++) {
-          let n = 0;
-          try { n = await ev(`(window.__app && window.__app._instance) ? (window.__app._instance.proxy.library || []).length : -1`); } catch (e) { log('轮询错误: ' + e.message); }
-          log('library=' + n);
-          if (n > 0) break;
-          await wait(1000);
-        }
-        await wait(1500);
-        const P = 'window.__app._instance.proxy';
-        await ev(`${P}.reset && ${P}.reset(); true`);
-        await snap('01-主界面');
-        await ev(`(() => { const p = window.__app._instance.proxy; if (p.library && p.library.length) { p.openFromLibrary(p.library[0]); } return true; })()`);
-        await snap('02-卡片编辑');
-        await ev(`(() => { const p = window.__app._instance.proxy; const c = (p.library||[]).find(i => { const d = i.data?.data || i.data || {}; const b = d.character_book || i.data?.character_book || {}; return ((b.entries||[]).length > 0) || (Array.isArray(b) && b.length > 0); }); if (c) p.openFromLibrary(c); p.currentTab = 'worldbook'; return true; })()`);
-        await snap('03-世界书');
-        await ev(`${P}.currentTab = 'chat'; true`);
-        await snap('04-聊天测卡');
-        await ev(`${P}.openGraph(); true`);
-        await snap('05-关系图谱');
-        await ev(`${P}.closeGraph(); ${P}.showGlobalAssetModal = true; true`);
-        await snap('06-全局资产中心');
-        await ev(`${P}.showGlobalAssetModal = false; true`);
-        log('截图全部完成');
-      } catch (e) { log('截图失败: ' + (e && e.message)); }
-    }, 3000);
-  });
-  // ===== 【临时】截图脚本结束 =====
-
   return win;
 }
 
@@ -723,9 +678,9 @@ app.whenReady().then(() => {
       if (!filePath) return { success: false, error: '文件路径为空。' };
       if (!fs.existsSync(filePath)) return { success: false, error: '原文件不存在，无法保存。' };
 
-      // 1. 数据清洗 (剔除 _collapsed 等临时 UI 字段，保证落盘 JSON 100% 符合酒馆原生规范)
+      // 1. 数据清洗 (剔除 _collapsed 等临时 UI 字段 + 前端临时 uid，保证落盘 JSON 100% 符合酒馆原生规范)
       const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
-        if (key.startsWith('_')) return undefined;
+        if (key.startsWith('_') || key === 'uid') return undefined;
         return value;
       }));
 

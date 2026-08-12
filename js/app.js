@@ -5,7 +5,7 @@
  *  - utils/pngParser.js    PNG/WebP 解析与深度扫描
  *  - components/Section.js 文本块展示组件
  */
-import { createApp, ref, shallowRef, reactive, computed, watch, onMounted, nextTick } from 'vue';
+import { createApp, ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef } from 'vue';
 import { Section } from './components/Section.js';
 import { processFile, normalizeCardData } from './utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from './utils/pngParser.js';
@@ -33,9 +33,6 @@ const app = createApp({
         const theme = ref(savedTheme);
 
         const isAppLoading = ref(true); // 应用首屏加载状态（数据就绪后淡出）
-
-        // ================= [ 全局界面与字体设置 ] =================
-        const showSettingsModal = ref(false);
 
         // =========================================================
         // 🖥️ 智能屏幕分辨率与 Windows DPI 缩放适配（防双重放大）
@@ -411,18 +408,6 @@ const app = createApp({
             nativeAlert(`分组已成功重命名为：「${cleanNewName}」`, 'info');
         };
 
-        // 单卡修改分类时，如果输入了新分类自动加入自定义列表
-        const changeCardCategory = async (item) => {
-            const newCat = await appPrompt(`将 ${item.name} 移动到新分类：`, item.category);
-            if (newCat && newCat.trim() !== '') {
-                const cleanCat = newCat.trim();
-                item.category = cleanCat;
-                if (!isCategoryKnown(cleanCat)) {
-                    customCategories.value.push(cleanCat);
-                }
-            }
-        };
-
         // 当前编辑卡片的分类（映射到库项目 libItem.category，避免污染卡片原始文件数据）
         const currentCardCategory = computed({
             get() {
@@ -607,6 +592,12 @@ const app = createApp({
             return cardData.value.data || cardData.value || {};
         });
 
+        // 【修复】shallowRef 下深层编辑（v-model 直接改 data 内部字段）不会触发响应式更新，
+        // 导致 Token 统计 / Raw JSON 视图在打字时不刷新。手动 triggerRef 强制刷新（保留 shallowRef 性能优势）
+        const refreshCardData = () => {
+            if (cardData.value) triggerRef(cardData);
+        };
+
         // 识别卡片规范版本
         const specVersion = computed(() => {
             if (!cardData.value) return 'Unknown';
@@ -618,7 +609,8 @@ const app = createApp({
 
         // 世界书条目（兼容 V1/V2 层级与 comment 字段）
         // 世界书条目稳定标识：为每个条目对象分配唯一 uid（v-for :key 使用，避免增删时节点错位）
-        const entryUidMap = new Map();
+        // 【修复】改用 WeakMap：键为对象引用，条目对象被 GC 时映射自动释放，防止频繁切卡导致内存泄漏
+        const entryUidMap = new WeakMap();
         let entryUidCounter = 0;
         const getEntryUid = (entry) => {
             if (!entry || typeof entry !== 'object') return 'entry-' + (++entryUidCounter);
@@ -627,7 +619,8 @@ const app = createApp({
         };
 
         // 正则脚本稳定标识（同世界书机制，避免增删时节点错位）
-        const regexUidMap = new Map();
+        // 【修复】同样改用 WeakMap，避免正则脚本对象被丢弃后残留强引用
+        const regexUidMap = new WeakMap();
         let regexUidCounter = 0;
         const getRegexUid = (script) => {
             if (!script || typeof script !== 'object') return 'regex-' + (++regexUidCounter);
@@ -690,6 +683,8 @@ const app = createApp({
             }
             // 将逗号分隔的字符串切割为数组，自动去除空格与空项（兼容中英文逗号）
             entry[targetField] = String(rawValue).split(/[,，]/).map(s => s.trim()).filter(s => s.length > 0);
+            // 【修复】词条触发词变化会影响世界书 Token 统计，手动触发浅层刷新
+            if (cardData.value) triggerRef(cardData);
         };
 
         // 【修复】富文本渲染与代码安全转义
@@ -709,7 +704,7 @@ const app = createApp({
         const cleanMarkdownFences = (text) => {
             if (!text) return '';
             return text
-                .replace(/```(html|yaml|json|xml|css|js)?\n?/gi, '') // 洗掉开头的 ```html、```yaml 等
+                .replace(/```[a-zA-Z]*\n?/gi, '') // 【修复】匹配任意语言标记 (```python、```markdown、``` 等)，不再残留裸文本
                 .replace(/```/g, ''); // 洗掉结尾的 ```
         };
 
@@ -1032,7 +1027,7 @@ const app = createApp({
             }
 
             const option = {
-                backgroundColor: '#111827',
+                backgroundColor: 'transparent', // 【修复】不再写死深色背景，跟随外层主题容器（暗夜/青灰/白昼）
                 tooltip: {
                     formatter: (params) => params.dataType === 'node' ? `<b>${params.data.name}</b><br>社交权重度: ${nodeDegree.get(params.data.id) || 0}` : `关联类型: ${params.data.categoryName}`
                 },
@@ -1725,18 +1720,6 @@ const app = createApp({
             }
         };
 
-        // 手动更改分类
-        const changeCategory = async (item) => {
-            const newCat = await appPrompt(`将 ${item.name} 移动到新分类 (当前: ${item.category}):\n如果你输入新的分类名，将自动创建它。`, item.category);
-            if (newCat && newCat.trim() !== '') {
-                const cleanCat = newCat.trim();
-                item.category = cleanCat;
-                if (!isCategoryKnown(cleanCat)) {
-                    customCategories.value.push(cleanCat);
-                }
-            }
-        };
-
         // 换页逻辑
         const changePage = (page) => {
             if (page >= 1 && page <= totalPages.value) currentPage.value = page;
@@ -1982,7 +1965,10 @@ const app = createApp({
 
                     case 'aiTag': {
                         // 单卡快捷唤起 AI 打标（无需多选模式）
-                        selectedIds.value = [card.id];
+                        // 【修复】若右键的卡片已在多选列表中则保留多选状态，否则才重置为单卡选择
+                        if (!selectedIds.value.includes(card.id)) {
+                            selectedIds.value = [card.id];
+                        }
                         openAITagModal();
                         addLog(`🤖 已为 [${card.name}] 唤起 AI 打标`, 'info');
                         break;
@@ -2770,10 +2756,15 @@ const app = createApp({
             if (!activeWorldbook.value) return;
             addLog(`准备落盘保存世界书: ${activeWorldbook.value.name}...`);
 
-            // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"），并剔除 IDE 展示字段 _collapsed 防污染
+            // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"），
+            // 并剔除 IDE 展示字段 _collapsed 与前端临时 UID（酒馆原生世界书格式无 uid 字段）防污染
             const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
             if (Array.isArray(plainData.entries)) {
-                plainData.entries.forEach(e => { if (e && e._collapsed !== undefined) delete e._collapsed; });
+                plainData.entries.forEach(e => {
+                    if (!e) return;
+                    if (e._collapsed !== undefined) delete e._collapsed;
+                    if (e.uid !== undefined) delete e.uid;
+                });
             }
             const res = await window.electronAPI.saveWorldbook({
                 filePath: activeWorldbook.value.path,
@@ -2794,7 +2785,11 @@ const app = createApp({
             if (!activeWorldbook.value) return;
             const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
             if (Array.isArray(plainData.entries)) {
-                plainData.entries.forEach(e => { if (e && e._collapsed !== undefined) delete e._collapsed; });
+                plainData.entries.forEach(e => {
+                    if (!e) return;
+                    if (e._collapsed !== undefined) delete e._collapsed;
+                    if (e.uid !== undefined) delete e.uid;
+                });
             }
             const blob = new Blob([JSON.stringify(plainData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -2820,8 +2815,8 @@ const app = createApp({
             const suffix = entrySearchQuery.value ? `_${entrySearchQuery.value.trim()}篇` : '_完整导出';
             const newWbName = (activeWorldbook.value.data.name || '拆分世界书') + suffix;
 
-            // 清洗 UI 字段（剥离 _ 前缀临时字段与 Vue Proxy）
-            const cleanEntries = JSON.parse(JSON.stringify(currentEntries, (key, val) => key.startsWith('_') ? undefined : val));
+            // 清洗 UI 字段（剥离 _ 前缀临时字段、前端临时 UID 与 Vue Proxy）
+            const cleanEntries = JSON.parse(JSON.stringify(currentEntries, (key, val) => (key.startsWith('_') || key === 'uid') ? undefined : val));
 
             const exportData = {
                 name: newWbName,
@@ -2949,11 +2944,19 @@ const app = createApp({
         const showDedupeModal = ref(false);
         const duplicateGroups = ref([]);
 
-        // 计算单张卡片的设定丰度（复用全局 estimateTokens，叠加描述/首句/示例/性格四段文本）
+        // 计算单张卡片的设定丰度（与 cardTokenStats 口径对齐：叠加描述/首句/示例/性格/场景 + 世界书正文与触发词）
         const estimateCardTokens = (card) => {
             const d = card.data?.data || card.data || {};
-            const text = [d.description, d.first_mes, d.mes_example, d.personality].filter(Boolean).join('\n');
-            return estimateTokens(text);
+            const text = [d.description, d.first_mes, d.mes_example, d.personality, d.scenario].filter(Boolean).join('\n');
+            let total = estimateTokens(text);
+            // 追加世界书词条正文与触发词（与 cardTokenStats 的世界书口径保持一致）
+            const book = d.character_book || (card.data && card.data.character_book) || {};
+            const entries = book.entries || (Array.isArray(book) ? book : []);
+            entries.forEach(e => {
+                if (!e) return;
+                total += estimateTokens(e.content) + estimateTokens((Array.isArray(e.key) ? e.key : []).join(', '));
+            });
+            return total;
         };
 
         // 提取核心描述以便于对比差异
@@ -3583,25 +3586,25 @@ const app = createApp({
         };
 
         return {
-            theme, toggleTheme, appSettings, showSettingsModal, showApiModal, resetPersonalizationSettings, resetApiSettings,
+            theme, toggleTheme, appSettings, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
-            safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson,
+            safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
             getKeysString, updateEntryKeys,
             getRegexPlacement, handleDrop, handleFileUpload, downloadJson, reset,
             library, openFromLibrary,
             allCategories, customCategories, currentCategoryKey,
-            getCategoryDisplayName, addNewCategory, changeCardCategory,
+            getCategoryDisplayName, addNewCategory,
             renameCurrentCategory, deleteCustomCategory,
             currentCardCategory, handleCardCategoryChange,
             currentPage, totalPages,
             searchQuery, filteredLibrary, paginatedLibrary,
-            selectFixedDirectory, addManualTag, changeCategory, changePage,
+            selectFixedDirectory, addManualTag, changePage,
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
             selectedIds, handleCardClick, toggleSelection, clearSelection,
@@ -3668,5 +3671,3 @@ app.config.errorHandler = (err, _instance, info) => {
 };
 
 app.mount('#app');
-
-window.__app = app; // 【临时】截图脚本暴露 Vue 实例（用后移除）
