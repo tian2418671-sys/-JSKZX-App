@@ -49,5 +49,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 智能嗅探酒馆本地根目录（遍历常见路径 + 指纹验证）
     autoDetectTavernPath: () => ipcRenderer.invoke('tavern:autoDetectPath'),
     // 物理拷贝卡片到酒馆 characters 目录（本地直推）
-    pushToSillyTavernDir: (paths, rootPath) => ipcRenderer.invoke('tavern:pushDir', paths, rootPath)
+    pushToSillyTavernDir: (paths, rootPath) => ipcRenderer.invoke('tavern:pushDir', paths, rootPath),
+    // 🌍 世界书专属通道：扫描目录下的 .json 世界书（返回含 entries 字段的合法世界书列表）
+    scanWorldbooks: (dirPath) => ipcRenderer.invoke('wb:scan', dirPath),
+    // 🌍 世界书专属通道：物理覆写世界书文件（保存前自动 .bak_history 快照备份）
+    saveWorldbook: (params) => ipcRenderer.invoke('wb:save', params),
+    // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
+    trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths)
 });

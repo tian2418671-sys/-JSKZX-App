@@ -21,6 +21,12 @@ const { pathToFileURL } = require('url');
 // 这里仅禁用 GPU 进程沙箱（保留渲染/网络进程沙箱），影响面最小。
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 
+// ================= 高 DPI 缩放支持（防糊/防双重缩放） =================
+// 1. 强制开启 Chromium 的高 DPI 支持与系统缩放同步（必须在 app.whenReady() 前调用）
+app.commandLine.appendSwitch('high-dpi-support', '1');
+// 2. 开启 GPU 光栅化，确保高 DPI 缩放下的滚动与动画流畅度不掉帧
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+
 // ================= 全局异常兜底（崩溃不闪退，错误堆栈落盘） =================
 function crashLogPath() {
   return path.join(app.getPath('userData'), 'crash.log');
@@ -631,6 +637,96 @@ app.whenReady().then(() => {
       return { success: false, error: "不支持的文件格式。" };
     } catch (e) {
       return { success: false, error: e.message };
+    }
+  });
+
+  // ==========================================
+  // 🌍 世界书专属文件系统操作接口
+  // ==========================================
+
+  // 扫描世界书目录 (仅限 .json，且需符合酒馆世界书标准规范：含 entries 字段)
+  ipcMain.handle('wb:scan', async (event, dirPath) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) {
+        return { success: false, error: '目录不存在: ' + dirPath };
+      }
+      const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      const results = [];
+      for (const file of files) {
+        // 仅处理 .json 文件
+        if (!file.isFile() || path.extname(file.name).toLowerCase() !== '.json') continue;
+        const fullPath = path.join(dirPath, file.name);
+        try {
+          const content = await fs.promises.readFile(fullPath, 'utf-8');
+          const wbData = JSON.parse(content);
+          // 仅筛选符合酒馆世界书标准规范的 JSON（含 entries 字段）
+          if (wbData && typeof wbData === 'object' && wbData.entries) {
+            results.push({ path: fullPath, name: file.name, data: wbData });
+          }
+        } catch (parseErr) {
+          // 单文件解析失败（非 JSON / 非世界书）静默跳过，不影响整个目录扫描
+          console.warn('[wb:scan] 跳过非世界书文件:', file.name, parseErr.message);
+        }
+      }
+      return { success: true, data: results };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 物理覆写世界书（保存前自动快照备份到 .bak_history，与角色卡保存逻辑保持一致）
+  ipcMain.handle('wb:save', async (event, { filePath, data }) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      if (!fs.existsSync(filePath)) return { success: false, error: '原文件不存在，无法保存。' };
+
+      // --- 快照备份到 .bak_history（只保留最近 5 份，防止磁盘膨胀） ---
+      const dir = path.dirname(filePath);
+      const bakDir = path.join(dir, '.bak_history');
+      if (!fs.existsSync(bakDir)) fs.mkdirSync(bakDir, { recursive: true });
+
+      const fileName = path.basename(filePath);
+      const timeStr = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(filePath, path.join(bakDir, `${timeStr}_${fileName}`));
+      try {
+        const baks = fs.readdirSync(bakDir).filter(f => f.includes(fileName));
+        if (baks.length > 5) {
+          baks.sort().slice(0, baks.length - 5).forEach(oldBak => fs.unlinkSync(path.join(bakDir, oldBak)));
+        }
+      } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
+      // --------------------------------------------------
+
+      await fs.promises.writeFile(filePath, JSON.stringify(data, null, 4), 'utf-8');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==========================================
+  // 🗑️ 系统级安全回收站接口 (Trash)
+  // ==========================================
+  // 智能查重清洗用：绝不物理删除，而是把冗余文件移动到 userData 下的专属回收站目录
+  ipcMain.handle('sys:trashFiles', async (event, filePaths) => {
+    try {
+      const trashDir = path.join(app.getPath('userData'), 'jsTavern_Trash');
+      if (!fs.existsSync(trashDir)) {
+        await fs.promises.mkdir(trashDir, { recursive: true });
+      }
+
+      let trashedCount = 0;
+      for (const p of (Array.isArray(filePaths) ? filePaths : [])) {
+        if (p && fs.existsSync(p)) {
+          const fileName = path.basename(p);
+          // 加上时间戳前缀防重名覆盖
+          const dest = path.join(trashDir, `${Date.now()}_${fileName}`);
+          await fs.promises.rename(p, dest);
+          trashedCount++;
+        }
+      }
+      return { success: true, count: trashedCount };
+    } catch (err) {
+      return { success: false, error: err.message };
     }
   });
 

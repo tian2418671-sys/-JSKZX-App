@@ -35,20 +35,55 @@ const app = createApp({
         // ================= [ 全局界面与字体设置 ] =================
         const showSettingsModal = ref(false);
 
-        // 从 localStorage 读取历史设置，如果没有则使用默认值（防御性读取，localStorage 不可用时回退默认）
+        // =========================================================
+        // 🖥️ 智能屏幕分辨率与 Windows DPI 缩放适配（防双重放大）
+        // （仅对首次启动/无存档用户生效，已有存档的用户尊重其手动设置）
+        // =========================================================
+
+        // 1. 获取 DPR（设备像素比，例如 150% 缩放时 dpr 为 1.5）
+        const dpr = window.devicePixelRatio || 1;
+
+        // 2. 获取【逻辑宽度】（已被操作系统除以 DPR 的宽度，缩放交给系统负责）
+        // 例如：4K 屏 (3840) 开 200% 缩放后，logicalWidth 会是 1920
+        const logicalWidth = window.innerWidth || window.screen.width || 1920;
+
+        console.debug(`[DPI] dpr=${dpr}, logicalWidth=${logicalWidth}`);
+
+        let defaultUiFs = 13;   // 界面字号（顶部导航/侧边栏/菜单/弹窗）
+        let defaultWsFs = 14;   // 工作区字号（右侧编辑区：世界书/设定/聊天气泡/RAW JSON）
+
+        // 3. 根据「真正的可用逻辑空间」来分配字号，完美避开双重放大
+        if (logicalWidth >= 2560) {
+            // 只有在实体大于 4K 且缩放比例很小，或者实体是 5K/8K 时，才会进入这里
+            // 此时屏幕空间极度宽广，我们才主动调大字号
+            defaultUiFs = 15;
+            defaultWsFs = 16;
+        } else if (logicalWidth >= 1600) {
+            // 涵盖标准 1080p，或是 4K 开了 200%~225% 缩放的状态
+            // 让 Windows 自己做缩放，我们保持标准字号！
+            defaultUiFs = 13;
+            defaultWsFs = 14;
+        } else {
+            // 小笔记本屏幕，或 1080p 开了 150% 缩放 (逻辑宽度约 1280)
+            // 稍微缩小基础字号，避免界面被挤爆
+            defaultUiFs = 12;
+            defaultWsFs = 13;
+        }
+
+        // 4. 从 localStorage 读取历史设置，如果没有则使用智能默认值（防御性读取，localStorage 不可用时回退默认）
         const appSettings = ref((() => {
             const defaults = {
                 // 注：内部用单引号，与设置面板下拉选项的值保持一致，确保初始选中项正确
                 fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif",
-                fontSize: 14,           // 工作区字号（右侧编辑区：世界书/设定/聊天气泡/RAW JSON）
-                fontWeight: 'normal',   // 可选 'normal' 或 '500' (中等加粗)
-                uiFontSize: 13          // 界面字号（顶部导航/侧边栏/菜单/弹窗）
+                fontSize: defaultWsFs,      // 智能分配的工作区字号
+                fontWeight: 'normal',       // 可选 'normal' 或 '500' (中等加粗)
+                uiFontSize: defaultUiFs     // 智能分配的界面字号
             };
             let loadedSettings = defaults;
             try { loadedSettings = JSON.parse(localStorage.getItem('appSettings')) || defaults; } catch (e) { /* 忽略 */ }
-            // 兼容旧存档：缺失双轨字号时补默认值
-            if (loadedSettings.uiFontSize === undefined) loadedSettings.uiFontSize = 13;
-            if (loadedSettings.fontSize === undefined) loadedSettings.fontSize = 14;
+            // 兼容旧存档：缺失双轨字号时补智能默认值
+            if (loadedSettings.uiFontSize === undefined) loadedSettings.uiFontSize = defaultUiFs;
+            if (loadedSettings.fontSize === undefined) loadedSettings.fontSize = defaultWsFs;
             return loadedSettings;
         })());
 
@@ -614,8 +649,19 @@ const app = createApp({
             return Array.isArray(keysArray) ? keysArray.join(', ') : (keysArray || '');
         };
 
-        const updateEntryKeys = (entry, val) => {
-            entry.keys = val.split(',').map(t => t.trim()).filter(t => t);
+        const updateEntryKeys = (entry, fieldOrVal, value) => {
+            if (!entry) return;
+            // 兼容两种调用形态：
+            //   updateEntryKeys(entry, value)          -> 写 entry.keys（角色卡世界书编辑器）
+            //   updateEntryKeys(entry, 'key', value)   -> 写 entry.key / entry.keysecondary（独立世界书 IDE）
+            let targetField = 'keys';
+            let rawValue = fieldOrVal;
+            if (value !== undefined) {
+                targetField = fieldOrVal;
+                rawValue = value;
+            }
+            // 将逗号分隔的字符串切割为数组，自动去除空格与空项（兼容中英文逗号）
+            entry[targetField] = String(rawValue).split(/[,，]/).map(s => s.trim()).filter(s => s.length > 0);
         };
 
         // 【修复】富文本渲染与代码安全转义
@@ -2500,6 +2546,201 @@ const app = createApp({
             }
         };
 
+        // =========================================================
+        // 🌍 世界书管理器状态与逻辑（独立于角色卡库，主视图双引擎模式）
+        // =========================================================
+
+        // 视图切换模式：'characters' (角色卡) | 'worldbooks' (世界书)
+        const appMode = ref('characters');
+
+        const worldbooks = ref([]);          // 世界书列表
+        const activeWorldbook = ref(null);   // 当前正在深度编辑的世界书
+        const editorLogs = ref([]);          // 开发与运行调试日志面板数据
+
+        // 记录操作日志的辅助函数
+        const addLog = (msg, type = 'info') => {
+            const time = new Date().toLocaleTimeString();
+            editorLogs.value.unshift({ time, msg, type });
+            if (editorLogs.value.length > 50) editorLogs.value.pop(); // 保留最近 50 条
+        };
+
+        // 扫描世界书文件夹
+        // ⚠️ 复用 selectGenericFolder（返回纯路径字符串）；selectFolder 返回的是角色卡扫描结果对象，不适用于世界书
+        const loadWorldbooks = async () => {
+            const dirPath = await window.electronAPI.selectGenericFolder();
+            if (!dirPath) return;
+
+            addLog(`开始扫描世界书目录: ${dirPath}`);
+            const res = await window.electronAPI.scanWorldbooks(dirPath);
+            if (res.success) {
+                worldbooks.value = res.data;
+                addLog(`扫描完成，共加载 ${res.data.length} 本世界书`, 'success');
+            } else {
+                addLog(`扫描失败: ${res.error}`, 'error');
+                nativeAlert(`世界书扫描失败: ${res.error}`, 'error');
+            }
+        };
+
+        // 物理保存当前世界书
+        const saveActiveWorldbook = async () => {
+            if (!activeWorldbook.value) return;
+            addLog(`准备落盘保存世界书: ${activeWorldbook.value.name}...`);
+
+            // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"）
+            const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
+            const res = await window.electronAPI.saveWorldbook({
+                filePath: activeWorldbook.value.path,
+                data: plainData
+            });
+
+            if (res.success) {
+                addLog(`✅ 保存成功: ${activeWorldbook.value.name}`, 'success');
+                nativeAlert('世界书物理落盘保存成功！', 'info');
+            } else {
+                addLog(`❌ 保存失败: ${res.error}`, 'error');
+                nativeAlert(`世界书保存失败: ${res.error}`, 'error');
+            }
+        };
+
+        // 提供独立的世界书本地导出功能（方便开发测试时脱离环境发给别人）
+        const exportActiveWorldbook = () => {
+            if (!activeWorldbook.value) return;
+            const blob = new Blob([JSON.stringify(activeWorldbook.value.data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = activeWorldbook.value.name || 'worldbook_export.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            addLog(`已触发本地独立导出: ${a.download}`);
+        };
+
+        // =========================================================
+        // 🌍 世界书词条深度编辑逻辑 (Entry IDE)
+        // =========================================================
+
+        // 新增一条空白词条
+        const addWorldbookEntry = () => {
+            if (!activeWorldbook.value) return;
+            if (!Array.isArray(activeWorldbook.value.data.entries)) {
+                activeWorldbook.value.data.entries = [];
+            }
+
+            // 生成唯一 UID（字符串：时间戳 + 随机段，避免同毫秒冲突）
+            const newUid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+            activeWorldbook.value.data.entries.unshift({
+                uid: newUid,
+                key: [],            // 主触词
+                keysecondary: [],   // 次级触词
+                content: '',        // 正文
+                constant: false,    // 是否常驻
+                selective: false,   // 是否条件触发
+                insertion_order: 50, // 插入顺序
+                order: 100,         // 权重
+                position: 1,        // 插入位置 (0: 顶部, 1: 底部, 2: 聊天前等)
+                enabled: true       // 启用状态
+            });
+
+            addLog(`➕ 新增了一条空白世界书词条 (UID: ${newUid})`, 'info');
+        };
+
+        // 删除一条词条（⚠️ Electron 中 window.confirm 静默返回 null，必须走 confirmDialog 原生确认框）
+        const deleteWorldbookEntry = async (index) => {
+            if (!activeWorldbook.value) return;
+            const entry = activeWorldbook.value.data.entries[index];
+            if (!entry) return;
+            const ok = await confirmDialog('确定要删除这条世界书设定吗？操作不可逆！');
+            if (ok) {
+                activeWorldbook.value.data.entries.splice(index, 1);
+                addLog(`🗑️ 删除了第 ${index + 1} 个词条`, 'warning');
+            }
+        };
+
+        // =========================================================
+        // 🔍 智能查重与版本清洗系统
+        // =========================================================
+        const showDedupeModal = ref(false);
+        const duplicateGroups = ref([]);
+
+        // 计算单张卡片的设定丰度（复用全局 estimateTokens，叠加描述/首句/示例/性格四段文本）
+        const estimateCardTokens = (card) => {
+            const d = card.data?.data || card.data || {};
+            const text = [d.description, d.first_mes, d.mes_example, d.personality].filter(Boolean).join('\n');
+            return estimateTokens(text);
+        };
+
+        // 启动全库查重扫描
+        const startDedupeScan = () => {
+            if (library.value.length === 0) {
+                nativeAlert('卡片库为空，无法查重！', 'warning');
+                return;
+            }
+
+            const groups = {};
+            // 1. 聚类：按角色名称分组
+            library.value.forEach(card => {
+                const name = (card.name || '未命名').trim();
+                if (!groups[name]) groups[name] = [];
+                groups[name].push(card);
+            });
+
+            // 2. 筛选并排序：只保留有重复的组，组内按 Token 丰度从高到低排序
+            duplicateGroups.value = Object.entries(groups)
+                .filter(([name, cards]) => cards.length > 1)
+                .map(([name, cards]) => {
+                    cards.forEach(c => {
+                        c._tokens = estimateCardTokens(c);
+                    });
+                    // Token 最丰富的排在最前面，作为“推荐保留项”
+                    cards.sort((a, b) => b._tokens - a._tokens);
+                    return { name, cards };
+                });
+
+            if (duplicateGroups.value.length === 0) {
+                nativeAlert('🎉 恭喜！当前库中极为整洁，未发现同名重复的角色卡！', 'info');
+            } else {
+                showDedupeModal.value = true;
+            }
+        };
+
+        // 一键清理：保留指定卡片，其余送入回收站
+        const resolveDedupeGroup = async (groupIndex, keepCardPath) => {
+            const group = duplicateGroups.value[groupIndex];
+            if (!group) return;
+
+            // 选出所有不等于 keepCardPath 的卡片路径（即准备扔掉的冗余版本）
+            const pathsToTrash = group.cards
+                .filter(c => c.path !== keepCardPath)
+                .map(c => c.path);
+
+            if (pathsToTrash.length === 0) return;
+
+            // ⚠️ 必须用 confirmDialog（window.confirm 在 Electron 中静默返回 null）
+            const ok = await confirmDialog(`确定要将另外 ${pathsToTrash.length} 个历史版本/重复卡移入回收站吗？`);
+            if (!ok) return;
+
+            const res = await window.electronAPI.trashFiles(pathsToTrash);
+            if (res && res.success) {
+                // 3. 先记录当前正在编辑的卡片是否会被清理
+                const currentLibItem = library.value.find(item => item.data === cardData.value);
+                const currentTrashed = !!(currentLibItem && pathsToTrash.includes(currentLibItem.path));
+
+                // 2. 从内存库中物理踢出已清理的卡片
+                library.value = library.value.filter(c => !pathsToTrash.includes(c.path));
+
+                // 1. 从查重视图中移除该组
+                duplicateGroups.value.splice(groupIndex, 1);
+
+                // 3. 若当前编辑卡片被清理，关闭编辑器
+                if (currentTrashed) reset();
+
+                nativeAlert(`清理成功！已将 ${res.count} 张冗余卡片移入回收站。`, 'info');
+            } else {
+                nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
         return {
             theme, toggleTheme, appSettings, showSettingsModal, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
@@ -2552,7 +2793,14 @@ const app = createApp({
             tagModalVisible, tagInput, tagModalTitle,
             confirmSingleTag, closeSingleTagModal,
             promptModalVisible, promptModalTitle, promptInput,
-            confirmPrompt, cancelPrompt
+            confirmPrompt, cancelPrompt,
+            // 🌍 世界书双引擎模式
+            appMode, worldbooks, activeWorldbook, editorLogs,
+            loadWorldbooks, saveActiveWorldbook, exportActiveWorldbook,
+            // 🌍 世界书词条深度编辑 (Entry IDE)
+            addWorldbookEntry, deleteWorldbookEntry,
+            // 🔍 智能查重与版本清洗
+            showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup
         };
     }
 });
