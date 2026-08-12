@@ -2803,6 +2803,43 @@ const app = createApp({
             addLog(`已触发本地独立导出: ${a.download}`);
         };
 
+        // ✂️ 轻量级世界书拆分引擎 (基于当前搜索结果/过滤词条)
+        const exportFilteredWorldbook = () => {
+            if (!activeWorldbook.value) return;
+
+            const currentEntries = filteredWorldbookEntries.value;
+            if (!currentEntries || currentEntries.length === 0) {
+                nativeAlert('当前没有可导出的词条！', 'warning');
+                return;
+            }
+
+            // 组装新世界书的 JSON 结构
+            const suffix = entrySearchQuery.value ? `_${entrySearchQuery.value.trim()}篇` : '_完整导出';
+            const newWbName = (activeWorldbook.value.data.name || '拆分世界书') + suffix;
+
+            // 清洗 UI 字段（剥离 _ 前缀临时字段与 Vue Proxy）
+            const cleanEntries = JSON.parse(JSON.stringify(currentEntries, (key, val) => key.startsWith('_') ? undefined : val));
+
+            const exportData = {
+                name: newWbName,
+                description: `这是从原版世界书拆分出的子集。包含 ${cleanEntries.length} 个词条。`,
+                entries: cleanEntries
+            };
+
+            // 触发浏览器下载
+            const blob = new Blob([JSON.stringify(exportData, null, 4)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${newWbName}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            addLog(`✂️ 成功拆分并导出世界书: ${newWbName}.json`, 'success');
+        };
+
         // 智能保存：世界书模式下保存世界书，角色卡模式下保存当前卡片（文件菜单共用入口）
         const saveCurrentAsset = async () => {
             if (appMode.value === 'worldbooks' && activeWorldbook.value) return saveActiveWorldbook();
@@ -3328,6 +3365,166 @@ const app = createApp({
             showDiffDetailModal.value = true;
         };
 
+        // =========================================================
+        // 🌐 世界书可视化关系图谱 (ECharts Graph)
+        // =========================================================
+        const showWbGraphModal = ref(false);
+        let wbChartInstance = null;
+
+        const openWbGraphModal = () => {
+            if (!activeWorldbook.value || !activeWorldbook.value.data || !activeWorldbook.value.data.entries || activeWorldbook.value.data.entries.length === 0) {
+                nativeAlert('当前世界书没有词条，无法生成关系图谱！', 'warning');
+                return;
+            }
+            showWbGraphModal.value = true;
+
+            // 待 DOM 挂载后渲染 ECharts
+            nextTick(() => {
+                const chartDom = document.getElementById('wb-graph-container');
+                if (!chartDom) return;
+
+                if (wbChartInstance) wbChartInstance.dispose();
+                wbChartInstance = echarts.init(chartDom, theme.value === 'light' ? 'light' : 'dark');
+
+                const entries = activeWorldbook.value.data.entries;
+                const nodes = [];
+                const links = [];
+
+                // 构建节点 (Nodes)
+                entries.forEach((e, idx) => {
+                    const label = e.comment || (Array.isArray(e.key) ? e.key.join('/') : e.key) || `词条 #${idx + 1}`;
+                    nodes.push({
+                        id: String(e.uid || idx),
+                        name: label,
+                        symbolSize: Math.max(22, Math.min(48, 18 + (e.content || '').length / 25)),
+                        entryIndex: idx,
+                        itemStyle: {
+                            color: e.enabled === false ? '#71717a' : (e.constant ? '#6366f1' : '#d97706')
+                        }
+                    });
+                });
+
+                // 构建引用连线 (Edges: 当 eA 的 content 包含 eB 的 trigger key 时拉线)
+                entries.forEach((eA, idxA) => {
+                    const contentA = (eA.content || '').toLowerCase();
+                    if (!contentA) return;
+
+                    entries.forEach((eB, idxB) => {
+                        if (idxA === idxB) return;
+                        const keysB = Array.isArray(eB.key) ? eB.key : (eB.key ? [eB.key] : []);
+                        const hit = keysB.some(k => k && k.trim() && contentA.includes(k.trim().toLowerCase()));
+                        if (hit) {
+                            links.push({
+                                source: String(eA.uid || idxA),
+                                target: String(eB.uid || idxB),
+                                lineStyle: { curveness: 0.1, opacity: 0.5 }
+                            });
+                        }
+                    });
+                });
+
+                const option = {
+                    backgroundColor: 'transparent',
+                    tooltip: {
+                        formatter: (params) => {
+                            if (params.dataType === 'node') {
+                                return `<b>${params.name}</b><br/>👉 点击节点可跳转直达词条`;
+                            }
+                            return `<b>关联引用</b>: ${params.data.source} ➔ ${params.data.target}`;
+                        }
+                    },
+                    series: [{
+                        type: 'graph',
+                        layout: 'force',
+                        data: nodes,
+                        links: links,
+                        roam: true,
+                        label: { show: true, position: 'right', fontSize: 11, color: theme.value === 'light' ? '#18181b' : '#f4f4f5' },
+                        force: { repulsion: 140, edgeLength: 90, gravity: 0.08 },
+                        edgeSymbol: ['none', 'arrow'],
+                        edgeSymbolSize: [4, 7],
+                        lineStyle: { color: '#a1a1aa', width: 1.2 }
+                    }]
+                };
+
+                wbChartInstance.setOption(option);
+
+                // 点击节点事件：关闭图谱，直接高亮/展开指定词条
+                wbChartInstance.off('click');
+                wbChartInstance.on('click', (params) => {
+                    if (params.dataType === 'node' && params.data.entryIndex !== undefined) {
+                        showWbGraphModal.value = false;
+                        const targetEntry = activeWorldbook.value.data.entries[params.data.entryIndex];
+                        if (targetEntry) targetEntry._collapsed = false; // 自动展开
+                        addLog(`📍 通过图谱定位到词条: #${params.data.entryIndex + 1}`, 'info');
+                    }
+                });
+            });
+        };
+
+        // =========================================================
+        // 🔗 多书一键合并引擎 (Worldbook Merger)
+        // =========================================================
+        const showWbMergeModal = ref(false);
+        const selectedWbMergePaths = ref([]);
+
+        const openWbMergeModal = () => {
+            if (worldbooks.value.length < 2) {
+                nativeAlert('当前载入的世界书少于 2 本，无需合并！', 'warning');
+                return;
+            }
+            selectedWbMergePaths.value = [];
+            showWbMergeModal.value = true;
+        };
+
+        const executeWorldbookMerge = () => {
+            if (selectedWbMergePaths.value.length < 2) {
+                nativeAlert('请至少勾选 2 本世界书进行合并！', 'warning');
+                return;
+            }
+
+            const targetWbs = worldbooks.value.filter(wb => selectedWbMergePaths.value.includes(wb.path));
+            const mergedEntries = [];
+            const seenMap = new Set(); // 指纹去重: Key + Content
+
+            targetWbs.forEach(wb => {
+                const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
+                entries.forEach(e => {
+                    const keysStr = (Array.isArray(e.key) ? e.key.join(',') : e.key || '').trim().toLowerCase();
+                    const contentStr = (e.content || '').trim().toLowerCase();
+                    const signature = `${keysStr}:::${contentStr}`;
+
+                    if (!seenMap.has(signature)) {
+                        seenMap.add(signature);
+                        // 剔除 _collapsed 等临时 UI 字段
+                        const cleanEntry = JSON.parse(JSON.stringify(e, (k, v) => k.startsWith('_') ? undefined : v));
+                        cleanEntry.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                        mergedEntries.push(cleanEntry);
+                    }
+                });
+            });
+
+            const mergeName = `合并世界书_${targetWbs.length}本`;
+            const mergedWbData = {
+                name: mergeName,
+                description: `由 [${targetWbs.map(w => (w.data && w.data.name) || w.name).join(', ')}] 合并而成，包含 ${mergedEntries.length} 个词条。`,
+                entries: mergedEntries
+            };
+
+            const newWbItem = {
+                path: `virtual_merged_${Date.now()}.json`,
+                name: `${mergeName}.json`,
+                data: mergedWbData
+            };
+
+            worldbooks.value.unshift(newWbItem);
+            activeWorldbook.value = newWbItem;
+            showWbMergeModal.value = false;
+
+            nativeAlert(`🎉 成功合并 ${targetWbs.length} 本世界书！共生成 ${mergedEntries.length} 个去重词条。`, 'info');
+            addLog(`🔗 完成多书合并: ${mergeName}`, 'success');
+        };
+
         return {
             theme, toggleTheme, appSettings, showSettingsModal, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
@@ -3383,7 +3580,7 @@ const app = createApp({
             confirmPrompt, cancelPrompt,
             // 🌍 世界书双引擎模式
             appMode, worldbooks, activeWorldbook, lastWorldbookDirPath, editorLogs, showEditorLogs, addLog,
-            loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, saveCurrentAsset,
+            loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, exportFilteredWorldbook, saveCurrentAsset,
             // 🌍 世界书词条深度编辑 (Entry IDE)
             addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
             entrySearchQuery, isAllEntriesCollapsed, filteredWorldbookEntries, toggleAllEntriesCollapse,
@@ -3399,7 +3596,9 @@ const app = createApp({
             wbSearchQuery, wbFilterType, filteredWorldbooks,
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
             // ⚖️ 双屏差异比对器 (Diff Inspector)
-            showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal
+            showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal,
+            // 🌐 世界书关系图谱 + 🔗 多书合并
+            showWbGraphModal, openWbGraphModal, showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge
         };
     }
 });

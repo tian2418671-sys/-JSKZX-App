@@ -419,6 +419,7 @@
                     <div class="p-2 border-b border-zinc-800 bg-zinc-900 space-y-1.5 shrink-0">
                         <div class="flex gap-1.5">
                             <input v-model="wbSearchQuery" type="text" placeholder="🔍 搜索世界书..." class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs outline-none text-zinc-200 placeholder-zinc-500 focus:border-amber-500">
+                            <button @click="openWbMergeModal" class="px-2 py-1 bg-zinc-800 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30 text-xs font-bold rounded shrink-0 shadow" title="选择多本世界书进行合并">🔗 合并</button>
                             <button @click="startWorldbookDedupeScan" class="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shrink-0 shadow" title="世界书对比与查重">🔍 查重</button>
                         </div>
                         <div class="flex gap-1 text-[10px]">
@@ -845,6 +846,12 @@
                             </div>
 
                             <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                <button @click="openWbGraphModal" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="查看当前世界书的词条关联图谱">
+                                    🌐 关系图谱
+                                </button>
+                                <button @click="exportFilteredWorldbook" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="将当前搜索过滤出的词条拆分为独立世界书">
+                                    📤 拆分导出
+                                </button>
                                 <button @click="toggleAllEntriesCollapse" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap">
                                     {{ isAllEntriesCollapsed ? '↔️ 展开' : '↕️ 折叠' }}
                                 </button>
@@ -1842,6 +1849,52 @@
             </div>
         </div>
 
+    </div>
+
+    <!-- ================= [ 🌐 世界书词条逻辑关联图谱 ] ================= -->
+    <div v-if="showWbGraphModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbGraphModal = false">
+        <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-5xl w-full h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-amber-500/10">
+                <div class="flex items-center gap-2">
+                    <span class="text-base font-bold text-amber-500">🌐 世界书词条逻辑关联图谱</span>
+                    <span class="text-xs text-zinc-400 font-mono">（紫节点: 常驻词条 | 橙节点: 触发词条 | 点击节点跳转）</span>
+                </div>
+                <button @click="showWbGraphModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
+            </div>
+
+            <div class="flex-1 w-full relative">
+                <div id="wb-graph-container" class="w-full h-full"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= [ 🔗 多本世界书智能合并 ] ================= -->
+    <div v-if="showWbMergeModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbMergeModal = false">
+        <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-lg w-full max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-amber-500/10">
+                <span class="text-base font-bold text-amber-500">🔗 多本世界书智能合并</span>
+                <button @click="showWbMergeModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
+            </div>
+
+            <div class="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-2">
+                <p class="text-xs text-zinc-400 mb-2">请勾选需要合并的世界书（将自动剔除相同的重复词条）：</p>
+                <label v-for="wb in worldbooks" :key="wb.path" class="flex items-center gap-3 p-2.5 bg-zinc-900/50 border border-zinc-700 rounded-lg cursor-pointer hover:border-amber-500/50 transition">
+                    <input type="checkbox" :value="wb.path" v-model="selectedWbMergePaths" class="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0">
+                    <div class="flex flex-col min-w-0 flex-1">
+                        <span class="text-xs font-bold text-zinc-200 truncate">{{ (wb.data && wb.data.name) || wb.name }}</span>
+                        <span class="text-[10px] text-zinc-500 font-mono">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 个词条 | {{ wb.name }}</span>
+                    </div>
+                </label>
+            </div>
+
+            <div class="p-3 border-t border-zinc-800 flex justify-between items-center shrink-0 bg-zinc-900/50">
+                <span class="text-xs text-amber-400 font-mono">已选 {{ selectedWbMergePaths.length }} 本</span>
+                <div class="flex gap-2">
+                    <button @click="showWbMergeModal = false" class="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300">取消</button>
+                    <button @click="executeWorldbookMerge" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shadow transition">🚀 开始合并</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 应用逻辑以 ES Module 方式引入（拆分为 js/ 目录下的模块） -->

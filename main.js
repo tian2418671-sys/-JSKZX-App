@@ -723,31 +723,42 @@ app.whenReady().then(() => {
       if (!filePath) return { success: false, error: '文件路径为空。' };
       if (!fs.existsSync(filePath)) return { success: false, error: '原文件不存在，无法保存。' };
 
-      // --- 快照备份到 .bak_history（只保留最近 5 份，防止磁盘膨胀） ---
-      const dir = path.dirname(filePath);
-      const bakDir = path.join(dir, '.bak_history');
-      if (!fs.existsSync(bakDir)) fs.mkdirSync(bakDir, { recursive: true });
-
-      const fileName = path.basename(filePath);
-      const timeStr = new Date().toISOString().replace(/[:.]/g, '-');
-      fs.copyFileSync(filePath, path.join(bakDir, `${timeStr}_${fileName}`));
-      try {
-        const baks = fs.readdirSync(bakDir).filter(f => f.includes(fileName));
-        if (baks.length > 5) {
-          baks.sort().slice(0, baks.length - 5).forEach(oldBak => fs.unlinkSync(path.join(bakDir, oldBak)));
-        }
-      } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
-      // --------------------------------------------------
-
-      // 深度清洗 UI 临时字段（如 _collapsed / _tokens 等），保证落盘 JSON 100% 符合酒馆原生规范
+      // 1. 数据清洗 (剔除 _collapsed 等临时 UI 字段，保证落盘 JSON 100% 符合酒馆原生规范)
       const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
-        if (key.startsWith('_')) return undefined; // 剔除所有 UI 内部临时字段
+        if (key.startsWith('_')) return undefined;
         return value;
       }));
 
-      await fs.promises.writeFile(filePath, JSON.stringify(cleanData, null, 4), 'utf-8');
+      const fileContent = JSON.stringify(cleanData, null, 4);
+
+      // 2. 物理快照备份逻辑 (保留最近 10 次)
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
+      if (!fs.existsSync(backupDir)) {
+        await fs.promises.mkdir(backupDir, { recursive: true });
+      }
+
+      const baseName = path.basename(filePath, '.json');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = path.join(backupDir, `${baseName}_${timestamp}.json`);
+
+      // 备份当前原文件
+      await fs.promises.copyFile(filePath, backupPath);
+
+      // 清理老旧备份，只保留同名文件的最近 10 份
+      const files = await fs.promises.readdir(backupDir);
+      const myBackups = files.filter(f => f.startsWith(baseName + '_')).sort();
+      if (myBackups.length > 10) {
+        const filesToDelete = myBackups.slice(0, myBackups.length - 10);
+        for (const f of filesToDelete) {
+          await fs.promises.unlink(path.join(backupDir, f)).catch(() => { });
+        }
+      }
+
+      // 3. 覆盖写入新文件
+      await fs.promises.writeFile(filePath, fileContent, 'utf-8');
       return { success: true };
     } catch (err) {
+      console.error('保存世界书失败:', err);
       return { success: false, error: err.message };
     }
   });
