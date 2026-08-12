@@ -1539,13 +1539,14 @@
                         </div>
 
                         <!-- 组内卡片横向对比视图 -->
-                        <div class="flex gap-4 overflow-x-auto custom-scrollbar pb-2">
+                        <!-- 【修复】overflow-x-auto 会把 overflow-y 也变为 auto（纵向裁剪）；加 pt-3 容纳徽章上移 -->
+                        <div class="flex gap-4 overflow-x-auto custom-scrollbar pt-3 pb-2">
                             <div v-for="(c, cIndex) in group.cards" :key="cIndex"
                                  class="flex-shrink-0 w-72 bg-zinc-800/80 border rounded-lg p-3 flex flex-col transition relative"
                                  :class="cIndex === 0 ? 'border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : 'border-zinc-700'">
 
-                                <!-- 皇冠标识：综合最优版推荐 -->
-                                <div v-if="cIndex === 0" class="absolute -top-3 -left-3 flex items-center gap-1 bg-emerald-900/80 px-2 py-0.5 rounded-full border border-emerald-500 shadow-md z-10">
+                                <!-- 皇冠标识：综合最优版推荐（left-1.5 改为卡片内定位，避免向左溢出被滚动容器裁剪） -->
+                                <div v-if="cIndex === 0" class="absolute -top-3 left-1.5 flex items-center gap-1 bg-emerald-900/80 px-2 py-0.5 rounded-full border border-emerald-500 shadow-md z-10">
                                     <span class="text-lg leading-none">👑</span>
                                     <span class="text-[10px] text-emerald-400 font-bold">综合最优推荐</span>
                                 </div>
