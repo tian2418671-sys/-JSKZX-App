@@ -2765,6 +2765,141 @@ const app = createApp({
             }
         };
 
+        // =========================================================
+        // 🌍 世界书扩展功能：网址导入与重命名
+        // =========================================================
+        const importUrl = ref('');          // 网址导入输入框绑定
+        const isImportingWb = ref(false);   // 导入中 loading 状态
+
+        // 拉取远程 JSON 文本：优先渲染层 fetch（Discord/GitHub 等允许 CORS 的直链），
+        // 失败时回退主进程 net.fetch 转发（彻底绕开渲染层跨域限制）
+        const fetchRemoteText = async (url) => {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`网络请求失败 (状态码: ${response.status})`);
+                return await response.text();
+            } catch (err) {
+                if (window.electronAPI && typeof window.electronAPI.fetchWbUrl === 'function') {
+                    const res = await window.electronAPI.fetchWbUrl(url);
+                    if (res && res.success) return res.data;
+                    throw new Error((res && res.error) || err.message);
+                }
+                throw err;
+            }
+        };
+
+        // 1. 网址导入世界书（Discord / GitHub 等 .json 直链）
+        const importWorldbookFromUrl = async () => {
+            const url = importUrl.value.trim();
+            if (!url) {
+                nativeAlert('请先输入世界书的 JSON 直链网址！', 'warning');
+                return;
+            }
+            if (!/^https?:\/\//i.test(url)) {
+                nativeAlert('网址格式不正确，请粘贴以 http:// 或 https:// 开头的 .json 直链。', 'warning');
+                return;
+            }
+
+            isImportingWb.value = true;
+            try {
+                addLog(`开始从网址导入世界书: ${url}`);
+                const text = await fetchRemoteText(url);
+                const wbData = JSON.parse(text);
+
+                // 归一化词条：兼容酒馆 V1/V2 数组与第三方对象字典格式
+                let entries = Array.isArray(wbData) ? wbData : (wbData.entries || []);
+                if (entries && typeof entries === 'object' && !Array.isArray(entries)) {
+                    entries = Object.values(entries);
+                }
+                if (!Array.isArray(entries)) entries = [];
+
+                // 组装世界书（复用本应用 worldbooks 列表的 { path, name, data } 结构）
+                const bookName = (wbData.name || `网络导入世界书_${new Date().toLocaleTimeString('zh-CN', { hour12: false }).replace(/:/g, '-')}`).trim();
+                const plainData = {
+                    ...wbData,
+                    name: bookName,
+                    description: wbData.description || '通过网址 URL 导入的世界书',
+                    entries
+                };
+                const safeFileName = `${bookName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+                const newWb = {
+                    path: '',
+                    name: safeFileName,
+                    data: plainData,
+                    imported: true // 标记为网络导入（尚未落盘时路径为空）
+                };
+
+                // 落盘保存：优先存到上次世界书目录，否则询问用户选择目录
+                let saveDir = lastWorldbookDirPath.value;
+                if (!saveDir) {
+                    addLog('未检测到上次世界书目录，请选择保存位置...', 'warning');
+                    saveDir = await window.electronAPI.selectGenericFolder();
+                }
+                if (saveDir) {
+                    const filePath = `${saveDir.replace(/[\\/]+$/, '')}\\${safeFileName}`;
+                    const saveRes = await window.electronAPI.createWorldbook({ filePath, data: plainData });
+                    if (saveRes && saveRes.success) {
+                        newWb.path = filePath;
+                        addLog(`💾 已保存到: ${filePath}`, 'success');
+                    } else {
+                        addLog(`⚠️ 落盘失败: ${(saveRes && saveRes.error) || '未知错误'}，已保留在内存`, 'warning');
+                    }
+                } else {
+                    addLog('用户取消选择目录，导入的世界书仅保留在当前会话。', 'warning');
+                }
+
+                // 加入世界书库并设为当前编辑对象
+                worldbooks.value.push(newWb);
+                activeWorldbook.value = newWb;
+                importUrl.value = '';
+                addLog(`🎉 成功导入世界书: ${bookName}（共 ${entries.length} 个词条）`, 'success');
+                nativeAlert(`🎉 成功导入世界书: ${bookName}\n共包含 ${entries.length} 个词条。`, 'info');
+            } catch (error) {
+                console.error('世界书导入失败:', error);
+                addLog(`❌ 世界书导入失败: ${error.message}`, 'error');
+                nativeAlert(`❌ 导入失败！请确保网址是直接指向 JSON 文件的有效直链，并且没有被跨域拦截。\n错误详情: ${error.message}`, 'error');
+            } finally {
+                isImportingWb.value = false;
+            }
+        };
+
+        // 2. 世界书重命名（更新内部名称 + 物理文件同步改名）
+        const renameWorldbook = async (wb) => {
+            if (!wb) return;
+            const oldName = ((wb.data && wb.data.name) || wb.name || '未命名世界书').replace(/\.json$/i, '');
+            const newName = await appPrompt('✏️ 请输入新的世界书名称：', oldName);
+            if (newName === null || newName.trim() === '' || newName.trim() === oldName) return;
+            const finalName = newName.trim();
+
+            // 更新世界书内部名称（列表与 IDE 标题即时生效）
+            if (wb.data) wb.data.name = finalName;
+
+            const safeFileName = `${finalName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+
+            // 本地文件：同步重命名物理文件，保持磁盘与内存一致
+            if (wb.path) {
+                const oldPath = wb.path;
+                const dir = oldPath.replace(/[\\/][^\\/]*$/, '');
+                const newPath = `${dir}\\${safeFileName}`;
+                if (oldPath !== newPath) {
+                    const res = await window.electronAPI.renameWorldbookFile({ oldPath, newPath });
+                    if (res && res.success) {
+                        wb.path = newPath;
+                        wb.name = safeFileName;
+                        addLog(`📝 已重命名世界书: ${oldName} → ${finalName}`, 'success');
+                        nativeAlert(`✏️ 重命名成功！\n新名称: ${finalName}\n文件已同步改名为: ${safeFileName}`, 'info');
+                    } else {
+                        addLog(`⚠️ 物理文件改名失败: ${(res && res.error) || '未知错误'}（内部名称已更新）`, 'warning');
+                        nativeAlert(`内部名称已更新，但物理文件改名失败: ${(res && res.error) || '未知错误'}`, 'warning');
+                    }
+                }
+            } else {
+                // 内存书（本次会话导入但未落盘）：仅同步显示文件名
+                wb.name = safeFileName;
+                addLog(`📝 已重命名世界书: ${oldName} → ${finalName}`, 'success');
+            }
+        };
+
         // 物理保存当前世界书
         const saveActiveWorldbook = async () => {
             if (!activeWorldbook.value) return;
@@ -3762,6 +3897,8 @@ const app = createApp({
             // 🌍 世界书双引擎模式
             appMode, worldbooks, activeWorldbook, lastWorldbookDirPath, editorLogs, showEditorLogs, addLog,
             loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, exportFilteredWorldbook, saveCurrentAsset,
+            // 🌍 世界书网址导入与重命名
+            importUrl, isImportingWb, importWorldbookFromUrl, renameWorldbook,
             // 🌍 世界书词条深度编辑 (Entry IDE)
             addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
             entrySearchQuery, isAllEntriesCollapsed, filteredWorldbookEntries, toggleAllEntriesCollapse,

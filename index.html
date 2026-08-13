@@ -427,6 +427,25 @@
 
                 <!-- ============ 🌍 世界书模式 ============ -->
                 <template v-if="appMode === 'worldbooks'">
+                    <!-- 🌐 网址导入世界书工具栏 -->
+                    <div class="p-2 border-b border-zinc-800 bg-zinc-900 shrink-0">
+                        <div class="flex items-center gap-1.5">
+                            <div class="flex-1 flex items-center bg-black/40 border border-zinc-700 rounded overflow-hidden transition focus-within:border-emerald-500/50 min-w-0">
+                                <span class="pl-2.5 text-zinc-500 text-[10px] shrink-0">🔗 URL</span>
+                                <input v-model="importUrl" type="text"
+                                       placeholder="粘贴 Discord / GitHub 的 .json 直链..."
+                                       class="w-full bg-transparent text-xs text-zinc-300 px-2 py-1.5 outline-none"
+                                       @keyup.enter="importWorldbookFromUrl">
+                            </div>
+                            <button @click="importWorldbookFromUrl" :disabled="isImportingWb"
+                                    class="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="从 JSON 直链导入世界书">
+                                <span v-if="isImportingWb" class="animate-spin">⌛</span>
+                                <span v-else>⬇️</span>
+                                云端导入
+                            </button>
+                        </div>
+                    </div>
                     <!-- 世界书筛选：搜索 + 词条数过滤 + 查重入口 -->
                     <div class="p-2 border-b border-zinc-800 bg-zinc-900 space-y-1.5 shrink-0">
                         <div class="flex gap-1.5">
@@ -450,7 +469,13 @@
                              class="p-2.5 rounded-lg border cursor-pointer transition flex flex-col gap-1">
                             <div class="flex justify-between items-center gap-1">
                                 <span class="text-xs font-bold text-zinc-200 truncate">{{ (wb.data && wb.data.name) || wb.name }}</span>
-                                <span class="text-[10px] px-1.5 py-0.5 rounded font-mono bg-zinc-800 text-zinc-400 border border-zinc-700 whitespace-nowrap">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 词条</span>
+                                <div class="flex items-center gap-1 shrink-0">
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded font-mono bg-zinc-800 text-zinc-400 border border-zinc-700 whitespace-nowrap">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 词条</span>
+                                    <button @click.stop="renameWorldbook(wb)" title="重命名该世界书"
+                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-blue-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                        ✏️ 重命名
+                                    </button>
+                                </div>
                             </div>
                             <div class="text-[10px] opacity-60 truncate">📄 {{ wb.name }}</div>
                         </div>

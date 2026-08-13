@@ -727,6 +727,60 @@ app.whenReady().then(() => {
     }
   });
 
+  // 从网络拉取世界书 JSON 文本（主进程 net.fetch 转发，彻底绕开渲染层 CORS 限制；
+  // Discord CDN / GitHub Raw 等直链均可，前端 fetch 失败时自动回退到这里）
+  ipcMain.handle('wb:fetchUrl', async (event, url) => {
+    try {
+      if (!url || !/^https?:\/\//i.test(url)) {
+        return { success: false, error: '非法网址：仅支持 http/https 直链。' };
+      }
+      const response = await net.fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (JSK-Manager; compatible)' },
+        redirect: 'follow'
+      });
+      if (!response.ok) {
+        return { success: false, error: `网络请求失败 (状态码: ${response.status})` };
+      }
+      const text = await response.text();
+      if (text.length > 50 * 1024 * 1024) {
+        return { success: false, error: '响应体过大（超过 50MB），已中止拉取。' };
+      }
+      return { success: true, data: text };
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
+  // 新建世界书文件（网址导入落盘用；自动创建父目录，剔除 _ 前缀与 uid 临时字段防污染）
+  ipcMain.handle('wb:create', async (event, { filePath, data }) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      if (fs.existsSync(filePath)) return { success: false, error: '目标文件已存在，请换一个文件名。' };
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
+        if (key.startsWith('_') || key === 'uid') return undefined;
+        return value;
+      }));
+      await fs.promises.writeFile(filePath, JSON.stringify(cleanData, null, 4), 'utf-8');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 重命名世界书物理文件（内存列表同步由渲染进程负责；改名后 .bak_history 历史备份不受影响）
+  ipcMain.handle('wb:rename', async (event, { oldPath, newPath }) => {
+    try {
+      if (!oldPath || !newPath) return { success: false, error: '路径为空。' };
+      if (!fs.existsSync(oldPath)) return { success: false, error: '原文件不存在。' };
+      if (fs.existsSync(newPath)) return { success: false, error: '目标文件已存在，请换一个名称。' };
+      await fs.promises.rename(oldPath, newPath);
+      return { success: true, newPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==========================================
   // 🗑️ 系统级安全回收站接口 (跨盘移动防崩溃升级版)
   // ==========================================

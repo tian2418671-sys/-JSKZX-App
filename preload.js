@@ -54,6 +54,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scanWorldbooks: (dirPath) => ipcRenderer.invoke('wb:scan', dirPath),
     // 🌍 世界书专属通道：物理覆写世界书文件（保存前自动 .bak_history 快照备份）
     saveWorldbook: (params) => ipcRenderer.invoke('wb:save', params),
+    // 🌍 世界书专属通道：从网络拉取世界书 JSON（主进程转发，绕开渲染层 CORS）
+    fetchWbUrl: (url) => ipcRenderer.invoke('wb:fetchUrl', url),
+    // 🌍 世界书专属通道：新建世界书文件（网址导入落盘）
+    createWorldbook: (params) => ipcRenderer.invoke('wb:create', params),
+    // 🌍 世界书专属通道：重命名世界书物理文件
+    renameWorldbookFile: (params) => ipcRenderer.invoke('wb:rename', params),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
     trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
     // 🕒 智能查重：批量获取文件物理状态（修改时间/创建时间/大小）
