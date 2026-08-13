@@ -511,6 +511,10 @@
 
                                     <transition name="fade">
                                         <div v-show="wb._showActions" class="flex items-center gap-1 overflow-hidden">
+                                            <button @click.stop="openWbInFolder(wb)" title="在资源管理器中定位该世界书"
+                                                    class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-indigo-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                                📂
+                                            </button>
                                             <button @click.stop="renameWorldbook(wb)" title="重命名该世界书"
                                                     class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-blue-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
                                                 ✏️
@@ -1469,6 +1473,9 @@
                     </span>
                 </div>
 
+                <button @click="openWbInFolder(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
+                    <span class="text-sm">📁</span> 在资源管理器中打开
+                </button>
                 <button @click="renameWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-blue-600 hover:text-white flex items-center gap-2 transition-colors">
                     <span class="text-sm">✏️</span> 重命名世界书
                 </button>

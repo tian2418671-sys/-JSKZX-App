@@ -3173,6 +3173,26 @@ const app = createApp({
             wbContextMenu.value.show = false;
         };
 
+        // 打开世界书所在文件夹（定位并选中实际文件，绝不使用全局根目录）
+        const openWbInFolder = async (wb) => {
+            if (!wb) return;
+            if (!wb.path) {
+                nativeAlert('该世界书尚无本地文件（内存导入），无法定位文件夹。', 'warning');
+                return;
+            }
+            if (!window.electronAPI || typeof window.electronAPI.showItemInFolder !== 'function') {
+                nativeAlert('当前环境不支持打开文件夹。', 'warning');
+                return;
+            }
+            try {
+                await window.electronAPI.showItemInFolder(wb.path);
+                addLog(`📁 已在资源管理器中定位: ${(wb.data && wb.data.name) || wb.name}`, 'info');
+            } catch (e) {
+                addLog(`📁 定位失败: ${e.message}`, 'error');
+                nativeAlert(`打开文件夹失败: ${e.message}`, 'error');
+            }
+        };
+
         // 物理保存当前世界书
         const saveActiveWorldbook = async () => {
             if (!activeWorldbook.value) return;
@@ -4263,7 +4283,7 @@ const app = createApp({
             importUrl, isImportingWb, importWorldbookFromUrl, renameWorldbook,
             // 🌍 世界书文件夹导入 + 删除/克隆 + 专属右键菜单
             handleWorldbookFolderSelect, deleteWorldbook, duplicateWorldbook,
-            wbContextMenu, openWbContextMenu, closeWbContextMenu,
+            wbContextMenu, openWbContextMenu, closeWbContextMenu, openWbInFolder,
             // 📁 世界书分组
             currentWbCategory, wbCategories, changeWbCategory,
             // 💾 统一 IPC 落盘
