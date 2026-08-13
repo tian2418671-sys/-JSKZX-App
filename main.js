@@ -791,6 +791,18 @@ app.whenReady().then(() => {
     }
   });
 
+  // 打开全局回收站（世界书删除/查重清洗移入的 userData/jsTavern_Trash；不存在则先创建）
+  ipcMain.handle('sys:openGlobalTrash', async () => {
+    try {
+      const trashDir = path.join(app.getPath('userData'), 'jsTavern_Trash');
+      await fs.promises.mkdir(trashDir, { recursive: true });
+      shell.openPath(trashDir);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==========================================
   // 🗑️ 系统级安全回收站接口 (跨盘移动防崩溃升级版)
   // ==========================================

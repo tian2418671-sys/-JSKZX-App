@@ -276,6 +276,15 @@ const app = createApp({
             const res = await window.electronAPI.openPath(currentFolderPath.value + '\\.trash');
             if (!res.success) nativeAlert(res.error || '打开失败', 'error');
         };
+        // 打开全局回收站（世界书删除/查重清洗移入的 userData/jsTavern_Trash）
+        const openGlobalTrash = async () => {
+            if (!window.electronAPI || typeof window.electronAPI.openGlobalTrash !== 'function') {
+                nativeAlert('当前环境不支持打开全局回收站。', 'warning');
+                return;
+            }
+            const res = await window.electronAPI.openGlobalTrash();
+            if (!res.success) nativeAlert(`打开全局回收站失败: ${res.error}`, 'error');
+        };
 
         // 打开聊天测卡（映射到聊天 Tab）
         const openChatTab = () => { currentTab.value = 'chat'; initChat(); };
@@ -1830,10 +1839,12 @@ const app = createApp({
                 const start = Math.min(lastSelectedIndex.value, index);
                 const end = Math.max(lastSelectedIndex.value, index);
 
-                // 在当前页视图中进行连续选择
+                // 🔴 修复 BUG：列表渲染用 paginatedLibrary（分页切片，index 为页内 0~N），
+                // 原先这里索引 filteredLibrary（全局过滤数组），导致第 2 页起 Shift 连选会
+                // 错选到第 1 页的卡片。必须改为与页面视图一致的 paginatedLibrary。
                 for (let i = start; i <= end; i++) {
-                    const currentItem = filteredLibrary.value[i];
-                    if (!selectedIds.value.includes(currentItem.id)) {
+                    const currentItem = paginatedLibrary.value[i];
+                    if (currentItem && !selectedIds.value.includes(currentItem.id)) {
                         selectedIds.value.push(currentItem.id);
                     }
                 }
@@ -2762,6 +2773,11 @@ const app = createApp({
                     }
                 });
                 worldbooks.value = res.data;
+                // 【修复】重扫后按路径重绑当前编辑对象，找不到则清空，避免编辑已失效的旧对象
+                if (activeWorldbook.value) {
+                    const prevPath = activeWorldbook.value.path;
+                    activeWorldbook.value = res.data.find(w => w.path === prevPath) || null;
+                }
                 addLog(`扫描完成，共加载 ${res.data.length} 本世界书`, 'success');
             } else {
                 addLog(`扫描失败: ${res.error}`, 'error');
@@ -2863,6 +2879,13 @@ const app = createApp({
                 addLog(`开始从网址导入世界书: ${url}`);
                 const text = await fetchRemoteText(url);
                 const wbData = JSON.parse(text);
+
+                // 【加固】拒绝角色卡 JSON（与文件夹导入同一套校验口径）
+                const isRoleCard = wbData && typeof wbData === 'object' &&
+                    (wbData.spec || wbData.char_name || (wbData.data && (wbData.data.description || wbData.data.first_mes)));
+                if (isRoleCard) {
+                    throw new Error('检测到这是角色卡 JSON（含 char_name/spec 字段），并非世界书，已拒绝导入。');
+                }
 
                 // 归一化词条：兼容酒馆 V1/V2 数组与第三方对象字典格式
                 let entries = Array.isArray(wbData) ? wbData : (wbData.entries || []);
@@ -3046,7 +3069,7 @@ const app = createApp({
         const deleteWorldbook = async (wb) => {
             if (!wb) return;
             const displayName = (wb.data && wb.data.name) || wb.name || '未命名世界书';
-            const ok = await confirmDialog(`⚠️ 确定要删除世界书《${displayName}》吗？\n物理文件将移入全局回收站（可在 文件菜单>回收站 找回）。`);
+            const ok = await confirmDialog(`⚠️ 确定要删除世界书《${displayName}》吗？\n物理文件将移入全局回收站（可在 文件菜单>打开全局回收站 找回）。`);
             if (!ok) return;
 
             const index = worldbooks.value.findIndex(item => item === wb);
@@ -3077,7 +3100,7 @@ const app = createApp({
             }
 
             addLog(`🗑️ 已删除世界书: ${displayName}`, 'warning');
-            nativeAlert(`已删除世界书《${displayName}》。\n物理文件已移入全局回收站，可随时找回。`, 'info');
+            nativeAlert(`已删除世界书《${displayName}》。\n物理文件已移入全局回收站（文件菜单>打开全局回收站 可找回）。`, 'info');
         };
 
         // 3. 复制/克隆世界书（深拷贝 + 副本文件落盘）
@@ -3147,11 +3170,12 @@ const app = createApp({
         // 物理保存当前世界书
         const saveActiveWorldbook = async () => {
             if (!activeWorldbook.value) return;
-            addLog(`准备落盘保存世界书: ${activeWorldbook.value.name}...`);
+            const wb = activeWorldbook.value;
+            addLog(`准备落盘保存世界书: ${wb.name}...`);
 
             // 脱离 Proxy 代理进行序列化（避免 IPC "An object could not be cloned"），
             // 并剔除 IDE 展示字段 _collapsed 与前端临时 UID（酒馆原生世界书格式无 uid 字段）防污染
-            const plainData = JSON.parse(JSON.stringify(activeWorldbook.value.data));
+            const plainData = JSON.parse(JSON.stringify(wb.data));
             if (Array.isArray(plainData.entries)) {
                 plainData.entries.forEach(e => {
                     if (!e) return;
@@ -3159,8 +3183,19 @@ const app = createApp({
                     if (e.uid !== undefined) delete e.uid;
                 });
             }
+
+            // 【修复】内存态世界书（path 为空，如网址导入后未落盘）先补齐物理文件再保存
+            if (!wb.path) {
+                await syncWorldbooksToDisk();
+                if (!wb.path) {
+                    addLog(`❌ 保存失败: 该书仍停留在内存，请先点击工具栏「💾 落盘」`, 'error');
+                    nativeAlert(`世界书保存失败：该书仍在内存中，请先点击世界书工具栏的「💾 落盘」按钮，或重新导入时选择保存目录。`, 'error');
+                    return;
+                }
+            }
+
             const res = await window.electronAPI.saveWorldbook({
-                filePath: activeWorldbook.value.path,
+                filePath: wb.path,
                 data: plainData
             });
 
@@ -4166,7 +4201,7 @@ const app = createApp({
             theme, toggleTheme, appSettings, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
-            openBakFolder, openTrashFolder, openChatTab,
+            openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
             isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,

@@ -153,6 +153,7 @@
                             <div class="h-px bg-zinc-700 my-1"></div>
                             <button @click="openBakFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">⏱️ 查看历史快照 (.bak)</button>
                             <button @click="openTrashFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 查看回收站 (.trash)</button>
+                            <button @click="openGlobalTrash" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 打开全局回收站 (jsTavern_Trash)</button>
                         </div>
                     </div>
 
@@ -500,18 +501,30 @@
                                 <span class="text-xs font-bold text-zinc-200 truncate">{{ (wb.data && wb.data.name) || wb.name }}</span>
                                 <div class="flex items-center gap-1 shrink-0">
                                     <span class="text-[10px] px-1.5 py-0.5 rounded font-mono bg-zinc-800 text-zinc-400 border border-zinc-700 whitespace-nowrap">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 词条</span>
-                                    <button @click.stop="renameWorldbook(wb)" title="重命名该世界书"
-                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-blue-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
-                                        ✏️
+
+                                    <!-- ⚙️ 操作按钮折叠/展开（UI 状态存于包装对象 wb._showActions，不污染落盘 JSON） -->
+                                    <button @click.stop="wb._showActions = !wb._showActions"
+                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-amber-600 text-zinc-300 hover:text-white rounded transition whitespace-nowrap"
+                                            title="展开/收起操作按钮">
+                                        ⚙️ {{ wb._showActions ? '收起' : '操作' }}
                                     </button>
-                                    <button @click.stop="duplicateWorldbook(wb)" title="复制为副本"
-                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-emerald-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
-                                        📋
-                                    </button>
-                                    <button @click.stop="deleteWorldbook(wb)" title="删除该世界书（移入回收站）"
-                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-rose-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
-                                        🗑️
-                                    </button>
+
+                                    <transition name="fade">
+                                        <div v-show="wb._showActions" class="flex items-center gap-1 overflow-hidden">
+                                            <button @click.stop="renameWorldbook(wb)" title="重命名该世界书"
+                                                    class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-blue-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                                ✏️
+                                            </button>
+                                            <button @click.stop="duplicateWorldbook(wb)" title="复制为副本"
+                                                    class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-emerald-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                                📋
+                                            </button>
+                                            <button @click.stop="deleteWorldbook(wb)" title="删除该世界书（移入回收站）"
+                                                    class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-rose-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                                🗑️
+                                            </button>
+                                        </div>
+                                    </transition>
                                 </div>
                             </div>
                             <div class="text-[10px] opacity-60 truncate">📄 {{ wb.name }}</div>
