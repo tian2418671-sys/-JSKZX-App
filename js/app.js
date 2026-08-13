@@ -1576,6 +1576,12 @@ const app = createApp({
                         customTags: []
                     };
 
+                    // 【唯一性洗礼】防御性兜底：确保 id 永不缺失、也永不与 name 相同
+                    // （正常路径已生成随机 id；此守卫防止未来重构/新导入路径引入 id 复用或丢失的回归）
+                    if (!cardInfo.id || cardInfo.id === cardInfo.name) {
+                        cardInfo.id = cardInfo.path || `${cardInfo.name}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+                    }
+
                     // 触发自动标签和分类（会优先应用导入的历史配置）
                     processAutoTagsAndCategory(cardInfo);
                     library.value.push(cardInfo);
