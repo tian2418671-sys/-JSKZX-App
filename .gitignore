@@ -3,6 +3,7 @@ node_modules/
 
 # 构建产物
 dist/
+dist_new/
 out/
 
 # Electron 二进制副本/缓存（本地构建用，勿提交）
