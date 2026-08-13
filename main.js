@@ -644,19 +644,27 @@ app.whenReady().then(() => {
   }
 
   // 扫描世界书目录 (仅限 .json，经 isValidWorldbook 严格防伪过滤)
+  // 【修复】升级为深度递归扫描：穿透所有子文件夹/二级文件夹，只要含 .json 世界书就全部提取
   ipcMain.handle('wb:scan', async (event, dirPath) => {
     try {
       if (!dirPath || !fs.existsSync(dirPath)) {
         return { success: false, error: '目录不存在: ' + dirPath };
       }
-      const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
       const results = [];
 
-      for (const file of files) {
-        if (file.name.startsWith('.')) continue; // 忽略隐藏文件
+      // 深度递归扫描（不限层级；跳过隐藏文件/目录）
+      const walk = async (dir) => {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue; // 忽略隐藏文件/目录
+          const fullPath = path.join(dir, entry.name);
 
-        if (file.isFile() && path.extname(file.name).toLowerCase() === '.json') {
-          const fullPath = path.join(dirPath, file.name);
+          if (entry.isDirectory()) {
+            await walk(fullPath); // 递归进入子文件夹
+            continue;
+          }
+          if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.json') continue;
+
           try {
             const content = await fs.promises.readFile(fullPath, 'utf-8');
             const wbData = JSON.parse(content);
@@ -665,16 +673,18 @@ app.whenReady().then(() => {
             if (isValidWorldbook(wbData)) {
               results.push({
                 path: fullPath,
-                name: file.name,
+                name: entry.name,
                 data: wbData
               });
             }
           } catch (parseErr) {
             // 静默跳过损坏或非标准 JSON 文件
-            console.warn('[wb:scan] 跳过非世界书文件:', file.name, parseErr.message);
+            console.warn('[wb:scan] 跳过非世界书文件:', entry.name, parseErr.message);
           }
         }
-      }
+      };
+
+      await walk(dirPath);
       return { success: true, data: results };
     } catch (err) {
       return { success: false, error: err.message };

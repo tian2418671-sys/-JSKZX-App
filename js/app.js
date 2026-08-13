@@ -1875,6 +1875,7 @@ const app = createApp({
         // 打开右键菜单（带边缘碰撞检测，防止菜单超出屏幕）
         const openContextMenu = (event, item) => {
             event.preventDefault(); // 阻止浏览器默认右键菜单
+            if (wbContextMenu.value && wbContextMenu.value.show) closeWbContextMenu(); // 先收起世界书右键菜单
             let x = event.clientX;
             let y = event.clientY;
             // 假设右键菜单最大宽度 210px，最大高度 320px
@@ -1942,10 +1943,13 @@ const app = createApp({
             }
         };
 
-        // 点击页面任意地方自动关闭右键菜单
+        // 点击页面任意地方自动关闭右键菜单（角色卡 + 世界书共用）
         const handleGlobalClick = () => {
             if (contextMenu.value.visible) {
                 closeContextMenu();
+            }
+            if (wbContextMenu.value && wbContextMenu.value.show) {
+                closeWbContextMenu();
             }
         };
 
@@ -2771,6 +2775,60 @@ const app = createApp({
         const importUrl = ref('');          // 网址导入输入框绑定
         const isImportingWb = ref(false);   // 导入中 loading 状态
 
+        // =========================================================
+        // 💾 统一 IPC 落盘拦截器：保证没有任何世界书只停留在内存中
+        // ---------------------------------------------------------
+        // 本应用每本世界书是独立的 .json 文件（非单个数据库文件）：
+        //  - 重命名/删除必须按“文件路径”走物理 IPC（renameWorldbookFile / trashFiles）
+        //  - 新增/克隆/导入已各自调用 createWorldbook 落盘
+        // 因此这里只做“兜底”：把 path 为空（内存态）的世界书补齐保存到世界书目录。
+        // ⚠️ 不采用“整体数组覆盖写”：每本书独立文件 + wb:save 每次保存都建快照，
+        //    全量写会刷爆 .bak_history 备份目录。
+        const syncWorldbooksToDisk = async () => {
+            if (!window.electronAPI || typeof window.electronAPI.createWorldbook !== 'function') {
+                console.warn('未检测到 Electron IPC 环境，仅在内存中修改。');
+                return 0;
+            }
+
+            const pending = worldbooks.value.filter(wb => !wb.path);
+            if (pending.length === 0) {
+                addLog('💾 所有世界书均已落盘，无需同步。', 'info');
+                return 0;
+            }
+
+            let saveDir = lastWorldbookDirPath.value;
+            if (!saveDir) {
+                addLog('请选择世界书保存目录以完成落盘...', 'warning');
+                saveDir = await window.electronAPI.selectGenericFolder();
+                if (saveDir) lastWorldbookDirPath.value = saveDir;
+            }
+            if (!saveDir) {
+                addLog('用户取消选择目录，未能完成落盘。', 'warning');
+                return 0;
+            }
+
+            let synced = 0;
+            for (const wb of pending) {
+                const plainData = JSON.parse(JSON.stringify(wb.data || {}));
+                const safeFileName = (wb.name && wb.name.toLowerCase().endsWith('.json'))
+                    ? wb.name
+                    : `${(wb.name || 'worldbook').replace(/[\\/:*?"<>|]/g, '_')}.json`;
+                const filePath = `${saveDir.replace(/[\\/]+$/, '')}\\${safeFileName}`;
+                const res = await window.electronAPI.createWorldbook({ filePath, data: plainData });
+                if (res && res.success) {
+                    wb.path = filePath;
+                    synced++;
+                    addLog(`💾 已落盘: ${safeFileName}`, 'success');
+                } else {
+                    addLog(`⚠️ 落盘失败: ${(res && res.error) || '未知错误'} (${safeFileName})`, 'warning');
+                }
+            }
+            if (synced > 0) {
+                nativeAlert(`已将 ${synced} 本内存中的世界书保存到本地磁盘！`, 'info');
+            }
+            return synced;
+        };
+
         // 拉取远程 JSON 文本：优先渲染层 fetch（Discord/GitHub 等允许 CORS 的直链），
         // 失败时回退主进程 net.fetch 转发（彻底绕开渲染层跨域限制）
         const fetchRemoteText = async (url) => {
@@ -2875,6 +2933,7 @@ const app = createApp({
             if (wb.data) wb.data.name = finalName;
 
             const safeFileName = `${finalName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+            const prevKey = wb.path || wb.name || ''; // 记录旧持久化键（改名后迁移分组）
 
             // 本地文件：同步重命名物理文件，保持磁盘与内存一致
             if (wb.path) {
@@ -2886,6 +2945,7 @@ const app = createApp({
                     if (res && res.success) {
                         wb.path = newPath;
                         wb.name = safeFileName;
+                        migrateWbCategoryKey(prevKey, wb.path); // 分组键随文件路径迁移
                         addLog(`📝 已重命名世界书: ${oldName} → ${finalName}`, 'success');
                         nativeAlert(`✏️ 重命名成功！\n新名称: ${finalName}\n文件已同步改名为: ${safeFileName}`, 'info');
                     } else {
@@ -2896,8 +2956,192 @@ const app = createApp({
             } else {
                 // 内存书（本次会话导入但未落盘）：仅同步显示文件名
                 wb.name = safeFileName;
+                migrateWbCategoryKey(prevKey, wb.name); // 分组键随文件名迁移
                 addLog(`📝 已重命名世界书: ${oldName} → ${finalName}`, 'success');
             }
+        };
+
+        // =========================================================
+        // 🌍 世界书库：文件夹导入（独立于角色卡）+ 删除/克隆 + 右键菜单
+        // =========================================================
+
+        // 1. 世界书专用文件夹导入（独立 input 与处理函数，绝不与角色卡导入混用）
+        //    - 深度穿透所有层级子文件夹读取 .json (Bug 3)
+        //    - 严格世界书格式校验，杜绝误导入角色卡 JSON (Bug 1)
+        //    - 读取后清空 input 缓存，保证下次可随意更换目录 (Bug 2)
+        const handleWorldbookFolderSelect = async (event) => {
+            const files = Array.from(event.target.files || []);
+            if (files.length === 0) return;
+
+            let loadedCount = 0;
+            const addedNames = [];
+            for (const file of files) {
+                // 只处理 .json（webkitdirectory 已含所有层级的文件）
+                if (!file.name.toLowerCase().endsWith('.json')) continue;
+                try {
+                    const text = await file.text();
+                    const json = JSON.parse(text);
+
+                    // 严格校验：必须有世界书特征（entries / 纯数组），且不是角色卡 JSON
+                    const isRoleCard = json && typeof json === 'object' &&
+                        (json.spec || json.char_name || (json.data && (json.data.description || json.data.first_mes)));
+                    const hasEntries = json && typeof json === 'object' &&
+                        (Array.isArray(json.entries) || (json.entries && typeof json.entries === 'object'));
+                    if (isRoleCard || (!hasEntries && !Array.isArray(json))) {
+                        console.warn(`跳过非世界书文件: ${file.name}`);
+                        continue;
+                    }
+
+                    // 归一化词条：兼容 V1/V2 数组与对象字典格式
+                    let entries = Array.isArray(json) ? json : json.entries;
+                    if (entries && typeof entries === 'object' && !Array.isArray(entries)) entries = Object.values(entries);
+                    if (!Array.isArray(entries)) entries = [];
+
+                    const bookName = (json.name || file.name.replace(/\.json$/i, '')).trim();
+                    const plainData = {
+                        ...json,
+                        name: bookName,
+                        description: json.description || '从本地文件夹导入的世界书',
+                        entries
+                    };
+
+                    // 取文件绝对路径（Electron webUtils 支持 webkitdirectory 文件），保证可继续编辑保存
+                    let realPath = '';
+                    try {
+                        if (window.electronAPI && typeof window.electronAPI.getPathForFile === 'function') {
+                            realPath = window.electronAPI.getPathForFile(file) || '';
+                        }
+                    } catch (e) { /* 忽略 */ }
+
+                    // 同路径已存在则跳过
+                    if (realPath && worldbooks.value.some(w => w.path === realPath)) {
+                        console.warn(`已存在，跳过: ${realPath}`);
+                        continue;
+                    }
+
+                    worldbooks.value.push({ path: realPath, name: file.name, data: plainData });
+                    loadedCount++;
+                    addedNames.push(bookName);
+                    addLog(`📂 导入世界书: ${bookName}`, 'success');
+                } catch (e) {
+                    console.warn(`跳过无效文件 ${file.name}:`, e);
+                }
+            }
+
+            // ⚠️ 关键修复：清空 input 缓存，确保下次打开其他目录能正常触发 @change (Bug 2)
+            event.target.value = '';
+
+            // 统一 IPC 落盘：把路径获取失败（仍在内存）的世界书补齐保存到世界书目录
+            await syncWorldbooksToDisk();
+
+            if (loadedCount > 0) {
+                if (!activeWorldbook.value) activeWorldbook.value = worldbooks.value[worldbooks.value.length - 1];
+                nativeAlert(`🎉 成功扫描并导入 ${loadedCount} 本世界书！\n${addedNames.join('、')}`, 'info');
+            } else {
+                nativeAlert('⚠️ 未在该文件夹及子文件夹中找到有效的世界书 JSON 文件！', 'warning');
+            }
+        };
+
+        // 2. 删除世界书（列表移除 + 物理文件移入全局回收站，绝不物理删除）
+        const deleteWorldbook = async (wb) => {
+            if (!wb) return;
+            const displayName = (wb.data && wb.data.name) || wb.name || '未命名世界书';
+            const ok = await confirmDialog(`⚠️ 确定要删除世界书《${displayName}》吗？\n物理文件将移入全局回收站（可在 文件菜单>回收站 找回）。`);
+            if (!ok) return;
+
+            const index = worldbooks.value.findIndex(item => item === wb);
+            if (index === -1) return;
+            worldbooks.value.splice(index, 1);
+
+            // 清理持久化分组记录（删除后不留孤儿键）
+            const delKey = wb.path || wb.name || '';
+            if (delKey && wbCategoryMap.value[delKey] !== undefined) {
+                delete wbCategoryMap.value[delKey];
+                saveWbCategoriesMap();
+            }
+
+            // 若删除的是当前编辑对象，自动切换到下一本
+            if (activeWorldbook.value === wb) {
+                activeWorldbook.value = worldbooks.value[Math.min(index, worldbooks.value.length - 1)] || null;
+            }
+
+            // 物理文件移入全局回收站（存在本地文件时）
+            if (wb.path) {
+                try {
+                    const res = await window.electronAPI.trashFiles([wb.path]);
+                    if (res && res.success) addLog(`🗑️ 已将 ${res.count} 个世界书文件移入全局回收站`, 'warning');
+                    else addLog(`⚠️ 回收站移动失败: ${(res && res.error) || '未知错误'}`, 'warning');
+                } catch (e) {
+                    addLog(`⚠️ 回收站移动异常: ${e.message}`, 'warning');
+                }
+            }
+
+            addLog(`🗑️ 已删除世界书: ${displayName}`, 'warning');
+            nativeAlert(`已删除世界书《${displayName}》。\n物理文件已移入全局回收站，可随时找回。`, 'info');
+        };
+
+        // 3. 复制/克隆世界书（深拷贝 + 副本文件落盘）
+        const duplicateWorldbook = async (wb) => {
+            if (!wb) return;
+            const sourceName = (wb.data && wb.data.name) || wb.name || '未命名世界书';
+            const cloneName = `${sourceName} - 副本`;
+            const cloneData = JSON.parse(JSON.stringify(wb.data || {}));
+            cloneData.name = cloneName;
+
+            const safeFileName = `${cloneName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+            const newWb = { path: '', name: safeFileName, data: cloneData };
+
+            // 落盘位置：源文件同目录 → 上次世界书目录 → 询问用户
+            let saveDir = wb.path ? wb.path.replace(/[\\/][^\\/]*$/, '') : '';
+            if (!saveDir) saveDir = lastWorldbookDirPath.value;
+            if (!saveDir) {
+                addLog('请选择副本的保存位置...', 'warning');
+                saveDir = await window.electronAPI.selectGenericFolder();
+            }
+            if (saveDir) {
+                const filePath = `${saveDir.replace(/[\\/]+$/, '')}\\${safeFileName}`;
+                const saveRes = await window.electronAPI.createWorldbook({ filePath, data: cloneData });
+                if (saveRes && saveRes.success) {
+                    newWb.path = filePath;
+                    addLog(`💾 副本已保存到: ${filePath}`, 'success');
+                } else {
+                    addLog(`⚠️ 副本落盘失败: ${(saveRes && saveRes.error) || '未知错误'}，仅保留在内存`, 'warning');
+                }
+            } else {
+                addLog('用户取消选择目录，副本仅保留在当前会话。', 'warning');
+            }
+
+            worldbooks.value.push(newWb);
+            // 继承源书分组并持久化（副本默认归入源书所在分组）
+            const srcCat = getWbCategory(wb);
+            if (srcCat && srcCat.trim() !== '') {
+                newWb.category = srcCat;
+                const key = newWb.path || newWb.name || '';
+                if (key) {
+                    wbCategoryMap.value[key] = srcCat;
+                    saveWbCategoriesMap();
+                }
+            }
+            addLog(`📋 已创建世界书副本: ${cloneName}`, 'success');
+            nativeAlert(`📋 已复制世界书为: ${cloneName}\n共 ${Array.isArray(cloneData.entries) ? cloneData.entries.length : 0} 个词条。`, 'info');
+        };
+
+        // 4. 世界书专属右键快捷菜单
+        const wbContextMenu = ref({ show: false, x: 0, y: 0, wb: null });
+
+        const openWbContextMenu = (event, wb) => {
+            event.preventDefault(); // 阻止浏览器默认右键菜单
+            if (contextMenu.value.visible) closeContextMenu(); // 先收起角色卡菜单
+            // 边缘碰撞检测（菜单约 180x260，防越界）
+            const menuW = 180, menuH = 260;
+            let x = event.clientX, y = event.clientY;
+            if (x + menuW > window.innerWidth) x = window.innerWidth - menuW;
+            if (y + menuH > window.innerHeight) y = window.innerHeight - menuH;
+            wbContextMenu.value = { show: true, x: Math.max(4, x), y: Math.max(4, y), wb };
+        };
+
+        const closeWbContextMenu = () => {
+            wbContextMenu.value.show = false;
         };
 
         // 物理保存当前世界书
@@ -3251,7 +3495,78 @@ const app = createApp({
         const showWbDedupeModal = ref(false);  // 世界书对比查重弹窗开关
         const wbDuplicateGroups = ref([]);     // 世界书查重分组
 
-        // 计算属性：世界书列表筛选（搜索 + 词条数过滤）
+        // =========================================================
+        // 📁 世界书库：分组功能（Set 动态搜集 + localStorage 持久化）
+        // =========================================================
+        const currentWbCategory = ref('全部'); // 当前选中的分组
+
+        // 分组持久化映射：key(path||name) -> 分类名（重扫/重启后自动恢复）
+        const loadWbCategoriesMap = () => {
+            try { return JSON.parse(localStorage.getItem('jsTavern_wbCategories') || '{}'); } catch (e) { return {}; }
+        };
+        const wbCategoryMap = ref(loadWbCategoriesMap());
+        const saveWbCategoriesMap = () => {
+            try { localStorage.setItem('jsTavern_wbCategories', JSON.stringify(wbCategoryMap.value)); } catch (e) { /* 忽略 */ }
+        };
+
+        // 重命名后迁移持久化分组键（旧 path/name -> 新 path/name），避免分类在重扫后丢失
+        const migrateWbCategoryKey = (oldKey, newKey) => {
+            if (!oldKey || !newKey || oldKey === newKey) return;
+            if (wbCategoryMap.value[oldKey] !== undefined) {
+                wbCategoryMap.value[newKey] = wbCategoryMap.value[oldKey];
+                delete wbCategoryMap.value[oldKey];
+                saveWbCategoriesMap();
+            }
+        };
+
+        // 获取世界书分组：wb.category → 持久化映射 → '默认'
+        const getWbCategory = (wb) => {
+            if (!wb) return '默认';
+            if (wb.category && wb.category.trim() !== '') return wb.category.trim();
+            const key = wb.path || wb.name || '';
+            if (key && wbCategoryMap.value[key] && wbCategoryMap.value[key].trim() !== '') {
+                return wbCategoryMap.value[key].trim();
+            }
+            return '默认';
+        };
+
+        // 1. 自动提取所有分组（Set 去重；'默认' 始终保留；无书的分类自动消失）
+        const wbCategories = computed(() => {
+            const categories = new Set(['默认']);
+            worldbooks.value.forEach(wb => {
+                const cat = getWbCategory(wb);
+                if (cat && cat.trim() !== '') categories.add(cat.trim());
+            });
+            return Array.from(categories);
+        });
+
+        // 3. 修改世界书分组（自建弹窗替代 Electron 不支持的 prompt）
+        const changeWbCategory = async (wb) => {
+            if (!wb) return;
+            const displayName = (wb.data && wb.data.name) || wb.name || '未命名世界书';
+            const currentCat = getWbCategory(wb);
+            const newCat = await appPrompt(
+                `📁 将《${displayName}》移动到新分组\n\n请输入目标分组名称（当前：${currentCat}）：\n提示：输入全新的名字将自动创建新分组。`,
+                currentCat
+            );
+            if (newCat !== null && newCat.trim() !== '') {
+                const finalCat = newCat.trim();
+                wb.category = finalCat;
+                const key = wb.path || wb.name || '';
+                if (key) {
+                    wbCategoryMap.value[key] = finalCat;
+                    saveWbCategoriesMap();
+                }
+                addLog(`📁 已将《${displayName}》移动到分组: ${finalCat}`, 'info');
+                // 若当前筛选的分组已被移空，自动回落“全部”避免空列表困惑
+                if (currentWbCategory.value !== '全部' && currentWbCategory.value !== finalCat) {
+                    const stillHas = worldbooks.value.some(w => getWbCategory(w) === currentWbCategory.value);
+                    if (!stillHas) currentWbCategory.value = '全部';
+                }
+            }
+        };
+
+        // 计算属性：世界书列表筛选（搜索 + 词条数过滤 + 📁 分组过滤）
         const filteredWorldbooks = computed(() => {
             return worldbooks.value.filter(wb => {
                 const name = ((wb.data && wb.data.name) || wb.name || '').toLowerCase();
@@ -3263,7 +3578,13 @@ const app = createApp({
                 else if (wbFilterType.value === 'small') matchesFilter = entryCount > 0 && entryCount <= 15;
                 else if (wbFilterType.value === 'large') matchesFilter = entryCount > 15;
 
-                return matchesSearch && matchesFilter;
+                // 📁 分组过滤（'全部' 不过滤）
+                let matchesCategory = true;
+                if (currentWbCategory.value !== '全部') {
+                    matchesCategory = getWbCategory(wb) === currentWbCategory.value;
+                }
+
+                return matchesSearch && matchesFilter && matchesCategory;
             });
         });
 
@@ -3899,6 +4220,13 @@ const app = createApp({
             loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, exportFilteredWorldbook, saveCurrentAsset,
             // 🌍 世界书网址导入与重命名
             importUrl, isImportingWb, importWorldbookFromUrl, renameWorldbook,
+            // 🌍 世界书文件夹导入 + 删除/克隆 + 专属右键菜单
+            handleWorldbookFolderSelect, deleteWorldbook, duplicateWorldbook,
+            wbContextMenu, openWbContextMenu, closeWbContextMenu,
+            // 📁 世界书分组
+            currentWbCategory, wbCategories, changeWbCategory,
+            // 💾 统一 IPC 落盘
+            syncWorldbooksToDisk,
             // 🌍 世界书词条深度编辑 (Entry IDE)
             addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
             entrySearchQuery, isAllEntriesCollapsed, filteredWorldbookEntries, toggleAllEntriesCollapse,

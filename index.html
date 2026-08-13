@@ -445,6 +445,34 @@
                                 云端导入
                             </button>
                         </div>
+                        <!-- 📂 独立的世界书文件夹导入（与角色卡完全分离；穿透所有子文件夹；读取后自动清空缓存） -->
+                        <div class="mt-1.5 flex items-center gap-1.5">
+                            <label class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded border border-zinc-700/60 cursor-pointer transition shadow-sm"
+                                   title="选择世界书文件夹，自动穿透所有子文件夹扫描 .json 世界书">
+                                📂 打开世界书目录
+                                <input type="file" webkitdirectory directory multiple class="hidden" @change="handleWorldbookFolderSelect">
+                            </label>
+                            <button @click="syncWorldbooksToDisk" title="将仍停留在内存中（无本地文件）的世界书统一落盘保存到世界书目录"
+                                    class="px-3 py-1.5 bg-zinc-800 hover:bg-emerald-600 text-zinc-200 hover:text-white text-xs rounded border border-zinc-700/60 transition shadow-sm shrink-0">
+                                💾 落盘
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 📁 世界书分组切换导航条（Set 动态搜集；空分类自动消失） -->
+                    <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 shrink-0">
+                        <div class="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
+                            <button @click="currentWbCategory = '全部'"
+                                    :class="currentWbCategory === '全部' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                                    class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                                🌍 全部
+                            </button>
+                            <button v-for="cat in wbCategories" :key="cat"
+                                    @click="currentWbCategory = cat"
+                                    :class="currentWbCategory === cat ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                                    class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                                📁 {{ cat }}
+                            </button>
+                        </div>
                     </div>
                     <!-- 世界书筛选：搜索 + 词条数过滤 + 查重入口 -->
                     <div class="p-2 border-b border-zinc-800 bg-zinc-900 space-y-1.5 shrink-0">
@@ -465,6 +493,7 @@
                     <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
                         <div v-for="(wb, index) in filteredWorldbooks" :key="index"
                              @click="activeWorldbook = wb"
+                             @contextmenu.prevent="openWbContextMenu($event, wb)"
                              :class="activeWorldbook && activeWorldbook.path === wb.path ? 'bg-amber-600/20 border-amber-500/50' : 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-700'"
                              class="p-2.5 rounded-lg border cursor-pointer transition flex flex-col gap-1">
                             <div class="flex justify-between items-center gap-1">
@@ -473,7 +502,15 @@
                                     <span class="text-[10px] px-1.5 py-0.5 rounded font-mono bg-zinc-800 text-zinc-400 border border-zinc-700 whitespace-nowrap">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 词条</span>
                                     <button @click.stop="renameWorldbook(wb)" title="重命名该世界书"
                                             class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-blue-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
-                                        ✏️ 重命名
+                                        ✏️
+                                    </button>
+                                    <button @click.stop="duplicateWorldbook(wb)" title="复制为副本"
+                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-emerald-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                        📋
+                                    </button>
+                                    <button @click.stop="deleteWorldbook(wb)" title="删除该世界书（移入回收站）"
+                                            class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-rose-600/80 text-zinc-300 hover:text-white rounded transition whitespace-nowrap">
+                                        🗑️
                                     </button>
                                 </div>
                             </div>
@@ -1400,6 +1437,39 @@
 
                 <button @click.stop="handleContextMenuAction('trash')" class="w-full text-left px-3 py-2 hover:bg-rose-600 hover:text-white flex items-center gap-2 transition-colors text-rose-400">
                     <span class="text-sm">🗑️</span> 移入安全回收站
+                </button>
+            </div>
+        </transition>
+
+        <!-- ================= [ 右键快捷菜单：世界书专属（重命名/复制副本/删除） ] ================= -->
+        <transition name="fade">
+            <div v-if="wbContextMenu.show"
+                 class="fixed z-[100] w-44 theme-surface border border-zinc-700/80 rounded-lg shadow-2xl py-1.5 text-xs flex flex-col"
+                 :style="{ top: wbContextMenu.y + 'px', left: wbContextMenu.x + 'px' }"
+                 @click.stop>
+
+                <!-- 世界书信息头 -->
+                <div class="px-3 py-1.5 border-b border-zinc-700/50 mb-1">
+                    <span class="font-bold text-amber-400 truncate block">{{ wbContextMenu.wb?.data?.name || wbContextMenu.wb?.name || '未知世界书' }}</span>
+                    <span class="text-[9px] opacity-50 truncate font-mono mt-0.5 block" :title="wbContextMenu.wb?.path">
+                        {{ wbContextMenu.wb?.path?.split(/[\\/]/).pop() || '（内存导入）' }}
+                    </span>
+                </div>
+
+                <button @click="renameWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-blue-600 hover:text-white flex items-center gap-2 transition-colors">
+                    <span class="text-sm">✏️</span> 重命名世界书
+                </button>
+                <button @click="duplicateWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-emerald-600 hover:text-white flex items-center gap-2 transition-colors">
+                    <span class="text-sm">📋</span> 复制为副本
+                </button>
+                <button @click="changeWbCategory(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-purple-600 hover:text-white flex items-center gap-2 transition-colors">
+                    <span class="text-sm">📁</span> 移动分组
+                </button>
+
+                <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
+
+                <button @click="deleteWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-rose-600 hover:text-white flex items-center gap-2 transition-colors text-rose-400">
+                    <span class="text-sm">🗑️</span> 删除世界书
                 </button>
             </div>
         </transition>
