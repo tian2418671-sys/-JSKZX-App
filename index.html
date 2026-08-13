@@ -383,7 +383,7 @@
                          @contextmenu.prevent="openContextMenu($event, item)"
                          :class="['group relative flex items-center rounded-lg cursor-pointer border select-none transition-all duration-200',
                                   selectedIds.includes(item.id) ? 'bg-blue-900/20 border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.2)]' : 
-                                  (cardData && safeData.name === item.name) ? 'bg-blue-600 text-white border-blue-600 shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
+                                  (cardData && cardData === item.data) ? 'bg-blue-600 text-white border-blue-600 shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
                          style="padding: 0.6em; gap: 0.6em; margin-bottom: 0.45em;">
                         
                         <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-zinc-800 cursor-pointer shrink-0 accent-blue-500" style="width: 1.1em; height: 1.1em;">
@@ -394,8 +394,8 @@
                         
                         <!-- 信息 -->
                         <div class="flex-1 min-w-0 overflow-hidden">
-                            <div class="font-bold truncate leading-tight transition-colors" style="font-size: 1.05em;" :class="(cardData && safeData.name === item.name) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</div>
-                            <div class="truncate leading-tight mt-0.5" style="font-size: 0.8em;" :class="(cardData && safeData.name === item.name) ? 'text-blue-100/80' : 'text-zinc-500 opacity-70'">{{ item.category }} · {{ displayTagText(item.customTags[0]) || '无标签' }}</div>
+                            <div class="font-bold truncate leading-tight transition-colors" style="font-size: 1.05em;" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</div>
+                            <div class="truncate leading-tight mt-0.5" style="font-size: 0.8em;" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500 opacity-70'">{{ item.category }} · {{ displayTagText(item.customTags[0]) || '无标签' }}</div>
                         </div>
                     </div>
                     
