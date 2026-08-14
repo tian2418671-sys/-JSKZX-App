@@ -1147,21 +1147,30 @@
                         <div>
                             <label class="block font-bold text-gray-600 mb-1">当前输入的标签 (用逗号分隔):</label>
                             <input v-model="batchInputTags" type="text" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="例如: Fantasy, Elf, 魔法">
+
+                            <!-- 🌟 已输入的标签芯片（点击 ✕ 移除） -->
+                            <div class="flex flex-wrap gap-2 mt-2 p-2 border border-gray-200 bg-gray-50 rounded min-h-[40px]">
+                                <span v-for="(tag, idx) in batchTagChips" :key="idx"
+                                      class="px-2 py-1 bg-blue-600/30 text-blue-700 text-xs rounded-full flex items-center gap-1 cursor-pointer hover:bg-red-500 hover:text-white transition"
+                                      @click="removeBatchTag(idx)" title="点击移除">
+                                    {{ tag }} ✕
+                                </span>
+                                <span v-if="batchTagChips.length === 0" class="text-gray-400 text-xs self-center">尚未添加任何标签</span>
+                            </div>
                         </div>
 
                         <div>
                             <div class="flex justify-between items-center mb-1">
-                                <label class="font-bold text-gray-600">💡 系统预设标签库 (点击快速添加):</label>
-                                <button @click="toggleTagLangMode" class="text-[10px] px-2 py-0.5 bg-gray-200 hover:bg-blue-600 hover:text-white rounded transition font-bold text-gray-700">
-                                    语言: {{ tagLangMode === 'both' ? '🌐 中英双语' : (tagLangMode === 'cn' ? '🇨🇳 纯中文' : '🇺🇸 纯英文') }}
-                                </button>
+                                <label class="font-bold text-gray-600">💡 系统/常用标签库 (点击快速添加):</label>
+                                <span class="text-[10px] text-gray-400">已选: {{ batchTagChips.length }} 个</span>
                             </div>
                             
                             <div class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto p-2 bg-gray-50 border border-gray-200 rounded custom-scrollbar">
-                                <button v-for="preset in presetTagsLibrary" :key="preset.en" 
-                                        @click="togglePresetTag(preset)"
-                                        class="px-2 py-1 bg-white border border-gray-300 hover:border-blue-500 hover:text-blue-600 rounded transition-colors text-[11px]">
-                                    + {{ getPresetTagText(preset) }}
+                                <button v-for="tag in systemCommonTags" :key="tag"
+                                        @click="toggleBatchCommonTag(tag)"
+                                        class="px-2 py-1 text-[11px] rounded border transition-colors"
+                                        :class="batchTagChips.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:border-blue-500 hover:text-blue-600'">
+                                    {{ batchTagChips.includes(tag) ? '✓ 已选' : '+ ' + tag }}
                                 </button>
                             </div>
                         </div>
@@ -1187,29 +1196,61 @@
                     
                     <div class="p-5 overflow-y-auto space-y-5 flex-1 custom-scrollbar text-xs">
                         
-                        <div>
-                            <label class="block font-bold text-gray-700 mb-2">🧠 1. 选择打标模式:</label>
-                            <div class="flex gap-4">
-                                <label class="flex items-center gap-2 cursor-pointer p-3 border rounded-lg hover:bg-gray-50 flex-1 transition-colors" :class="aiTagMode === 'candidate' ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200'">
-                                    <input type="radio" v-model="aiTagMode" value="candidate" :disabled="isAITagging" class="accent-blue-600 scale-125"> 
-                                    <div>
-                                        <div class="font-bold text-gray-800 text-sm">🎯 候选池模式</div>
-                                        <div class="text-[11px] text-gray-500 mt-0.5">严格从下方提供的标签库中挑选</div>
-                                    </div>
-                                </label>
-                                <label class="flex items-center gap-2 cursor-pointer p-3 border rounded-lg hover:bg-gray-50 flex-1 transition-colors" :class="aiTagMode === 'free' ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200'">
-                                    <input type="radio" v-model="aiTagMode" value="free" :disabled="isAITagging" class="accent-blue-600 scale-125"> 
-                                    <div>
-                                        <div class="font-bold text-gray-800 text-sm">🌌 自由发散模式</div>
-                                        <div class="text-[11px] text-gray-500 mt-0.5">AI 根据角色设定自由总结新标签</div>
-                                    </div>
-                                </label>
+                        <!-- 🏷️ 1. 候选标签池（与批量设置共享统一数据源 systemCommonTags） -->
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                            <label class="block font-bold text-gray-700 mb-2">🏷️ 1. 候选标签池 <span class="text-[10px] font-normal text-gray-500">(AI 将优先从中挑选)</span>:</label>
+
+                            <!-- 已选中的候选标签展示 -->
+                            <div class="flex flex-wrap gap-2 mb-2 p-2 border border-gray-200 bg-white rounded min-h-[40px]">
+                                <span v-for="(tag, idx) in aiCandidateTags" :key="idx"
+                                      class="px-2 py-1 bg-blue-600/30 text-blue-700 text-xs rounded-full flex items-center gap-1 cursor-pointer hover:bg-red-500 hover:text-white transition"
+                                      @click="removeAICandidateTag(idx)" title="点击移除">
+                                    {{ tag }} ✕
+                                </span>
+                                <span v-if="aiCandidateTags.length === 0" class="text-gray-400 text-xs self-center">尚未添加候选标签（点击下方常用标签，或手动输入）</span>
+                            </div>
+
+                            <!-- 手动输入候选标签 -->
+                            <div class="flex gap-2 mb-2">
+                                <input v-model="newAICandidateTag" @keyup.enter="addAICandidateTagManual" :disabled="isAITagging"
+                                       type="text" placeholder="手动输入候选标签后回车..."
+                                       class="flex-1 bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-blue-500 focus:outline-none">
+                                <button @click="addAICandidateTagManual" :disabled="isAITagging || !newAICandidateTag.trim()"
+                                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 text-white rounded text-xs transition shrink-0">＋ 添加</button>
+                            </div>
+
+                            <!-- 🌟 快速从系统/常用标签中添加 -->
+                            <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签：</div>
+                            <div class="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 custom-scrollbar">
+                                <button v-for="tag in systemCommonTags" :key="tag"
+                                        @click="addAICandidateTag(tag)"
+                                        :disabled="isAITagging || aiCandidateTags.includes(tag)"
+                                        :class="['px-2 py-0.5 text-[11px] rounded border transition-colors',
+                                                 aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
+                                    + {{ tag }}
+                                </button>
                             </div>
                         </div>
 
-                        <div v-if="aiTagMode === 'candidate'" class="animate-fade-in bg-gray-50 p-3 rounded-lg border border-gray-200">
-                            <label class="block font-bold text-gray-700 mb-2">🏷️ 2. 提供候选标签池 (用逗号分隔):</label>
-                            <textarea v-model="aiCandidateTags" :disabled="isAITagging" rows="2" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500 resize-y shadow-sm" placeholder="例如: 傲娇, 奇幻, 现代, 战斗, 日常, 病娇, 魔法..."></textarea>
+                        <!-- 🤖 2. AI 打标规则设置 -->
+                        <div class="p-3 bg-gray-50 border border-gray-200 rounded-lg space-y-3">
+                            <h4 class="text-sm font-bold text-gray-700">🤖 AI 打标规则设置</h4>
+
+                            <!-- 🌟 新增：AI 自由提取开关 -->
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" v-model="enableAIExtraction" :disabled="isAITagging"
+                                       class="w-4 h-4 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-600 focus:ring-2">
+                                <span class="text-sm text-gray-700">允许 AI 自由提取标签</span>
+                            </label>
+                            <p class="text-[10px] text-gray-500 ml-6 -mt-1">关闭后，AI 将<strong class="text-rose-500">严格只能</strong>从上方的候选池中为你选择标签，不会自行创造新标签。</p>
+
+                            <!-- 🌟 新增：自定义提示词输入 -->
+                            <div class="flex flex-col gap-1">
+                                <label class="text-xs text-gray-600">附加自定义提示词 (可选)</label>
+                                <textarea v-model="customAIPrompt" :disabled="isAITagging" rows="2"
+                                          placeholder="例如：请重点分析角色的性格特征，忽略外观描述..."
+                                          class="w-full bg-white border border-gray-300 rounded p-2 text-xs text-gray-700 focus:outline-none focus:border-blue-500 placeholder-gray-400 resize-y shadow-sm"></textarea>
+                            </div>
                         </div>
 
                         <!-- 📝 系统级微调全局提示词预设库（单选生效 + 增删改 + 折叠管理） -->

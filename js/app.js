@@ -2128,6 +2128,51 @@ const app = createApp({
         const batchInputTags = ref('');
         const batchMode = ref('append'); // 'append' 追加 或 'overwrite' 覆盖
 
+        // ================= [ 系统级常用标签池 (超级扩充版) ] =================
+        // 统一数据源：批量设置弹窗与 AI 打标候选池共享（点击即加，无需手动输入）
+        // 内置 40+ 精选分类标签；localStorage 键 customSystemTags 保存用户自定义标签（越用越懂你）
+        const systemCommonTags = ref((() => {
+            const defaults = [
+                // 📌 1. 基础/性别 (Base/Gender)
+                'Male (男性)', 'Female (女性)', 'Futa (扶她)', 'Non-binary (非二元)', 'Multiple Characters (多角色)',
+
+                // 📌 2. 种族/物种 (Species)
+                'Human (人类)', 'Elf (精灵)', 'Demon (恶魔)', 'Angel (天使)', 'Vampire (吸血鬼)',
+                'Succubus/Incubus (魅魔/梦魇)', 'Furry (兽人/福瑞)', 'Monster (怪物/异种)', 'Android (仿生人/机娘)', 'Beastman (亚人/兽耳)',
+
+                // 📌 3. 世界观/题材 (Genre/Setting)
+                'Fantasy (奇幻/魔法)', 'Sci-Fi (科幻)', 'Cyberpunk (赛博朋克)', 'Steampunk (蒸汽朋克)',
+                'Modern (现代都市)', 'Historical (历史/古代)', 'Post-Apocalyptic (末世/废土)',
+                'Isekai (异世界/穿越)', 'School (校园)', 'Workplace (职场)', 'Cultivation (修仙/仙侠)',
+
+                // 📌 4. 角色属性/XP/性格 (Personality/Tropes)
+                'Yandere (病娇)', 'Tsundere (傲娇)', 'Kuudere (三无)', 'Submissive (顺从/M)', 'Dominant (强势/S)',
+                'Maid/Butler (女仆/执事)', 'Villain (反派)', 'Master/Slave (主仆)', 'Royalty (皇室/贵族)',
+                'Step-family (继亲)', 'Childhood Friend (青梅竹马)', 'MILF/Oyakodon (熟女/太太)',
+
+                // 📌 5. 内容分级与基调 (Rating/Tone)
+                'SFW (全年龄/安全)', 'NSFW (成人/敏感)', 'Wholesome (纯爱/温馨)', 'Dark (暗黑/虐心)',
+                'Romance (恋爱)', 'Action (战斗/动作)', 'Horror (恐怖/悬疑)', 'Comedy (搞笑/轻松)',
+                'Smut (搞颜色)', 'Slow Burn (慢热)', 'Corruption (堕落/恶堕)',
+
+                // 📌 6. 卡片功能类型 (Card Type)
+                'RPG (文字游戏/跑团)', 'Scenario (特定情景剧)', 'Narrator (旁白驱动)', 'Assistant (AI助手/工具卡)'
+            ];
+            // 优先读取 localStorage 中用户自定义的标签（越用越懂你）；无记录/损坏时回退默认池
+            try {
+                const saved = JSON.parse(localStorage.getItem('customSystemTags'));
+                if (Array.isArray(saved) && saved.length > 0) {
+                    return Array.from(new Set(saved.filter(t => typeof t === 'string' && t.trim() !== '')));
+                }
+            } catch (e) { /* 忽略 */ }
+            return defaults;
+        })());
+
+        // 系统/常用标签库变化时自动持久化到 localStorage（customSystemTags）
+        watch(systemCommonTags, (val) => {
+            try { localStorage.setItem('customSystemTags', JSON.stringify(val)); } catch (e) { /* 忽略 */ }
+        }, { deep: true });
+
         // ================= 标签中英文切换系统 =================
         // 标签语言模式: 'cn' (纯中文), 'en' (纯英文), 'both' (中英双语)
         const tagLangMode = ref('both');
@@ -2186,6 +2231,29 @@ const app = createApp({
             } else {
                 current.push(tagToAdd);
             }
+            batchInputTags.value = current.join(', ');
+        };
+
+        // 当前批量输入框中的标签（逗号分隔 → 数组，用于芯片展示与点击移除）
+        const batchTagChips = computed(() =>
+            batchInputTags.value.split(',').map(t => t.trim()).filter(t => t)
+        );
+
+        // 从统一系统/常用标签库快速切换添加/移除标签到批量输入框
+        const toggleBatchCommonTag = (tag) => {
+            const current = batchTagChips.value;
+            if (current.includes(tag)) {
+                batchInputTags.value = current.filter(t => t !== tag).join(', ');
+            } else {
+                current.push(tag);
+                batchInputTags.value = current.join(', ');
+            }
+        };
+
+        // 点击芯片 ✕ 移除某个待添加标签
+        const removeBatchTag = (idx) => {
+            const current = batchTagChips.value;
+            current.splice(idx, 1);
             batchInputTags.value = current.join(', ');
         };
 
@@ -2314,9 +2382,26 @@ const app = createApp({
 
         // ================= [ AI 智能批量打标系统 ] =================
         const showAITagModal = ref(false);
-        const aiTagMode = ref('candidate'); // 'candidate' 候选池模式 或 'free' 自由发散模式
-        const aiCandidateTags = ref('');
+        const aiCandidateTags = ref([]); // AI 候选标签池（点击常用标签快速添加 / ✕ 移除）
+        const enableAIExtraction = ref(true); // 允许 AI 自由提取标签（关闭后严格只能从候选池选择）
+        const customAIPrompt = ref(''); // 附加自定义提示词（拼接进打标 Prompt 的【附加要求】）
+        const newAICandidateTag = ref(''); // 手动输入候选标签的临时输入框
         const aiCustomPrompt = ref('你是一个专业的角色卡分析助手。请阅读以下角色设定，提取最符合角色的标签。请严格只返回一个 JSON 数组格式（例如：["标签1", "标签2"]），绝对不要返回任何其他说明文字。');
+
+        // 候选池辅助方法：添加（自动去重）/ 手动添加 / 移除
+        const addAICandidateTag = (tag) => {
+            const clean = String(tag || '').trim();
+            if (clean && !aiCandidateTags.value.includes(clean)) {
+                aiCandidateTags.value.push(clean);
+            }
+        };
+        const addAICandidateTagManual = () => {
+            addAICandidateTag(newAICandidateTag.value);
+            newAICandidateTag.value = '';
+        };
+        const removeAICandidateTag = (idx) => {
+            aiCandidateTags.value.splice(idx, 1);
+        };
 
         // ================= [ 系统级微调全局提示词管理 ] =================
         // 默认内置几条高频实用的系统提示词（localStorage 持久化）
@@ -2408,6 +2493,12 @@ const app = createApp({
                 return;
             }
 
+            // ⚠️ 前置校验：关闭「允许 AI 自由提取」时必须先提供候选标签池
+            if (!enableAIExtraction.value && aiCandidateTags.value.length === 0) {
+                nativeAlert('错误：已关闭AI自由提取，但未提供候选标签池！\n请先在上方点击添加候选标签，或开启「允许 AI 自由提取标签」。', 'warning');
+                return;
+            }
+
             isAITagging.value = true;
             let successCount = 0;
             let failCount = 0;
@@ -2429,13 +2520,28 @@ const app = createApp({
                     const charMes = (d.first_mes || card.first_mes || '').substring(0, 500);
                     const charPersonality = (d.personality || card.personality || '').substring(0, 300);
 
-                    // 4. 构建强约束 Prompt
-                    let modeInstruction = (aiTagMode.value === 'candidate' && aiCandidateTags.value.trim() !== '')
-                        ? `必须严格只从以下候选标签池中挑选最符合的 2-5 个标签：[${aiCandidateTags.value}]。`
-                        : `请自由提取 3-5 个最契合的简短标签。`;
+                    // 4. 构建强约束 Prompt（候选池 + 自由提取开关 + 自定义提示词）
+                    let promptText = '你是一个专业的角色卡片标签分类助手。请根据以下卡片内容进行打标。\n';
 
-                    const promptText = `${modeInstruction}
-【输出强制规则】：必须只返回格式为 ["标签1", "标签2"] 的纯 JSON 数组，绝不要包含 markdown 标记或任何前导/后置解释文字。
+                    // 4.1 基础候选池约束
+                    if (aiCandidateTags.value.length > 0) {
+                        promptText += `【标签候选池】：[${aiCandidateTags.value.join(', ')}]\n`;
+                    }
+
+                    // 4.2 根据开关决定 AI 的自由度
+                    if (enableAIExtraction.value) {
+                        promptText += '【规则】：你可以优先从候选池中选择合适的标签。如果候选池中没有合适的，允许你结合卡片内容自由提取或生成最精准的标签。\n';
+                    } else {
+                        promptText += '【严格限制规则】：你 **绝对只能** 从【标签候选池】中挑选符合的标签，绝对不允许输出候选池以外的任何词汇！\n';
+                    }
+
+                    // 4.3 追加用户自定义提示词
+                    if (customAIPrompt.value.trim() !== '') {
+                        promptText += `【附加要求】：${customAIPrompt.value.trim()}\n`;
+                    }
+
+                    // 4.4 输出格式与角色设定数据
+                    promptText += `【输出强制规则】：必须只返回格式为 ["标签1", "标签2"] 的纯 JSON 数组，绝不要包含 markdown 标记或任何前导/后置解释文字。
 
 【角色设定提取】：
 名字：${card.name || '未知'}
@@ -4251,9 +4357,12 @@ const app = createApp({
             batchChangeCategory, batchAddTag,
             batchChangeCategoryModal, batchExportSelected,
             showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
+            systemCommonTags, batchTagChips, toggleBatchCommonTag, removeBatchTag,
             tagLangMode, toggleTagLangMode, getPresetTagText, displayTagText,
             togglePresetTag, executeBatchTagSave,
-            showAITagModal, aiTagMode, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
+            showAITagModal, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
+            enableAIExtraction, customAIPrompt, newAICandidateTag,
+            addAICandidateTag, addAICandidateTagManual, removeAICandidateTag,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
