@@ -1549,24 +1549,8 @@
             <option value="qwen2.5-7b-instruct">本地 Qwen 7B</option>
         </datalist>
 
-        <!-- ================= [ 弹窗：磁盘扫描进度 ] ================= -->
-        <transition name="fade">
-            <div v-if="isScanningDisk" class="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm cursor-wait">
-                <div class="bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md border border-zinc-700 p-6 flex flex-col items-center text-center">
-                    <svg class="animate-spin h-12 w-12 text-blue-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <h3 class="font-bold text-white text-lg mb-2">正在深度扫描本地磁盘</h3>
-                    <p class="text-sm text-zinc-400 mb-4">{{ diskScanProgress.status }}</p>
-                    
-                    <div class="w-full bg-zinc-800 rounded-full h-2 mb-2 overflow-hidden relative">
-                        <div class="bg-blue-500 h-2 rounded-full absolute left-0 top-0 bottom-0 animate-pulse w-full"></div>
-                    </div>
-                    <p class="text-xs text-amber-500/80">⚠️ 扫描期间请勿关闭软件，这可能需要几分钟时间...</p>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：磁盘扫描进度（子组件 DiskScanModal） ] ================= -->
+        <disk-scan-modal :is-scanning="isScanningDisk" :status="diskScanProgress.status" />
 
         <!-- ================= [ 🔍 智能查重与版本清洗弹窗 ] ================= -->
         <div v-if="showDedupeModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showDedupeModal = false">
@@ -1976,6 +1960,7 @@ import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
 import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
 import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prompt）
 import SingleTagModal from './SingleTagModal.vue'; // 单卡添加标签弹窗
+import DiskScanModal from './DiskScanModal.vue'; // 磁盘扫描进度弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -1999,7 +1984,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
