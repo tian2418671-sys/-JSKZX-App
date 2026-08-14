@@ -115,7 +115,21 @@
         '--workspace-fs': appSettings.fontSize + 'px',
         fontFamily: appSettings.fontFamily,
         fontWeight: appSettings.fontWeight
-    }" class="h-full flex flex-col text-[13px]">
+    }" class="h-full flex flex-col text-[13px]"
+         @dragover.prevent
+         @dragenter.prevent="onDragEnter"
+         @dragleave.prevent="onDragLeave"
+         @drop.prevent="handleDrop">
+
+        <!-- 拖拽导入全屏遮罩：拖文件到窗口任意处时提示松开导入 -->
+        <transition name="fade">
+            <div v-if="isDragging" class="fixed inset-0 bg-blue-900/40 backdrop-blur-sm flex items-center justify-center border-8 border-blue-500 border-dashed pointer-events-none" style="z-index: 9999;">
+                <div class="text-4xl font-bold text-white flex flex-col items-center gap-4" style="text-shadow: 0 0 15px rgba(59,130,246,0.8);">
+                    <span class="text-6xl">📥</span>
+                    <span>松开鼠标，立即导入角色卡！</span>
+                </div>
+            </div>
+        </transition>
 
         <!-- 启动过渡蒙版：数据就绪后淡出 -->
         <transition name="fade">
@@ -298,8 +312,7 @@
             <aside v-if="viewOptions.showSidebar" 
                    ref="sidebarEl"
                    class="bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 relative"
-                   :style="sidebarStyle"
-                   @dragover.prevent @drop.prevent="handleDrop">
+                   :style="sidebarStyle">
                 <!-- ⚡ 双引擎模式切换：角色卡库 / 世界书库 -->
                 <!-- ⚡ 双引擎模式切换（紧凑） -->
                 <div class="px-2 py-2 border-b border-zinc-800 bg-zinc-900 flex gap-1.5 select-none">
@@ -366,18 +379,26 @@
                     </div>
                 </div>
 
-                <!-- 列表头部：计数与多选开关 -->
+                <!-- 列表头部：计数 + 视图切换 + 多选开关 -->
                 <div class="flex items-center justify-between px-2 py-1.5 bg-zinc-900 border-b border-zinc-800 text-xs">
                     <span class="font-bold text-zinc-400">卡片列表 ({{ filteredLibrary.length }})</span>
-                    <button @click="isMultiSelectMode = !isMultiSelectMode" 
-                            :class="isMultiSelectMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
-                            class="px-2 py-0.5 rounded transition font-medium">
-                        {{ isMultiSelectMode ? '✓ 退出多选' : '☑ 批量多选' }}
-                    </button>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <button @click="toggleViewMode"
+                                class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition font-medium border border-zinc-700 flex items-center gap-1 shadow-sm"
+                                :title="viewMode === 'list' ? '当前：列表 (点击切换网格)' : '当前：网格 (点击切换列表)'">
+                            <span v-if="viewMode === 'list'">🎴 网格</span>
+                            <span v-else>📜 列表</span>
+                        </button>
+                        <button @click="isMultiSelectMode = !isMultiSelectMode" 
+                                :class="isMultiSelectMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
+                                class="px-2 py-0.5 rounded transition font-medium">
+                            {{ isMultiSelectMode ? '✓ 退出多选' : '☑ 批量多选' }}
+                        </button>
+                    </div>
                 </div>
 
-                <!-- 紧凑型列表（悬浮微光 + 选中/打开高亮；拖拽事件已上移至侧边栏根部，覆盖世界书模式） -->
-                <div class="flex-1 overflow-y-auto p-1 custom-scrollbar">
+                <!-- 紧凑型列表视图（悬浮微光 + 选中/打开高亮；拖拽事件已上移至侧边栏根部） -->
+                <div v-if="viewMode === 'list'" class="flex-1 overflow-y-auto p-1 custom-scrollbar">
                     <div v-for="(item, index) in paginatedLibrary" :key="item.id" 
                          @click.prevent="handleCardClick($event, item, index)"
                          @contextmenu.prevent="openContextMenu($event, item)"
@@ -405,6 +426,61 @@
 
                     <!-- 分页控制条（复活分页系统） -->
                     <div class="flex items-center justify-between px-2 py-1.5 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0">
+                        <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
+                        <span class="text-zinc-400 font-mono font-bold">{{ currentPage }} / {{ totalPages }} <span class="text-zinc-600 font-normal">({{ filteredLibrary.length }})</span></span>
+                        <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>
+                    </div>
+                </div>
+
+                <!-- 🎴 网格视图（真·Grid：auto-fill + 原生 aspect-ratio 2:3，绝对自适应不塌陷） -->
+                <div v-if="viewMode === 'grid'"
+                     class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4"
+                     style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; align-content: start;">
+                     
+                    <div v-for="(item, index) in paginatedLibrary" :key="item.id"
+                         @click.prevent="handleCardClick($event, item, index)"
+                         @contextmenu.prevent="openContextMenu($event, item)"
+                         :class="['group relative rounded-xl overflow-hidden shadow-lg cursor-pointer select-none transition-all duration-300 hover:scale-105 bg-zinc-800',
+                                  selectedIds.includes(item.id) ? 'ring-4 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.6)]' : 
+                                  (cardData && cardData === item.data) ? 'ring-2 ring-blue-400' : 'border border-zinc-700 hover:border-zinc-400']"
+                         style="aspect-ratio: 2/3; height: auto;">
+                         
+                        <div v-if="isMultiSelectMode" class="absolute top-2 left-2 z-20">
+                            <input type="checkbox" :checked="selectedIds.includes(item.id)"
+                                   @click.stop="toggleSelection(item.id)"
+                                   class="w-5 h-5 rounded border-zinc-600 text-blue-600 focus:ring-blue-600 bg-zinc-900/90 cursor-pointer accent-blue-500">
+                        </div>
+
+                        <!-- 卡片封面（绝对定位贴入 2:3 画框，绝不撑变形；无头像时显示首字占位） -->
+                        <img v-if="item.avatar" :src="item.avatar" class="absolute top-0 left-0 w-full h-full object-cover block">
+                        <div v-else class="absolute top-0 left-0 w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-700 to-zinc-900 text-4xl font-bold text-zinc-500 select-none">
+                            {{ (item.name || '?').charAt(0) }}
+                        </div>
+                        
+                        <div class="absolute bottom-0 left-0 w-full z-10 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 pt-12 opacity-90">
+                            <h3 class="text-white font-bold truncate drop-shadow-md text-sm mb-1">{{ item.name }}</h3>
+                            
+                            <div class="flex flex-wrap items-center gap-1.5 mt-1">
+                                <span class="px-1.5 py-0.5 bg-blue-600/90 border border-blue-500/50 text-[10px] rounded text-white shadow-sm truncate max-w-[90px]">
+                                    {{ item.category || '未分类' }}
+                                </span>
+                                <span v-if="item.customTags && item.customTags.length" class="px-1.5 py-0.5 bg-zinc-700/90 border border-zinc-600/50 text-[10px] rounded text-zinc-200 shadow-sm truncate max-w-[70px]">
+                                    {{ displayTagText(item.customTags[0]) }}
+                                </span>
+                            </div>
+                            
+                            <p class="text-[10px] text-zinc-400 line-clamp-2 mt-2 leading-tight font-mono opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                {{ (item.data?.data?.description || item.data?.description || '').trim().substring(0, 90) || '暂无描述...' }}
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div v-if="library.length === 0" class="flex flex-col items-center justify-center h-40 text-zinc-500 text-xs text-center p-4" style="grid-column: 1 / -1;">
+                        将卡片拖拽到此处，<br>或点击左上角打开本地库
+                    </div>
+
+                    <!-- 分页控制条（网格视图共用） -->
+                    <div class="flex items-center justify-between px-2 py-1.5 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0" style="grid-column: 1 / -1;">
                         <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
                         <span class="text-zinc-400 font-mono font-bold">{{ currentPage }} / {{ totalPages }} <span class="text-zinc-600 font-normal">({{ filteredLibrary.length }})</span></span>
                         <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>

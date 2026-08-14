@@ -290,6 +290,17 @@ const app = createApp({
         const openChatTab = () => { currentTab.value = 'chat'; initChat(); };
 
         const isDragging = ref(false);
+        const dragDepth = ref(0); // 拖拽进入深度计数器（防止在子元素间移动时遮罩闪烁）
+        // 拖拽进入窗口：深度 +1 并显示全屏遮罩
+        const onDragEnter = () => {
+            dragDepth.value++;
+            isDragging.value = true;
+        };
+        // 拖拽离开窗口：深度 -1，归零后才隐藏遮罩
+        const onDragLeave = () => {
+            dragDepth.value = Math.max(0, dragDepth.value - 1);
+            if (dragDepth.value === 0) isDragging.value = false;
+        };
         const cardData = shallowRef(null); // 【优化】使用浅层响应式，完美解决大卡片切换卡顿
         const imgUrl = ref(null);
         const currentTab = ref('basic');
@@ -1427,6 +1438,7 @@ const app = createApp({
         // 系统级拖拽导入：将拖入的文件复制到卡片库文件夹
         const handleDrop = async (e) => {
             isDragging.value = false;
+            dragDepth.value = 0;
 
             // 检查是否已设置固定的卡片库文件夹
             if (!currentFolderPath.value) {
@@ -1880,7 +1892,20 @@ const app = createApp({
 
         // ================= 交互优化：多选开关与右键菜单 =================
         const isMultiSelectMode = ref(false); // 默认隐藏批量复选框
-        
+
+        // ================= [ 视图模式状态（列表 / 网格） ] =================
+        // 默认优先读取用户的历史偏好，没有则默认 'list'
+        const viewMode = ref((() => {
+            try { return localStorage.getItem('jsTavernViewMode') || 'list'; } catch (e) { /* 忽略 */ }
+            return 'list';
+        })());
+
+        // 切换视图并持久化保存（用户下次打开依然是自己喜欢的视图）
+        const toggleViewMode = () => {
+            viewMode.value = viewMode.value === 'list' ? 'grid' : 'list';
+            try { localStorage.setItem('jsTavernViewMode', viewMode.value); } catch (e) { /* 忽略 */ }
+        };
+
         // 右键菜单状态
         const contextMenu = ref({
             visible: false,
@@ -4335,7 +4360,7 @@ const app = createApp({
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
-            isDragging, cardData, imgUrl, tabs, currentTab, currentTabInfo,
+            isDragging, dragDepth, onDragEnter, onDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
@@ -4352,7 +4377,8 @@ const app = createApp({
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
             selectedIds, handleCardClick, toggleSelection, clearSelection,
-            isMultiSelectMode, contextMenu, openContextMenu, closeContextMenu,
+            isMultiSelectMode, viewMode, toggleViewMode,
+            contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
             batchChangeCategory, batchAddTag,
             batchChangeCategoryModal, batchExportSelected,
