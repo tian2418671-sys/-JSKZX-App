@@ -1432,57 +1432,24 @@
             </div>
         </transition>
 
-        <!-- ================= [ 弹窗：全屏大文本阅读/编辑 ] ================= -->
-        <transition name="fade">
-            <div v-if="showTextModal" class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6 backdrop-blur-sm">
-                <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden">
-                    
-                    <div class="px-5 py-3.5 bg-gray-900 text-white flex justify-between items-center shrink-0">
-                        <div class="flex items-center gap-3">
-                            <h3 class="font-bold text-base flex items-center gap-2">🔍 {{ textModalTitle }}</h3>
-                            <span class="text-xs text-amber-400 bg-gray-800 px-2 py-0.5 rounded border border-gray-700">
-                                ⚡ 约 {{ estimateTokens(textModalContent) }} Tokens
-                            </span>
-                        </div>
-                        
-                        <div class="flex items-center gap-4">
-                            <div class="flex items-center gap-1.5 text-xs text-gray-300 bg-gray-800 px-2 py-1 rounded border border-gray-700">
-                                <span>字号:</span>
-                                <button @click="textModalFontSize = Math.max(12, textModalFontSize - 2)" class="px-1.5 hover:bg-gray-700 rounded font-bold">-</button>
-                                <span class="font-mono text-white">{{ textModalFontSize }}px</span>
-                                <button @click="textModalFontSize = Math.min(24, textModalFontSize + 2)" class="px-1.5 hover:bg-gray-700 rounded font-bold">+</button>
-                            </div>
-                            <button @click="saveTextModal" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold transition">保存并完成</button>
-                            <button @click="showTextModal = false" class="text-gray-400 hover:text-white text-base">✕</button>
-                        </div>
-                    </div>
+        <!-- ================= [ 弹窗：全屏大文本阅读/编辑（子组件 TextModal） ] ================= -->
+        <text-modal
+            :show="showTextModal"
+            :title="textModalTitle"
+            :model-value="textModalContent"
+            :font-size="textModalFontSize"
+            @update:model-value="textModalContent = $event"
+            @update:font-size="textModalFontSize = $event"
+            @save="saveTextModal"
+            @close="showTextModal = false"
+        />
 
-                    <div class="flex-1 p-4 bg-gray-50 flex flex-col overflow-hidden">
-                        <textarea v-model="textModalContent" 
-                                  :style="{ fontSize: textModalFontSize + 'px' }" 
-                                  class="w-full h-full p-4 border border-gray-300 rounded-lg outline-none focus:border-blue-500 bg-white resize-none leading-relaxed font-mono font-medium custom-scrollbar shadow-inner text-gray-900"
-                                  placeholder="在此进行清爽的大窗阅读或修改..."></textarea>
-                    </div>
-
-                    <div class="px-5 py-2.5 bg-gray-100 border-t border-gray-200 text-xs text-gray-500 flex justify-between items-center shrink-0">
-                        <span>💡 提示：在此弹窗中编辑内容会实时同步回卡片，点击“保存并完成”后关闭。</span>
-                        <span class="font-mono">字符数: {{ textModalContent.length }}</span>
-                    </div>
-                </div>
-            </div>
-        </transition>
-
-        <!-- ================= [ 弹窗：高清立绘大图预览 ] ================= -->
-        <transition name="fade">
-            <div v-if="showImageModal" class="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-md" @click.self="showImageModal = false">
-                <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
-                    <img :src="previewImageUrl" class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl border border-white/20">
-                    <button @click="showImageModal = false" class="mt-3 px-6 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-full text-xs font-bold backdrop-blur-sm transition">
-                        关闭大图 ✕
-                    </button>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：高清立绘大图预览（子组件 ImageModal） ] ================= -->
+        <image-modal
+            :show="showImageModal"
+            :url="previewImageUrl"
+            @close="showImageModal = false"
+        />
 
         <!-- ================= [ 弹窗：API 引擎与模型设置（独立） ] ================= -->
         <transition name="fade">
@@ -1930,8 +1897,11 @@ import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prom
 import SingleTagModal from './SingleTagModal.vue'; // 单卡添加标签弹窗
 import DiskScanModal from './DiskScanModal.vue'; // 磁盘扫描进度弹窗
 import UpdateModal from './UpdateModal.vue'; // 版本更新检测弹窗
+import TextModal from './TextModal.vue'; // 全屏大文本阅读/编辑弹窗
+import ImageModal from './ImageModal.vue'; // 高清立绘大图预览弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
+import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
 
 /** 用户可读的错误提示映射 */
 const ERROR_MESSAGES = {
@@ -1953,7 +1923,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -3044,12 +3014,7 @@ export default {
 
         // ================= Token 消耗与上下文预估 =================
         // 简易 Token 估算算法：中文按 1.5 权重，英文单词按 1.2 权重计算
-        const estimateTokens = (text) => {
-            if (!text || typeof text !== 'string') return 0;
-            const chinese = text.match(/[\u4e00-\u9fa5]/g) || [];
-            const nonChinese = text.replace(/[\u4e00-\u9fa5]/g, ' ').trim().split(/\s+/).filter(Boolean);
-            return Math.ceil(chinese.length * 1.5 + nonChinese.length * 1.2);
-        };
+        // Token 估算函数已提取到 ../utils/tokenEstimate.js（共享 import，见文件顶部）
 
         // 计算当前卡片各个模块的 Token 消耗明细及总数
         const cardTokenStats = computed(() => {
