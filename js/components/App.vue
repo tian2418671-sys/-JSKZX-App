@@ -1081,356 +1081,94 @@
             @toggle-common-tag="toggleBatchCommonTag($event)"
         />
 
-        <!-- ================= [ 弹窗：AI 智能批量打标 ] ================= -->
-        <transition name="fade">
-            <div v-if="showAITagModal" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-                <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                    
-                    <div class="px-5 py-4 bg-gray-900 text-white border-b border-gray-800 flex justify-between items-center shrink-0">
-                        <h3 class="font-bold text-sm flex items-center gap-2">🤖 AI 智能批量打标 (已选 {{ selectedIds.length }} 张)</h3>
-                        <button @click="showAITagModal = false" :disabled="isAITagging" class="text-gray-400 hover:text-white disabled:opacity-50">✕ 关闭</button>
-                    </div>
-                    
-                    <div class="p-5 overflow-y-auto space-y-5 flex-1 custom-scrollbar text-xs">
-                        
-                        <!-- 🏷️ 1. 候选标签池（与批量设置共享统一数据源 systemCommonTags） -->
-                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                            <label class="block font-bold text-gray-700 mb-2">🏷️ 1. 候选标签池 <span class="text-[10px] font-normal text-gray-500">(AI 将优先从中挑选)</span>:</label>
+        <!-- ================= [ 弹窗：AI 智能批量打标（子组件 AITagModal） ] ================= -->
+        <ai-tag-modal
+            :show="showAITagModal"
+            :selected-count="selectedIds.length"
+            :system-common-tags="systemCommonTags"
+            :ai-candidate-tags="aiCandidateTags"
+            :new-a-i-candidate-tag="newAICandidateTag"
+            :enable-a-i-extraction="enableAIExtraction"
+            :custom-a-i-prompt="customAIPrompt"
+            :system-prompt-presets="systemPromptPresets"
+            :active-system-prompt-id="activeSystemPromptId"
+            :api-endpoint="apiEndpoint"
+            :api-key="apiKey"
+            :api-model="apiModel"
+            :available-models="availableModels"
+            :is-fetching-models="isFetchingModels"
+            :fetch-model-status="fetchModelStatus"
+            :is-a-i-tagging="isAITagging"
+            :ai-tagging-progress="aiTaggingProgress"
+            @close="showAITagModal = false"
+            @remove-ai-candidate-tag="removeAICandidateTag"
+            @update:newAICandidateTag="newAICandidateTag = $event"
+            @add-ai-candidate-tag-manual="addAICandidateTagManual"
+            @add-ai-candidate-tag="addAICandidateTag"
+            @update:enableAIExtraction="enableAIExtraction = $event"
+            @update:customAIPrompt="customAIPrompt = $event"
+            @add-system-prompt-preset="addSystemPromptPreset"
+            @update:activeSystemPromptId="activeSystemPromptId = $event"
+            @save-system-prompts="saveSystemPromptsToStorage"
+            @delete-system-prompt-preset="deleteSystemPromptPreset"
+            @fetch-available-models="fetchAvailableModels"
+            @update:apiEndpoint="apiEndpoint = $event"
+            @update:apiKey="apiKey = $event"
+            @update:apiModel="apiModel = $event"
+            @start-tagging="startAITagging"
+        />
 
-                            <!-- 已选中的候选标签展示 -->
-                            <div class="flex flex-wrap gap-2 mb-2 p-2 border border-gray-200 bg-white rounded min-h-[40px]">
-                                <span v-for="(tag, idx) in aiCandidateTags" :key="idx"
-                                      class="px-2 py-1 bg-blue-600/30 text-blue-700 text-xs rounded-full flex items-center gap-1 cursor-pointer hover:bg-red-500 hover:text-white transition"
-                                      @click="removeAICandidateTag(idx)" title="点击移除">
-                                    {{ tag }} ✕
-                                </span>
-                                <span v-if="aiCandidateTags.length === 0" class="text-gray-400 text-xs self-center">尚未添加候选标签（点击下方常用标签，或手动输入）</span>
-                            </div>
+        <!-- ================= [ 弹窗：关系图谱（子组件 GraphModal） ] ================= -->
+        <graph-modal
+            :show="showGraph"
+            :graph-layout-mode="graphLayoutMode"
+            :isolate-current-group="isolateCurrentGroup"
+            :edge-filters="edgeFilters"
+            :graph-search-keyword="graphSearchKeyword"
+            @update-graph-layout="updateGraphLayout"
+            @update:isolateCurrentGroup="isolateCurrentGroup = $event"
+            @update:graphSearchKeyword="graphSearchKeyword = $event"
+            @render="renderGraph"
+            @close="closeGraph"
+        />
 
-                            <!-- 手动输入候选标签 -->
-                            <div class="flex gap-2 mb-2">
-                                <input v-model="newAICandidateTag" @keyup.enter="addAICandidateTagManual" :disabled="isAITagging"
-                                       type="text" placeholder="手动输入候选标签后回车..."
-                                       class="flex-1 bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-blue-500 focus:outline-none">
-                                <button @click="addAICandidateTagManual" :disabled="isAITagging || !newAICandidateTag.trim()"
-                                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 text-white rounded text-xs transition shrink-0">＋ 添加</button>
-                            </div>
+        <!-- ================= [ 弹窗：全局资产中心（子组件 GlobalAssetModal） ] ================= -->
+        <global-asset-modal
+            :show="showGlobalAssetModal"
+            :asset-tab="globalAssetTab"
+            :all-worldbooks="globalAllWorldbooks"
+            :all-regex-scripts="globalAllRegexScripts"
+            @close="showGlobalAssetModal = false"
+            @update:assetTab="globalAssetTab = $event"
+        />
 
-                            <!-- 🌟 快速从系统/常用标签中添加 -->
-                            <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签：</div>
-                            <div class="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 custom-scrollbar">
-                                <button v-for="tag in systemCommonTags" :key="tag"
-                                        @click="addAICandidateTag(tag)"
-                                        :disabled="isAITagging || aiCandidateTags.includes(tag)"
-                                        :class="['px-2 py-0.5 text-[11px] rounded border transition-colors',
-                                                 aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
-                                    + {{ tag }}
-                                </button>
-                            </div>
-                        </div>
+        <!-- ================= [ 右键快捷菜单：角色卡（子组件 ContextMenu） ] ================= -->
+        <context-menu
+            :visible="contextMenu.visible"
+            :x="contextMenu.x"
+            :y="contextMenu.y"
+            :item="contextMenu.item"
+            @view="openFromLibrary(contextMenu.item); closeContextMenu()"
+            @open-folder="handleContextMenuAction('openFolder')"
+            @duplicate="handleContextMenuAction('duplicate')"
+            @move-group="quickMoveGroup(contextMenu.item); closeContextMenu()"
+            @export="exportCard(contextMenu.item); closeContextMenu()"
+            @ai-tag="handleContextMenuAction('aiTag')"
+            @trash="handleContextMenuAction('trash')"
+        />
 
-                        <!-- 🤖 2. AI 打标规则设置 -->
-                        <div class="p-3 bg-gray-50 border border-gray-200 rounded-lg space-y-3">
-                            <h4 class="text-sm font-bold text-gray-700">🤖 AI 打标规则设置</h4>
-
-                            <!-- 🌟 新增：AI 自由提取开关 -->
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" v-model="enableAIExtraction" :disabled="isAITagging"
-                                       class="w-4 h-4 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-600 focus:ring-2">
-                                <span class="text-sm text-gray-700">允许 AI 自由提取标签</span>
-                            </label>
-                            <p class="text-[10px] text-gray-500 ml-6 -mt-1">关闭后，AI 将<strong class="text-rose-500">严格只能</strong>从上方的候选池中为你选择标签，不会自行创造新标签。</p>
-
-                            <!-- 🌟 新增：自定义提示词输入 -->
-                            <div class="flex flex-col gap-1">
-                                <label class="text-xs text-gray-600">附加自定义提示词 (可选)</label>
-                                <textarea v-model="customAIPrompt" :disabled="isAITagging" rows="2"
-                                          placeholder="例如：请重点分析角色的性格特征，忽略外观描述..."
-                                          class="w-full bg-white border border-gray-300 rounded p-2 text-xs text-gray-700 focus:outline-none focus:border-blue-500 placeholder-gray-400 resize-y shadow-sm"></textarea>
-                            </div>
-                        </div>
-
-                        <!-- 📝 系统级微调全局提示词预设库（单选生效 + 增删改 + 折叠管理） -->
-                        <div>
-                            <label class="block font-bold text-gray-700 mb-2 flex justify-between items-center">
-                                <span>📝 3. 系统级微调全局提示词 (System Prompts):</span>
-                                <span class="text-[10px] text-amber-600 font-normal bg-amber-50 px-2 py-0.5 rounded border border-amber-200">勾选即生效 · 建议保留 JSON 输出指令</span>
-                            </label>
-                            <div class="bg-gray-50 border border-gray-200 rounded-lg p-3.5 shadow-inner">
-                                <div class="flex items-center justify-between mb-2.5 pb-2 border-b border-gray-200">
-                                    <span class="font-bold text-amber-600 flex items-center gap-1.5">📝 预设库 ({{ systemPromptPresets.length }} 条)</span>
-                                    <button @click="addSystemPromptPreset" :disabled="isAITagging" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-300 disabled:text-gray-500 text-white rounded text-[11px] font-medium transition flex items-center gap-1">➕ 新增提示词</button>
-                                </div>
-                                <div class="space-y-2.5 max-h-60 overflow-y-auto custom-scrollbar pr-1">
-                                    <div v-for="(preset, index) in systemPromptPresets" :key="preset.id"
-                                         class="bg-white border rounded-lg p-2.5 transition"
-                                         :class="activeSystemPromptId === preset.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
-                                        <div class="flex items-center justify-between gap-2">
-                                            <div class="flex items-center gap-2 flex-1">
-                                                <input type="radio" :value="preset.id" v-model="activeSystemPromptId" :disabled="isAITagging" class="accent-indigo-600 cursor-pointer shrink-0" title="设为当前生效">
-                                                <input v-model="preset.name" @input="saveSystemPromptsToStorage" :disabled="isAITagging" type="text" class="bg-white border border-gray-300 rounded px-2 py-0.5 text-gray-800 font-medium text-xs w-full focus:border-indigo-500 focus:outline-none">
-                                            </div>
-                                            <div class="flex items-center gap-1.5 shrink-0">
-                                                <button @click="preset.expanded = !preset.expanded" :disabled="isAITagging" class="text-gray-500 hover:text-gray-800 px-2 py-0.5 rounded hover:bg-gray-100 transition">{{ preset.expanded ? '🔼 折叠' : '🔽 展开' }}</button>
-                                                <button @click="deleteSystemPromptPreset(index)" :disabled="isAITagging" class="text-gray-400 hover:text-rose-500 px-1.5 py-0.5 rounded hover:bg-gray-100 transition" title="删除">🗑️</button>
-                                            </div>
-                                        </div>
-                                        <div v-if="preset.expanded" class="mt-2.5 pt-2 border-t border-gray-200">
-                                            <label class="block text-[10px] text-gray-500 mb-1">System Prompt 详细内容设定：</label>
-                                            <textarea v-model="preset.content" @input="saveSystemPromptsToStorage" :disabled="isAITagging" rows="3" class="w-full bg-white border border-gray-300 rounded p-2 text-gray-700 font-mono text-xs focus:border-indigo-500 focus:outline-none resize-y shadow-sm" placeholder="在此输入给 AI 的系统级微调指令..."></textarea>
-                                        </div>
-                                    </div>
-                                </div>
-                                <p class="text-[10px] text-gray-500 mt-2">
-                                    💡 勾选左侧单选按钮指定当前 AI 打标生效的系统提示词，支持随时折叠管理、自动保存。
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3.5 shadow-inner">
-                            <div class="flex items-center justify-between mb-2.5">
-                                <span class="text-xs font-bold text-gray-700 flex items-center gap-1.5">
-                                    ⚡ API 引擎设置 <span class="text-[10px] font-normal text-gray-500">(打标与测卡对话实时同步)</span>
-                                </span>
-                                <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-300 disabled:text-gray-500 text-white text-[11px] font-medium rounded shadow flex items-center gap-1 transition">
-                                    <span v-if="isFetchingModels" class="animate-spin">🌀</span>
-                                    <span v-else>🔄</span> 拉取模型列表
-                                </button>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2.5 mb-2.5">
-                                <div>
-                                    <label class="block text-[11px] text-gray-600 mb-1">API Endpoint</label>
-                                    <input v-model="apiEndpoint" type="text" placeholder="http://127.0.0.1:1234/v1/chat/completions" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
-                                </div>
-                                <div>
-                                    <label class="block text-[11px] text-gray-600 mb-1">API Key</label>
-                                    <input v-model="apiKey" type="password" placeholder="sk-... 或留空" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
-                                </div>
-                            </div>
-                            <div>
-                                <label class="block text-[11px] text-gray-600 mb-1 flex justify-between items-center">
-                                    <span>当前选中模型 (Model)</span>
-                                    <span v-if="fetchModelStatus" class="text-[10px]" :class="fetchModelStatus.includes('❌') ? 'text-red-500' : 'text-emerald-600'">{{ fetchModelStatus }}</span>
-                                </label>
-                                <div class="flex gap-2">
-                                    <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-white border border-indigo-400 rounded px-2.5 py-1 text-xs text-gray-800 focus:outline-none">
-                                        <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
-                                    </select>
-                                    <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, local-model" class="w-full bg-white border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none">
-                                </div>
-                                <p class="text-[10px] text-gray-500 mt-1.5 leading-relaxed">
-                                    本地 LM Studio / Ollama 可留空或填 <code class="text-indigo-600 bg-indigo-500/10 px-1 rounded">local-model</code>；第三方 API 需严格填写模型 ID。
-                                </p>
-                            </div>
-                        </div>
-
-                        <div v-if="isAITagging || aiTaggingProgress.total > 0" class="p-4 bg-gray-50 border border-gray-200 rounded-lg shadow-inner">
-                            <div class="flex justify-between items-center mb-2 font-bold text-gray-700 text-sm">
-                                <span>{{ aiTaggingProgress.status }}</span>
-                                <span class="text-blue-600">{{ aiTaggingProgress.current }} / {{ aiTaggingProgress.total }}</span>
-                            </div>
-                            <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-sm">
-                                <div class="bg-blue-600 h-3 rounded-full transition-all duration-300" :style="{ width: (aiTaggingProgress.current / (aiTaggingProgress.total || 1) * 100) + '%' }"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3 shrink-0">
-                        <button @click="showAITagModal = false" :disabled="isAITagging" class="px-5 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition">取消</button>
-                        <button @click="startAITagging" :disabled="isAITagging" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold disabled:opacity-75 flex items-center gap-2 shadow-md transition">
-                            <svg v-if="isAITagging" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                            {{ isAITagging ? '打标处理中...' : '🚀 开始智能打标' }}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </transition>
-
-        <!-- ================= [ 弹窗：关系图谱 ] ================= -->
-        <transition name="fade">
-            <div v-if="showGraph" class="fixed inset-0 z-50 bg-gray-900 flex flex-col">
-                
-                <div class="px-4 py-2.5 bg-gray-900 border-b border-gray-800 flex flex-wrap justify-between items-center text-white shrink-0 gap-3 text-xs">
-                    <div class="flex items-center gap-3 flex-wrap">
-                        <h3 class="font-bold flex items-center gap-1.5 text-sm">🌌 角色宇宙图谱</h3>
-                        
-                        <div class="flex bg-gray-800 rounded p-0.5 border border-gray-700">
-                            <button @click="updateGraphLayout('force')" :class="graphLayoutMode === 'force' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-2 py-1 rounded transition">🌐 网状</button>
-                            <button @click="updateGraphLayout('circular')" :class="graphLayoutMode === 'circular' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-2 py-1 rounded transition">🎯 环形</button>
-                        </div>
-
-                        <label class="flex items-center gap-1.5 bg-gray-800 px-2.5 py-1 rounded border border-gray-700 cursor-pointer hover:border-blue-500">
-                            <input type="checkbox" v-model="isolateCurrentGroup" @change="renderGraph" class="accent-blue-500">
-                            <span class="text-gray-300">仅显示当前分组 (Isolate)</span>
-                        </label>
-                    </div>
-
-                    <div class="flex items-center gap-3 flex-wrap">
-                        <div class="flex items-center gap-2 bg-gray-800 px-2.5 py-1 rounded border border-gray-700">
-                            <span class="text-gray-400">连线图例:</span>
-                            <label class="flex items-center gap-1 text-blue-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.creator" @change="renderGraph" class="accent-blue-500"> 同作者</label>
-                            <label class="flex items-center gap-1 text-purple-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.category" @change="renderGraph" class="accent-purple-500"> 同分组</label>
-                            <label class="flex items-center gap-1 text-emerald-400 cursor-pointer"><input type="checkbox" v-model="edgeFilters.tags" @change="renderGraph" class="accent-emerald-500"> 共享标签</label>
-                        </div>
-
-                        <input v-model="graphSearchKeyword" @input="renderGraph" type="text" placeholder="高亮搜索..." class="bg-gray-800 border border-gray-700 rounded px-2.5 py-1 text-white outline-none focus:border-blue-500 w-28">
-
-                        <button @click="closeGraph" class="px-4 py-1 bg-red-600 hover:bg-red-700 text-white rounded font-bold transition">关闭</button>
-                    </div>
-                </div>
-                
-                <div ref="graphContainer" class="flex-1 w-full h-full relative"></div>
-            </div>
-        </transition>
-
-        <!-- ================= [ 弹窗：全局资产中心 ] ================= -->
-        <transition name="fade">
-            <div v-if="showGlobalAssetModal" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
-                <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col">
-                    
-                    <div class="px-6 py-4 bg-gray-900 text-white flex justify-between items-center shrink-0">
-                        <div class="flex items-center gap-4">
-                            <h3 class="font-bold text-base flex items-center gap-2">📚 全局世界书与正则资产中心</h3>
-                            <div class="flex bg-gray-800 rounded p-0.5 border border-gray-700 text-xs">
-                                <button @click="globalAssetTab = 'worldbook'" :class="globalAssetTab === 'worldbook' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-3 py-1 rounded transition">世界书合集 ({{ globalAllWorldbooks.length }})</button>
-                                <button @click="globalAssetTab = 'regex'" :class="globalAssetTab === 'regex' ? 'bg-blue-600 text-white' : 'text-gray-400'" class="px-3 py-1 rounded transition">正则脚本合集 ({{ globalAllRegexScripts.length }})</button>
-                            </div>
-                        </div>
-                        <button @click="showGlobalAssetModal = false" class="px-4 py-1.5 bg-gray-800 hover:bg-red-600 rounded text-xs transition">关闭窗口</button>
-                    </div>
-
-                    <div class="flex-1 overflow-y-auto p-6 bg-gray-50 custom-scrollbar space-y-3">
-                        
-                        <template v-if="globalAssetTab === 'worldbook'">
-                            <div v-if="globalAllWorldbooks.length > 0" class="space-y-3">
-                                <div v-for="(entry, idx) in globalAllWorldbooks" :key="idx" class="bg-white p-4 rounded-lg border border-gray-200 shadow-sm text-xs space-y-2">
-                                    <div class="flex justify-between items-center">
-                                        <div class="font-bold text-gray-900 text-sm flex items-center gap-2">
-                                            <span>{{ entry.displayName }}</span>
-                                            <span class="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">所属角色: {{ entry.ownerCardName }}</span>
-                                        </div>
-                                        <span class="text-gray-400">优先级: {{ entry.insertion_order ?? 50 }}</span>
-                                    </div>
-                                    <div class="flex flex-wrap gap-1" v-if="entry.keys && entry.keys.length">
-                                        <span class="text-gray-400 font-bold mr-1">触发词:</span>
-                                        <span v-for="k in entry.keys" class="text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200 text-[10px]">{{ k }}</span>
-                                    </div>
-                                    <div class="bg-gray-50 p-2.5 rounded border border-gray-100 text-gray-700 font-mono text-[11px] max-h-24 overflow-y-auto custom-scrollbar" v-html="renderHTML(entry.content)"></div>
-                                </div>
-                            </div>
-                            <div v-else class="text-center text-gray-400 py-20">当前全库未收集到任何世界书条目</div>
-                        </template>
-
-                        <template v-if="globalAssetTab === 'regex'">
-                            <div v-if="globalAllRegexScripts.length > 0" class="space-y-3">
-                                <div v-for="(reg, idx) in globalAllRegexScripts" :key="idx" class="bg-white p-4 rounded-lg border border-gray-200 shadow-sm text-xs space-y-2">
-                                    <div class="flex justify-between items-center">
-                                        <div class="font-bold text-gray-900 text-sm flex items-center gap-2">
-                                            <span>{{ reg.scriptName || reg.comment || '未命名正则' }}</span>
-                                            <span class="text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded border border-purple-200">所属角色: {{ reg.ownerCardName }}</span>
-                                        </div>
-                                    </div>
-                                    <div class="grid grid-cols-2 gap-2 font-mono text-[11px]">
-                                        <div class="bg-gray-50 p-2 rounded border border-gray-200">
-                                            <span class="text-gray-400 block mb-1">查找正则 (Find):</span>
-                                            <code>{{ reg.findRegex || reg.find }}</code>
-                                        </div>
-                                        <div class="bg-gray-50 p-2 rounded border border-gray-200">
-                                            <span class="text-gray-400 block mb-1">替换内容 (Replace):</span>
-                                            <code>{{ reg.replaceString || reg.replace }}</code>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div v-else class="text-center text-gray-400 py-20">当前全库未收集到任何正则脚本</div>
-                        </template>
-
-                    </div>
-
-                </div>
-            </div>
-        </transition>
-
-        <!-- ================= [ 右键快捷菜单（增强版：原生定位/副本/AI打标/安全回收站） ] ================= -->
-        <transition name="fade">
-            <div v-if="contextMenu.visible"
-                 class="fixed z-[100] min-w-[210px] theme-surface border border-zinc-700/80 rounded-lg shadow-2xl py-1.5 text-xs flex flex-col"
-                 :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
-                 @click.stop>
-
-                <!-- 卡片信息头 -->
-                <div class="px-3 py-1.5 border-b border-zinc-700/50 mb-1 flex flex-col">
-                    <span class="font-bold text-amber-400 truncate">{{ contextMenu.item?.name || '未知角色' }}</span>
-                    <span class="text-[9px] opacity-50 truncate font-mono mt-0.5" :title="contextMenu.item?.path">
-                        {{ contextMenu.item?.path?.split(/[\\/]/).pop() }}
-                    </span>
-                </div>
-
-                <button @click="openFromLibrary(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">👁️</span> 查看 / 编辑卡片
-                </button>
-                <button @click.stop="handleContextMenuAction('openFolder')" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📁</span> 在资源管理器中打开
-                </button>
-                <button @click.stop="handleContextMenuAction('duplicate')" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📋</span> 创建卡片物理副本
-                </button>
-
-                <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
-
-                <button @click="quickMoveGroup(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📂</span> 移动到指定分组...
-                </button>
-                <button @click="exportCard(contextMenu.item); closeContextMenu()" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">💾</span> 导出单张卡片 (PNG)
-                </button>
-                <button @click.stop="handleContextMenuAction('aiTag')" class="w-full text-left px-3 py-2 hover:bg-amber-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">🤖</span> 单卡快捷 AI 打标...
-                </button>
-
-                <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
-
-                <button @click.stop="handleContextMenuAction('trash')" class="w-full text-left px-3 py-2 hover:bg-rose-600 hover:text-white flex items-center gap-2 transition-colors text-rose-400">
-                    <span class="text-sm">🗑️</span> 移入安全回收站
-                </button>
-            </div>
-        </transition>
-
-        <!-- ================= [ 右键快捷菜单：世界书专属（重命名/复制副本/删除） ] ================= -->
-        <transition name="fade">
-            <div v-if="wbContextMenu.show"
-                 class="fixed z-[100] w-44 theme-surface border border-zinc-700/80 rounded-lg shadow-2xl py-1.5 text-xs flex flex-col"
-                 :style="{ top: wbContextMenu.y + 'px', left: wbContextMenu.x + 'px' }"
-                 @click.stop>
-
-                <!-- 世界书信息头 -->
-                <div class="px-3 py-1.5 border-b border-zinc-700/50 mb-1">
-                    <span class="font-bold text-amber-400 truncate block">{{ wbContextMenu.wb?.data?.name || wbContextMenu.wb?.name || '未知世界书' }}</span>
-                    <span class="text-[9px] opacity-50 truncate font-mono mt-0.5 block" :title="wbContextMenu.wb?.path">
-                        {{ wbContextMenu.wb?.path?.split(/[\\/]/).pop() || '（内存导入）' }}
-                    </span>
-                </div>
-
-                <button @click="openWbInFolder(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📁</span> 在资源管理器中打开
-                </button>
-                <button @click="renameWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-blue-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">✏️</span> 重命名世界书
-                </button>
-                <button @click="duplicateWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-emerald-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📋</span> 复制为副本
-                </button>
-                <button @click="changeWbCategory(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-purple-600 hover:text-white flex items-center gap-2 transition-colors">
-                    <span class="text-sm">📁</span> 移动分组
-                </button>
-
-                <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
-
-                <button @click="deleteWorldbook(wbContextMenu.wb); closeWbContextMenu()" class="w-full text-left px-3 py-2 hover:bg-rose-600 hover:text-white flex items-center gap-2 transition-colors text-rose-400">
-                    <span class="text-sm">🗑️</span> 删除世界书
-                </button>
-            </div>
-        </transition>
+        <!-- ================= [ 右键快捷菜单：世界书（子组件 WbContextMenu） ] ================= -->
+        <wb-context-menu
+            :show="wbContextMenu.show"
+            :x="wbContextMenu.x"
+            :y="wbContextMenu.y"
+            :wb="wbContextMenu.wb"
+            @open-folder="openWbInFolder(wbContextMenu.wb); closeWbContextMenu()"
+            @rename="renameWorldbook(wbContextMenu.wb); closeWbContextMenu()"
+            @duplicate="duplicateWorldbook(wbContextMenu.wb); closeWbContextMenu()"
+            @move-group="changeWbCategory(wbContextMenu.wb); closeWbContextMenu()"
+            @delete="deleteWorldbook(wbContextMenu.wb); closeWbContextMenu()"
+        />
 
         <!-- ================= [ 弹窗：全屏大文本阅读/编辑（子组件 TextModal） ] ================= -->
         <text-modal
@@ -1451,60 +1189,28 @@
             @close="showImageModal = false"
         />
 
-        <!-- ================= [ 弹窗：API 引擎与模型设置（独立） ] ================= -->
-        <transition name="fade">
-            <div v-if="showApiModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" @click.self="showApiModal = false">
-                <div class="bg-zinc-900 border border-zinc-700 rounded-xl max-w-md w-full p-5 shadow-2xl">
-                    <div class="flex items-center justify-between mb-4 pb-2 border-b border-zinc-800">
-                        <h3 class="text-sm font-bold text-amber-400 flex items-center gap-1.5">⚡ API 接口与大模型配置</h3>
-                        <button @click="showApiModal = false" class="text-zinc-400 hover:text-white">✕</button>
-                    </div>
-                    <div class="space-y-3.5 mb-5">
-                        <div>
-                            <label class="block text-xs text-zinc-400 mb-1">API 接入格式 / 协议类型：</label>
-                            <select v-model="apiType" @change="handleApiTypeChange" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:border-indigo-500 focus:outline-none cursor-pointer">
-                                <option value="openai">OpenAI 兼容格式 (OpenAI / DeepSeek / Kimi / 聚合中转)</option>
-                                <option value="anthropic">Anthropic 兼容格式 (Claude 官方或兼容中转)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs text-zinc-400 mb-1">API Endpoint (接口地址)</label>
-                            <input v-model="apiEndpoint" type="text" placeholder="http://127.0.0.1:1234/v1/chat/completions" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:border-indigo-500 focus:outline-none">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-zinc-400 mb-1">API Key (密钥)</label>
-                            <input v-model="apiKey" type="password" placeholder="sk-... 或留空" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:border-indigo-500 focus:outline-none">
-                        </div>
-                        <div>
-                            <div class="flex items-center justify-between mb-1">
-                                <label class="text-xs text-zinc-400">模型名称 (Model Name)</label>
-                                <button @click="fetchAvailableModels" :disabled="isFetchingModels" class="text-[10px] text-indigo-400 hover:underline">
-                                    {{ isFetchingModels ? '⏳ 正在拉取...' : '🔄 自动拉取服务端模型' }}
-                                </button>
-                            </div>
-                            <select v-if="availableModels.length > 0" v-model="apiModel" class="w-full bg-zinc-800 border border-indigo-500 rounded px-3 py-1.5 text-xs text-zinc-200">
-                                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
-                            </select>
-                            <input v-else v-model="apiModel" list="model-suggestions" type="text" placeholder="例: gpt-4o, local-model" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200">
-                        </div>
-                        <p v-if="fetchModelStatus" class="text-[10px]" :class="fetchModelStatus.includes('❌') ? 'text-red-400' : 'text-emerald-400'">{{ fetchModelStatus }}</p>
-                        <div class="border-t border-zinc-800 pt-3">
-                            <label class="block text-xs text-zinc-400 mb-1">🍻 酒馆本地目录（物理推送绑定）：</label>
-                            <div class="flex items-center gap-2">
-                                <input :value="appSettings.tavernLocalPath || '（未绑定）'" readonly type="text" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-300 truncate focus:outline-none" :title="appSettings.tavernLocalPath">
-                                <button @click="rebindTavernPath" class="px-2 py-1.5 bg-zinc-700 hover:bg-indigo-600 text-white rounded text-[11px] shrink-0 transition" title="重新选择酒馆根目录">📁 重新选择</button>
-                                <button v-if="appSettings.tavernLocalPath" @click="appSettings.tavernLocalPath = ''" class="px-2 py-1.5 bg-zinc-700 hover:bg-rose-600 text-white rounded text-[11px] shrink-0 transition" title="解除绑定">✕</button>
-                            </div>
-                        </div>
-                        <p class="text-[10px] text-zinc-500 leading-relaxed">设置自动保存，重启后自动恢复；与 AI 打标 / 聊天测卡实时同步。</p>
-                    </div>
-                    <div class="flex justify-end gap-2 pt-2 border-t border-zinc-800">
-                        <button @click="showApiModal = false" class="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded shadow">关闭</button>
-                        <button @click="saveApiConfig" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow flex items-center gap-1.5">💾 保存 API 配置</button>
-                    </div>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：API 引擎与模型设置（子组件 ApiSettingsModal） ] ================= -->
+        <api-settings-modal
+            :show="showApiModal"
+            :api-type="apiType"
+            :api-endpoint="apiEndpoint"
+            :api-key="apiKey"
+            :api-model="apiModel"
+            :available-models="availableModels"
+            :is-fetching-models="isFetchingModels"
+            :fetch-model-status="fetchModelStatus"
+            :tavern-local-path="appSettings.tavernLocalPath"
+            @close="showApiModal = false"
+            @update:apiType="apiType = $event"
+            @api-type-change="handleApiTypeChange"
+            @update:apiEndpoint="apiEndpoint = $event"
+            @update:apiKey="apiKey = $event"
+            @update:apiModel="apiModel = $event"
+            @fetch-models="fetchAvailableModels"
+            @rebind-path="rebindTavernPath"
+            @clear-path="appSettings.tavernLocalPath = ''"
+            @save="saveApiConfig"
+        />
 
         <!-- 模型名称下拉建议（供聊天面板与设置弹窗共用；置于常驻 DOM 避免被 v-if 移除） -->
         <datalist id="model-suggestions">
@@ -1519,357 +1225,59 @@
         <!-- ================= [ 弹窗：磁盘扫描进度（子组件 DiskScanModal） ] ================= -->
         <disk-scan-modal :is-scanning="isScanningDisk" :status="diskScanProgress.status" />
 
-        <!-- ================= [ 🔍 智能查重与版本清洗弹窗 ] ================= -->
-        <div v-if="showDedupeModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showDedupeModal = false">
-            <div class="bg-zinc-950 border border-zinc-700 rounded-xl max-w-5xl w-full h-[85vh] flex flex-col shadow-2xl">
+        <!-- ================= [ 🔍 智能查重与版本清洗弹窗（子组件 DedupeModal） ] ================= -->
+        <dedupe-modal
+            :show="showDedupeModal"
+            :groups="duplicateGroups"
+            @close="showDedupeModal = false"
+            @open-diff="openDiffDetailModal"
+            @resolve-group="resolveDedupeGroup"
+        />
 
-                <!-- 弹窗头部 -->
-                <div class="px-5 py-4 border-b border-zinc-800 bg-zinc-900 flex items-center justify-between shrink-0 rounded-t-xl">
-                    <h3 class="text-lg font-bold text-amber-400 flex items-center gap-2">
-                        <span>🔍 智能版本查重中心</span>
-                        <span class="text-xs px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">
-                            发现 {{ duplicateGroups.length }} 组多胞胎
-                        </span>
-                    </h3>
-                    <button @click="showDedupeModal = false" class="text-zinc-400 hover:text-white transition text-xl">✕</button>
-                </div>
+        <!-- ================= [ 📖 世界书智能版本对比查重弹窗（子组件 WbDedupeModal） ] ================= -->
+        <wb-dedupe-modal
+            :show="showWbDedupeModal"
+            :groups="wbDuplicateGroups"
+            @close="showWbDedupeModal = false"
+            @open-diff="openDiffDetailModal"
+            @resolve-group="resolveWbDedupeGroup"
+        />
 
-                <!-- 查重聚类列表 (滚动区) -->
-                <div class="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-6">
-                    <div v-for="(group, gIndex) in duplicateGroups" :key="gIndex" class="bg-zinc-900/50 border border-zinc-700/80 rounded-xl p-4">
+        <!-- ================= [ ⚖️ 数据版本差异深度比对 (Diff Inspector)（子组件 DiffModal） ] ================= -->
+        <diff-modal
+            :show="showDiffDetailModal"
+            :master-item="diffMasterItem"
+            :compare-item="diffCompareItem"
+            :field-results="diffFieldResults"
+            @close="showDiffDetailModal = false"
+        />
 
-                        <!-- 组标题 -->
-                        <div class="mb-3 flex items-center justify-between">
-                            <div class="text-sm font-bold text-white flex items-center gap-2">
-                                🎎 角色名: <span class="text-amber-400 text-lg">『{{ group.name }}』</span>
-                            </div>
-                            <span class="text-xs text-zinc-500">检测到 {{ group.cards.length }} 个重名/历史版本</span>
-                        </div>
+    <!-- ================= [ 🌐 世界书词条逻辑关联图谱（子组件 WbGraphModal） ] ================= -->
+    <wb-graph-modal :show="showWbGraphModal" @close="showWbGraphModal = false" />
 
-                        <!-- 组内卡片横向对比视图 -->
-                        <!-- 【修复】overflow-x-auto 会把 overflow-y 也变为 auto（纵向裁剪）；加 pt-3 容纳徽章上移 -->
-                        <div class="flex gap-4 overflow-x-auto custom-scrollbar pt-3 pb-2">
-                            <div v-for="(c, cIndex) in group.cards" :key="cIndex"
-                                 class="flex-shrink-0 w-72 bg-zinc-800/80 border rounded-lg p-3 flex flex-col transition relative"
-                                 :class="cIndex === 0 ? 'border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : 'border-zinc-700'">
+    <!-- ================= [ 🔗 多本世界书智能合并（子组件 WbMergeModal） ] ================= -->
+    <wb-merge-modal
+        :show="showWbMergeModal"
+        :worldbooks="worldbooks"
+        :selected-paths="selectedWbMergePaths"
+        @close="showWbMergeModal = false"
+        @update:selectedPaths="selectedWbMergePaths = $event"
+        @merge="executeWorldbookMerge"
+    />
 
-                                <!-- 皇冠标识：综合最优版推荐（left-1.5 改为卡片内定位，避免向左溢出被滚动容器裁剪） -->
-                                <div v-if="cIndex === 0" class="absolute -top-3 left-1.5 flex items-center gap-1 bg-emerald-900/80 px-2 py-0.5 rounded-full border border-emerald-500 shadow-md z-10">
-                                    <span class="text-lg leading-none">👑</span>
-                                    <span class="text-[10px] text-emerald-400 font-bold">综合最优推荐</span>
-                                </div>
-
-                                <!-- 迷你立绘与路径/时间 -->
-                                <div class="flex gap-3 mb-2">
-                                    <img v-if="c.avatar" :src="c.avatar" class="w-14 h-14 rounded object-cover border border-zinc-700 bg-zinc-900 shrink-0">
-                                    <div v-else class="w-14 h-14 rounded border border-zinc-700 bg-zinc-900 flex items-center justify-center text-lg shrink-0">🎎</div>
-                                    <div class="flex flex-col justify-center min-w-0 overflow-hidden">
-                                        <span class="text-[10px] text-zinc-400 font-mono truncate" :title="c.path">{{ c.path.split(/[\\/]/).pop() }}</span>
-                                        <span class="text-xs font-bold" :class="cIndex === 0 ? 'text-emerald-400' : 'text-zinc-300'">
-                                            📝 约 {{ c._tokens }} Tokens
-                                        </span>
-                                        <span class="text-[10px] text-amber-400/80 truncate">
-                                            🕒 {{ c._dateStr || '时间未知' }}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <!-- 差异徽章 -->
-                                <div class="mb-2 px-2 py-1 rounded text-[10px] text-center font-bold"
-                                     :class="{
-                                        'bg-zinc-900 text-zinc-500': c._diffType === '推荐版',
-                                        'bg-emerald-900/50 text-emerald-400': c._diffType === '可能包含更多设定',
-                                        'bg-rose-900/50 text-rose-400': c._diffType === '设定可能有缺失',
-                                        'bg-amber-900/50 text-amber-400': c._diffType === '设定细节不同',
-                                        'bg-blue-900/50 text-blue-400': c._diffType === '设定完全一致'
-                                     }">
-                                    {{ c._diffType }}
-                                </div>
-
-                                <!-- 标签对比 -->
-                                <div class="flex-1 mt-1 mb-3">
-                                    <div class="text-[10px] text-zinc-500 mb-1">系统/自定义标签:</div>
-                                    <div class="flex flex-wrap gap-1">
-                                        <span v-for="tag in (c.customTags || []).slice(0, 4)" :key="tag" class="text-[9px] bg-zinc-900 text-zinc-300 px-1.5 py-0.5 rounded border border-zinc-700">
-                                            {{ tag }}
-                                        </span>
-                                        <span v-if="(c.customTags || []).length > 4" class="text-[9px] text-zinc-500">...</span>
-                                        <span v-if="!(c.customTags || []).length" class="text-[9px] text-rose-400/50">无标签</span>
-                                    </div>
-                                </div>
-
-                                <!-- 操作按钮：对比差异 + 保留/清理 -->
-                                <div class="flex gap-1.5 mt-2">
-                                    <button v-if="cIndex !== 0"
-                                            @click="openDiffDetailModal(group.cards[0], c)"
-                                            class="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-400 border border-amber-500/30 text-xs font-bold rounded shadow transition shrink-0">
-                                        🔍 对比差异
-                                    </button>
-                                    <button @click="resolveDedupeGroup(gIndex, c.path)"
-                                            :class="cIndex === 0 ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-zinc-700 hover:bg-zinc-600'"
-                                            class="flex-1 py-1.5 text-white text-xs font-bold rounded shadow transition truncate">
-                                        <span v-if="cIndex === 0">✅ 保留此版，清理其余</span>
-                                        <span v-else>⚠️ 保留旧版，清理其余</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 全部清理完毕空状态 -->
-                    <div v-if="duplicateGroups.length === 0" class="h-full flex flex-col items-center justify-center text-zinc-500">
-                        <span class="text-5xl opacity-30 mb-4">✨</span>
-                        <p>所有冗余卡片已清理完毕！库内非常干净。</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ================= [ 📖 世界书智能版本对比查重弹窗 ] ================= -->
-        <div v-if="showWbDedupeModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbDedupeModal = false">
-            <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-4xl w-full h-[80vh] flex flex-col shadow-2xl overflow-hidden">
-
-                <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-amber-500/10">
-                    <div class="flex items-center gap-2">
-                        <span class="text-base font-bold text-amber-500">📖 世界书智能版本对比中心</span>
-                        <span class="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full font-mono">
-                            发现 {{ wbDuplicateGroups.length }} 组同名世界书
-                        </span>
-                    </div>
-                    <button @click="showWbDedupeModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
-                </div>
-
-                <div class="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-5">
-                    <div v-for="(group, gIdx) in wbDuplicateGroups" :key="gIdx" class="bg-zinc-900/50 border border-zinc-700/80 rounded-xl p-4">
-
-                        <div class="mb-3 flex items-center justify-between">
-                            <span class="text-sm font-bold text-amber-400">『{{ group.name }}』</span>
-                            <span class="text-xs text-zinc-500">共 {{ group.list.length }} 个重名版本</span>
-                        </div>
-
-                        <div class="flex gap-3 overflow-x-auto custom-scrollbar pb-2">
-                            <div v-for="(wb, wIdx) in group.list" :key="wIdx"
-                                 class="flex-shrink-0 w-64 bg-zinc-800/80 border rounded-lg p-3 flex flex-col justify-between"
-                                 :class="wIdx === 0 ? 'border-amber-500 shadow-[0_0_15px_rgba(217,119,6,0.15)]' : 'border-zinc-700'">
-
-                                <div>
-                                    <div class="text-xs font-bold truncate mb-1" :title="wb.name">📄 {{ wb.name }}</div>
-                                    <div class="text-[11px] font-mono text-amber-400 mb-1">
-                                        📚 词条数: {{ wb._entryCount }} 个
-                                    </div>
-                                    <div class="text-[10px] text-zinc-500 font-mono mb-2">
-                                        🕒 {{ wb._dateStr }} ({{ wb._sizeKb }} KB)
-                                    </div>
-                                    <div class="text-[10px] px-2 py-1 rounded font-bold mb-3 bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                                        {{ wb._diffInfo }}
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <button v-if="wIdx !== 0"
-                                            @click="openDiffDetailModal(group.list[0], wb)"
-                                            class="w-full px-2.5 py-1.5 mb-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 border border-amber-500/30 text-[11px] font-bold rounded shadow transition shrink-0">
-                                        🔍 查看词条差异
-                                    </button>
-                                    <button @click="resolveWbDedupeGroup(gIdx, wb.path)"
-                                            :class="wIdx === 0 ? 'bg-amber-600 hover:bg-amber-500' : 'bg-zinc-700 hover:bg-zinc-600'"
-                                            class="w-full py-1.5 text-white text-xs font-bold rounded shadow transition">
-                                        <span v-if="wIdx === 0">✅ 保留此本，清理其余</span>
-                                        <span v-else>⚠️ 保留此版本，清理其余</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div v-if="wbDuplicateGroups.length === 0" class="text-center py-10 text-zinc-500">
-                        <span class="text-5xl opacity-30 mb-4 block">📖</span>
-                        <p>所有冗余世界书已清理完毕！</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ================= [ ⚖️ 数据版本差异深度比对 (Diff Inspector) ] ================= -->
-        <div v-if="showDiffDetailModal" class="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center p-6" @click.self="showDiffDetailModal = false">
-            <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-6xl w-full h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-
-                <div class="px-5 py-3 border-b border-zinc-800 bg-zinc-900/90 flex items-center justify-between shrink-0">
-                    <div class="flex items-center gap-3">
-                        <span class="text-base font-bold text-amber-400">⚖️ 数据版本差异深度比对 (Diff Inspector)</span>
-                        <span class="text-xs text-zinc-400 font-mono">👑 推荐保留版 vs 🔍 对比版</span>
-                    </div>
-                    <button @click="showDiffDetailModal = false" class="text-zinc-400 hover:text-white text-lg transition">✕</button>
-                </div>
-
-                <div class="grid grid-cols-2 border-b border-zinc-800 bg-zinc-900/50 shrink-0 text-xs font-bold">
-                    <div class="p-3 border-r border-zinc-800 flex items-center gap-3">
-                        <img v-if="diffMasterItem && diffMasterItem.avatar" :src="diffMasterItem.avatar" class="w-10 h-10 rounded object-cover border border-emerald-500/50">
-                        <span v-else class="text-3xl opacity-50">{{ diffMasterItem && diffMasterItem.data && diffMasterItem.data.entries ? '🌍' : '🎎' }}</span>
-                        <div class="flex flex-col min-w-0">
-                            <span class="text-emerald-400 truncate">👑 推荐版: {{ (diffMasterItem && diffMasterItem.data && diffMasterItem.data.name) || (diffMasterItem ? diffMasterItem.name : '未知') }}</span>
-                            <span class="text-[10px] text-zinc-500 font-mono truncate">{{ diffMasterItem ? diffMasterItem.path.split(/[\\/]/).pop() : '' }}</span>
-                        </div>
-                    </div>
-                    <div class="p-3 flex items-center gap-3">
-                        <img v-if="diffCompareItem && diffCompareItem.avatar" :src="diffCompareItem.avatar" class="w-10 h-10 rounded object-cover border border-amber-500/50">
-                        <span v-else class="text-3xl opacity-50">{{ diffCompareItem && diffCompareItem.data && diffCompareItem.data.entries ? '🌍' : '🎎' }}</span>
-                        <div class="flex flex-col min-w-0">
-                            <span class="text-amber-400 truncate">🔍 对比版: {{ (diffCompareItem && diffCompareItem.data && diffCompareItem.data.name) || (diffCompareItem ? diffCompareItem.name : '未知') }}</span>
-                            <span class="text-[10px] text-zinc-500 font-mono truncate">{{ diffCompareItem ? diffCompareItem.path.split(/[\\/]/).pop() : '' }}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-5">
-                    <div v-for="(f, idx) in diffFieldResults" :key="idx" class="bg-zinc-900/50 border border-zinc-800 rounded-xl p-3 shadow-md">
-
-                        <div class="flex items-center justify-between mb-2 pb-2 border-b border-zinc-800/80">
-                            <span class="text-xs font-bold text-zinc-200">{{ f.label }}</span>
-                            <span class="text-[10px] px-2 py-0.5 rounded font-mono font-bold"
-                                  :class="f.isSame ? 'bg-zinc-800 text-zinc-500' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'">
-                                {{ f.isSame ? '✅ 设定完全一致' : `⚠️ 存在差异 (${f.len1} vs ${f.len2})` }}
-                            </span>
-                        </div>
-
-                        <template v-if="f.isTags">
-                            <div class="grid grid-cols-2 gap-4 text-xs">
-                                <div class="border-r border-zinc-800 pr-2">
-                                    <span class="text-[10px] text-zinc-500 block mb-1">左版独有:</span>
-                                    <div class="flex flex-wrap gap-1">
-                                        <span v-for="t in f.onlyMasterTags" :key="t" class="bg-emerald-900/40 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px]">+ {{ t }}</span>
-                                        <span v-if="!f.onlyMasterTags.length" class="text-zinc-600 italic">无</span>
-                                    </div>
-                                </div>
-                                <div>
-                                    <span class="text-[10px] text-zinc-500 block mb-1">右版独有:</span>
-                                    <div class="flex flex-wrap gap-1">
-                                        <span v-for="t in f.onlyCompareTags" :key="t" class="bg-amber-900/40 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded text-[10px]">+ {{ t }}</span>
-                                        <span v-if="!f.onlyCompareTags.length" class="text-zinc-600 italic">无</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </template>
-
-                        <template v-else>
-                            <div v-if="f.isSame" class="text-[11px] text-zinc-500 italic px-2 py-1">
-                                两版内容完全一致，已自动折叠展示。
-                            </div>
-                            <div v-else class="grid grid-cols-2 gap-3 text-xs font-mono">
-                                <div class="bg-zinc-950/80 border border-zinc-800 rounded p-2.5 max-h-[300px] overflow-y-auto custom-scrollbar whitespace-pre-wrap leading-relaxed">
-                                    <template v-for="(line, lIdx) in f.diffText.masterLines" :key="lIdx">
-                                        <div :class="line.type === 'removed' ? 'bg-rose-950/60 text-rose-300 border-l-2 border-rose-500 px-1 my-0.5' : 'text-zinc-500 opacity-50'">
-                                            {{ line.text || ' ' }}
-                                        </div>
-                                    </template>
-                                </div>
-                                <div class="bg-zinc-950/80 border border-zinc-800 rounded p-2.5 max-h-[300px] overflow-y-auto custom-scrollbar whitespace-pre-wrap leading-relaxed">
-                                    <template v-for="(line, lIdx) in f.diffText.compareLines" :key="lIdx">
-                                        <div :class="line.type === 'added' ? 'bg-emerald-950/60 text-emerald-300 border-l-2 border-emerald-500 px-1 my-0.5' : 'text-zinc-500 opacity-50'">
-                                            {{ line.text || ' ' }}
-                                        </div>
-                                    </template>
-                                </div>
-                            </div>
-                        </template>
-
-                    </div>
-                </div>
-            </div>
-        </div>
-
-    <!-- ================= [ 🌐 世界书词条逻辑关联图谱 ] ================= -->
-    <div v-if="showWbGraphModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbGraphModal = false">
-        <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-5xl w-full h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-amber-500/10">
-                <div class="flex items-center gap-2">
-                    <span class="text-base font-bold text-amber-500">🌐 世界书词条逻辑关联图谱</span>
-                    <span class="text-xs text-zinc-400 font-mono">（紫节点: 常驻词条 | 橙节点: 触发词条 | 点击节点跳转）</span>
-                </div>
-                <button @click="showWbGraphModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <div class="flex-1 w-full relative">
-                <div id="wb-graph-container" class="w-full h-full"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================= [ 🔗 多本世界书智能合并 ] ================= -->
-    <div v-if="showWbMergeModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbMergeModal = false">
-        <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-lg w-full max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
-            <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-amber-500/10">
-                <span class="text-base font-bold text-amber-500">🔗 多本世界书智能合并</span>
-                <button @click="showWbMergeModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <div class="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-2">
-                <p class="text-xs text-zinc-400 mb-2">请勾选需要合并的世界书（将自动剔除相同的重复词条）：</p>
-                <label v-for="wb in worldbooks" :key="wb.path" class="flex items-center gap-3 p-2.5 bg-zinc-900/50 border border-zinc-700 rounded-lg cursor-pointer hover:border-amber-500/50 transition">
-                    <input type="checkbox" :value="wb.path" v-model="selectedWbMergePaths" class="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0">
-                    <div class="flex flex-col min-w-0 flex-1">
-                        <span class="text-xs font-bold text-zinc-200 truncate">{{ (wb.data && wb.data.name) || wb.name }}</span>
-                        <span class="text-[10px] text-zinc-500 font-mono">{{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }} 个词条 | {{ wb.name }}</span>
-                    </div>
-                </label>
-            </div>
-
-            <div class="p-3 border-t border-zinc-800 flex justify-between items-center shrink-0 bg-zinc-900/50">
-                <span class="text-xs text-amber-400 font-mono">已选 {{ selectedWbMergePaths.length }} 本</span>
-                <div class="flex gap-2">
-                    <button @click="showWbMergeModal = false" class="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300">取消</button>
-                    <button @click="executeWorldbookMerge" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shadow transition">🚀 开始合并</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================= [ 🔀 条目级导入合并弹窗 ] ================= -->
-    <div v-if="showWbImportModal" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showWbImportModal = false">
-        <div class="bg-zinc-950 border border-zinc-700/80 rounded-xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            <div class="px-5 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-emerald-500/10">
-                <span class="text-base font-bold text-emerald-400">🔀 从其他世界书导入词条</span>
-                <button @click="showWbImportModal = false" class="text-zinc-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <!-- ① 源书选择 -->
-            <div class="px-4 pt-3 shrink-0">
-                <div class="text-[10px] text-zinc-500 mb-1.5">
-                    ① 选择源世界书（将导入到当前编辑的「<span class="text-emerald-400 font-bold">{{ (activeWorldbook && activeWorldbook.data && activeWorldbook.data.name) || '未命名' }}</span>」）：
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <button v-for="wb in importableSourceBooks" :key="wb.path"
-                            @click="pickImportSource(wb)"
-                            :class="importSourceBook && importSourceBook.path === wb.path ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700'"
-                            class="px-2.5 py-1 rounded border text-xs font-bold transition shrink-0">
-                        {{ (wb.data && wb.data.name) || wb.name }} <span class="opacity-60">({{ (wb.data && wb.data.entries) ? wb.data.entries.length : 0 }})</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- ② 条目勾选 -->
-            <div class="p-4 flex-1 overflow-y-auto custom-scrollbar space-y-2">
-                <div v-if="!importSourceBook" class="text-center py-8 text-zinc-500 text-xs">👈 请先选择一本源世界书</div>
-                <label v-for="c in importCandidates" :key="c._srcUid"
-                       class="flex items-start gap-3 p-2.5 bg-zinc-900/50 hover:bg-zinc-800 rounded border border-zinc-700/50 cursor-pointer transition">
-                    <input type="checkbox" :value="c._srcUid" v-model="selectedImportEntries" class="mt-0.5 rounded accent-emerald-500">
-                    <div class="flex-1 min-w-0">
-                        <div class="text-xs font-bold text-emerald-400 truncate">{{ c.comment || (Array.isArray(c.key) && c.key.length ? c.key.join(', ') : '未命名词条') }}</div>
-                        <div class="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{{ c.content || '（无内容）' }}</div>
-                    </div>
-                </label>
-            </div>
-
-            <!-- 底部操作 -->
-            <div class="px-5 py-3 border-t border-zinc-800 bg-zinc-900/50 flex items-center justify-between shrink-0">
-                <span class="text-xs text-zinc-400">已选 <span class="text-emerald-400 font-bold">{{ selectedImportEntries.length }}</span> / {{ importCandidates.length }} 项</span>
-                <div class="flex gap-2">
-                    <button @click="showWbImportModal = false" class="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300">取消</button>
-                    <button @click="confirmImportEntries" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition">🚀 确认导入</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ================= [ 🔀 条目级导入合并弹窗（子组件 WbImportModal） ] ================= -->
+    <wb-import-modal
+        :show="showWbImportModal"
+        :active-worldbook-name="(activeWorldbook && activeWorldbook.data && activeWorldbook.data.name) || '未命名'"
+        :source-books="importableSourceBooks"
+        :source-book="importSourceBook"
+        :candidates="importCandidates"
+        :selected-entries="selectedImportEntries"
+        @close="showWbImportModal = false"
+        @pick-source="pickImportSource"
+        @update:selectedEntries="selectedImportEntries = $event"
+        @confirm-import="confirmImportEntries"
+    />
 
     <!-- ================= [ 弹窗：版本更新检测（子组件 UpdateModal） ] ================= -->
     <update-modal
@@ -1899,6 +1307,18 @@ import DiskScanModal from './DiskScanModal.vue'; // 磁盘扫描进度弹窗
 import UpdateModal from './UpdateModal.vue'; // 版本更新检测弹窗
 import TextModal from './TextModal.vue'; // 全屏大文本阅读/编辑弹窗
 import ImageModal from './ImageModal.vue'; // 高清立绘大图预览弹窗
+import ApiSettingsModal from './ApiSettingsModal.vue'; // API 引擎与模型设置弹窗
+import GlobalAssetModal from './GlobalAssetModal.vue'; // 全局世界书与正则资产中心弹窗
+import GraphModal from './GraphModal.vue'; // 角色宇宙关系图谱弹窗
+import WbGraphModal from './WbGraphModal.vue'; // 世界书词条逻辑关联图谱弹窗
+import DedupeModal from './DedupeModal.vue'; // 智能版本查重中心弹窗
+import WbDedupeModal from './WbDedupeModal.vue'; // 世界书智能版本对比查重弹窗
+import DiffModal from './DiffModal.vue'; // 数据版本差异深度比对弹窗
+import WbMergeModal from './WbMergeModal.vue'; // 多本世界书智能合并弹窗
+import WbImportModal from './WbImportModal.vue'; // 条目级导入合并弹窗
+import ContextMenu from './ContextMenu.vue'; // 角色卡右键快捷菜单
+import WbContextMenu from './WbContextMenu.vue'; // 世界书右键快捷菜单
+import AITagModal from './AITagModal.vue'; // AI 智能批量打标弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
@@ -1923,7 +1343,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AITagModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -2802,7 +2222,6 @@ export default {
 
         // ================= [ 关系图谱：生成与渲染 ] =================
         const showGraph = ref(false);
-        const graphContainer = ref(null);
         let echartsInstance = null;
 
         // ================= 升级版图谱状态与交互控制 =================
@@ -2853,10 +2272,12 @@ export default {
             showGraph.value = true;
             window.addEventListener('resize', handleGraphResize); // 绑定窗口 resize 自适应
 
-            // 等待 DOM 渲染完成后初始化 ECharts
+            // 等待 DOM 渲染完成后初始化 ECharts（容器在 GraphModal 子组件内，用固定 id 全局查找）
             nextTick(() => {
+                const graphEl = document.getElementById('app-graph-container');
+                if (!graphEl) return;
                 if (!echartsInstance) {
-                    echartsInstance = echarts.init(graphContainer.value);
+                    echartsInstance = echarts.init(graphEl);
                 }
                 initGraphEvents(); // 绑定双击穿梭事件
                 renderGraph();
@@ -6511,7 +5932,7 @@ export default {
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,
-            showGraph, graphContainer, openGraph, closeGraph,
+            showGraph, openGraph, closeGraph,
             graphLayoutMode, graphSearchKeyword, minLinkWeight,
             isolateCurrentGroup, edgeFilters,
             updateGraphLayout, renderGraph,
