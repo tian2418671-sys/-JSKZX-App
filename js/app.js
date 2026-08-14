@@ -39,6 +39,26 @@ const app = createApp({
 
         const isAppLoading = ref(true); // 应用首屏加载状态（数据就绪后淡出）
 
+        // ================= [ 全局 Toast 消息通知系统 ] =================
+        const toasts = ref([]);
+        let toastIdCounter = 0;
+
+        /**
+         * 显示全局 Toast 消息（右上角自动淡入淡出，非阻塞）
+         * @param {string} message - 消息内容
+         * @param {string} type - 消息类型: 'success' | 'error' | 'info'
+         * @param {number} duration - 显示时长(毫秒)，默认 3000
+         */
+        const showToast = (message, type = 'success', duration = 3000) => {
+            const id = toastIdCounter++;
+            toasts.value.push({ id, message, type });
+            // 定时自动移除
+            setTimeout(() => {
+                const index = toasts.value.findIndex(t => t.id === id);
+                if (index !== -1) toasts.value.splice(index, 1);
+            }, duration);
+        };
+
         // =========================================================
         // 🖥️ 智能屏幕分辨率与 Windows DPI 缩放适配（防双重放大）
         // （仅对首次启动/无存档用户生效，已有存档的用户尊重其手动设置）
@@ -1228,8 +1248,18 @@ const app = createApp({
             return cardData.value ? JSON.stringify(cardData.value, null, 2) : '';
         });
 
-        // ================= [ 计算属性 (分类与分页) ] =================
-        const searchQuery = ref(''); // 搜索框绑定的关键词
+        // ================= [ 性能优化：搜索防抖 ] =================
+        const searchQueryInput = ref(''); // 绑定给搜索框的输入值（实时更新）
+        const searchQuery = ref('');      // 用于实际过滤的内部值（300ms 防抖延迟更新）
+        let searchTimeout = null;
+
+        // 监听输入，300ms 后才更新实际的过滤词
+        watch(searchQueryInput, (newVal) => {
+            if (searchTimeout) clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchQuery.value = newVal;
+            }, 300);
+        });
 
         // ================= 全局全文检索与深度过滤引擎（强壮空值保护版，兼容 V1/V2 与多语言分组 Key） =================
         const filteredLibrary = computed(() => {
@@ -1741,6 +1771,55 @@ const app = createApp({
                 }
             };
             window.addEventListener('keydown', handleGlobalKeys);
+
+            // 🌟 扩展快捷键：Ctrl+F 聚焦搜索 / Delete 移入回收站 / Esc 退出多选或关闭预览
+            const handleExtendedKeys = async (e) => {
+                const tag = document.activeElement?.tagName;
+                const isInputFocused = tag === 'INPUT' || tag === 'TEXTAREA';
+
+                // Ctrl+F：聚焦全局搜索框（即使已在输入框也允许，覆盖浏览器默认查找）
+                if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+                    e.preventDefault();
+                    const searchInput = document.getElementById('global-search-input');
+                    if (searchInput) { searchInput.focus(); searchInput.select(); }
+                    return;
+                }
+
+                // Delete 键：移入回收站（输入框内不拦截，保留文本删除能力）
+                if (e.key === 'Delete' && !isInputFocused) {
+                    if (isMultiSelectMode.value && selectedIds.value.length > 0) {
+                        // 批量移入全局回收站
+                        const ok = await confirmDialog(`确定将选中的 ${selectedIds.value.length} 张卡片移入回收站吗？`);
+                        if (ok) {
+                            const paths = library.value
+                                .filter(i => selectedIds.value.includes(i.id))
+                                .map(i => i.path);
+                            const res = await window.electronAPI.trashFiles(paths);
+                            if (res && res.success) {
+                                library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
+                                selectedIds.value = [];
+                                showToast(`已移入回收站 ${paths.length} 张卡片`, 'info');
+                            }
+                        }
+                    } else if (cardData.value) {
+                        // 当前打开的卡片移入回收站
+                        const libItem = library.value.find(item => item.data === cardData.value);
+                        if (libItem) deleteCardItem(libItem);
+                    }
+                    return;
+                }
+
+                // Esc 键：关闭图片预览 / 退出多选模式
+                if (e.key === 'Escape') {
+                    if (showImageModal.value) { showImageModal.value = false; }
+                    else if (isMultiSelectMode.value) {
+                        isMultiSelectMode.value = false;
+                        selectedIds.value = [];
+                        showToast('已退出多选模式', 'info', 1500);
+                    }
+                }
+            };
+            window.addEventListener('keydown', handleExtendedKeys);
 
             if (!window.electronAPI) return; // 浏览器环境直接跳过
             try {
@@ -2723,10 +2802,10 @@ const app = createApp({
                 if (data.mes_example) data.mes_example = await callAIForTranslation(data.mes_example);
 
                 refreshCardData(); // shallowRef 深层修改后强制刷新右侧界面
-                nativeAlert('🎉 翻译完成！请检查右侧内容，确认无误后点击「覆盖保存」。', 'info');
+                showToast('🎉 翻译完成！请检查右侧内容，确认后点击「覆盖保存」。', 'success');
             } catch (error) {
                 console.error('翻译失败:', error);
-                nativeAlert(`翻译失败，请检查网络或 API 配置。\n错误信息: ${error.message}`, 'error');
+                showToast(`调用 AI 失败，请检查 API 配置！\n${error.message}`, 'error', 5000);
             } finally {
                 isTranslating.value = false;
             }
@@ -2786,10 +2865,10 @@ const app = createApp({
                 data.description = extractReplyContent(result).trim();
                 refreshCardData(); // shallowRef 深层修改后强制刷新右侧界面
 
-                nativeAlert('✨ 提示词重构完成！Token 占用已大幅优化，请在编辑器中检查并保存。', 'info');
+                showToast('✨ 提示词重构完成！Token 占用已大幅优化，请在编辑器中检查并保存。', 'success');
             } catch (error) {
                 console.error('重构失败:', error);
-                nativeAlert(`重构失败，请检查网络或 API 配置。\n错误信息: ${error.message}`, 'error');
+                showToast(`调用 AI 失败，请检查 API 配置！\n${error.message}`, 'error', 5000);
             } finally {
                 isRefactoring.value = false;
             }
@@ -2980,7 +3059,7 @@ const app = createApp({
             if (!libItem) return nativeAlert("未找到原文件路径。");
             try {
                 const res = await window.electronAPI.saveCard(libItem.path, getPlainCardData());
-                if (res.success) nativeAlert(`成功保存到本地！\n文件：${libItem.path}`, 'info');
+                if (res.success) showToast('角色卡保存成功！', 'success');
                 else nativeAlert(`保存失败: ${res.error}`, 'error');
             } catch (e) { nativeAlert(`发生错误: ${e.message}`, 'error'); }
         };
@@ -4516,7 +4595,7 @@ const app = createApp({
             renameCurrentCategory, deleteCustomCategory,
             currentCardCategory, handleCardCategoryChange,
             currentPage, totalPages,
-            searchQuery, filteredLibrary, paginatedLibrary,
+            searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
             selectFixedDirectory, addManualTag, changePage,
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
@@ -4535,6 +4614,7 @@ const app = createApp({
             addAICandidateTag, addAICandidateTagManual, removeAICandidateTag,
             isTranslating, translateCardContent,
             isRefactoring, refactorCardFormat,
+            toasts, showToast,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,

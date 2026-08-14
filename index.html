@@ -344,11 +344,11 @@
                         <button v-if="customCategories.includes(currentCategoryKey)" @click="deleteCustomCategory(currentCategoryKey)" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-red-600 hover:text-white text-xs text-zinc-300 shrink-0" title="删除当前自定义分组">🗑️</button>
                     </div>
 
-                    <!-- 行2：搜索（独立一行，全宽） -->
+                    <!-- 行2：搜索（独立一行，全宽；300ms 防抖） -->
                     <div class="relative">
-                        <input v-model="searchQuery" type="text" placeholder="搜索名称/标签/世界书" title="全局搜索名称、标签、世界书、关键词" class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded pl-6 pr-5 py-1 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500">
+                        <input id="global-search-input" v-model="searchQueryInput" type="text" placeholder="搜索名称/标签/世界书 (Ctrl+F)" title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)" class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded pl-6 pr-5 py-1 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500">
                         <svg class="w-3 h-3 text-zinc-500 absolute left-2 top-[7px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                        <button v-if="searchQuery" @click="searchQuery = ''" class="absolute right-1.5 top-[6px] text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
+                        <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-1.5 top-[6px] text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
                     </div>
 
                     <!-- 行3：快捷过滤 chips -->
@@ -410,7 +410,7 @@
                         <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-zinc-800 cursor-pointer shrink-0 accent-blue-500" style="width: 1.1em; height: 1.1em;">
 
                         <!-- 极小缩略图（尺寸随字号缩放） -->
-                        <img v-if="item.avatar" :src="item.avatar" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" style="width: 3.5em; height: 3.5em;">
+                        <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" style="width: 3.5em; height: 3.5em;">
                         <div v-else class="bg-zinc-700 rounded-md border border-zinc-600 shrink-0" style="width: 3.5em; height: 3.5em;"></div>
                         
                         <!-- 信息 -->
@@ -452,7 +452,7 @@
                         </div>
 
                         <!-- 卡片封面（绝对定位贴入 2:3 画框；无头像时显示首字占位） -->
-                        <img v-if="item.avatar" :src="item.avatar" draggable="false" class="absolute inset-0 w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105">
+                        <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false" class="absolute inset-0 w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105">
                         <div v-else class="absolute inset-0 w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-700 to-zinc-900 text-2xl font-bold text-zinc-500 select-none">
                             {{ (item.name || '?').charAt(0) }}
                         </div>
@@ -616,12 +616,14 @@
                 </template>
             </aside>
 
-            <!-- 📏 侧边栏拖拽调节把手（拖动变宽窄，双击恢复默认） -->
+            <!-- 📏 侧边栏拖拽调节把手（拖动变宽窄，双击恢复默认；悬浮高亮提示） -->
             <div v-if="viewOptions.showSidebar"
-                 class="w-1 shrink-0 cursor-col-resize hover:bg-indigo-500/60 active:bg-indigo-500 transition-colors select-none"
+                 class="w-1.5 shrink-0 cursor-col-resize bg-zinc-800 hover:bg-indigo-500/70 active:bg-indigo-500 transition-colors select-none flex items-center justify-center group"
                  :title="sidebarWidth > 0 ? '拖动调整宽度 · 双击恢复默认' : '拖动调整侧边栏宽度'"
                  @mousedown="startSidebarResize($event)"
-                 @dblclick="resetSidebarWidth"></div>
+                 @dblclick="resetSidebarWidth">
+                <div class="w-0.5 h-8 bg-zinc-600 group-hover:bg-white rounded"></div>
+            </div>
 
             <!-- 【右侧】编辑器面板 -->
             <main class="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
@@ -2137,6 +2139,23 @@
 
         </div>
     </div>
+
+        <!-- ================= [ 全局 Toast 消息通知（右上角，非阻塞，必须在 #app 内） ] ================= -->
+        <div class="fixed top-6 right-6 flex flex-col gap-3 pointer-events-none items-end" style="z-index: 9999;">
+            <transition-group name="toast" tag="div" class="flex flex-col gap-3 items-end">
+                <div v-for="toast in toasts" :key="toast.id"
+                     :class="['px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 text-sm font-bold pointer-events-auto border backdrop-blur-sm',
+                              toast.type === 'success' ? 'bg-emerald-600/95 border-emerald-500 text-white' :
+                              toast.type === 'error' ? 'bg-rose-600/95 border-rose-500 text-white' :
+                              'bg-zinc-800/95 border-zinc-600 text-zinc-200']"
+                     style="min-width: 240px; max-width: 400px;">
+                    <span v-if="toast.type === 'success'" class="text-lg">✅</span>
+                    <span v-else-if="toast.type === 'error'" class="text-lg">❌</span>
+                    <span v-else class="text-lg">💡</span>
+                    <span class="leading-relaxed">{{ toast.message }}</span>
+                </div>
+            </transition-group>
+        </div>
 
     </div>
 

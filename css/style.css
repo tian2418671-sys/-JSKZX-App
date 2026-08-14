@@ -74,6 +74,11 @@ textarea, input {
 .fade-enter-active, .fade-leave-active { transition: opacity 0.4s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
+/* ============ Toast 消息通知过渡动画（右上角滑入/滑出） ============ */
+.toast-enter-active, .toast-leave-active { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.toast-enter-from { opacity: 0; transform: translateX(50px); }
+.toast-leave-to { opacity: 0; transform: translateY(-20px) scale(0.9); }
+
 /* ============ 紧凑版 IDE 风格 ============ */
 html, body, #app { height: 100%; }
 body { overflow: hidden; }
