@@ -1078,63 +1078,21 @@
             </div>
         </transition>
 
-        <!-- ================= [ 弹窗：批量标签 ] ================= -->
-        <transition name="fade">
-            <div v-if="showBatchTagModal" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-                <div class="bg-white rounded-lg shadow-xl w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh]">
-                    <div class="px-4 py-3 bg-gray-100 border-b border-gray-200 flex justify-between items-center">
-                        <h3 class="font-bold text-sm text-gray-800">批量设置标签 (已选 {{ selectedIds.length }} 张卡片)</h3>
-                        <button @click="showBatchTagModal = false" class="text-gray-400 hover:text-gray-600">✕</button>
-                    </div>
-                    
-                    <div class="p-4 overflow-y-auto space-y-4 flex-1 custom-scrollbar text-xs">
-                        <div>
-                            <label class="block font-bold text-gray-600 mb-1">操作模式:</label>
-                            <div class="flex gap-4">
-                                <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="batchMode" value="append"> 追加标签 (保留原有)</label>
-                                <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="batchMode" value="overwrite"> 覆盖标签 (清空旧标签)</label>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="block font-bold text-gray-600 mb-1">当前输入的标签 (用逗号分隔):</label>
-                            <input v-model="batchInputTags" type="text" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="例如: Fantasy, Elf, 魔法">
-
-                            <!-- 🌟 已输入的标签芯片（点击 ✕ 移除） -->
-                            <div class="flex flex-wrap gap-2 mt-2 p-2 border border-gray-200 bg-gray-50 rounded min-h-[40px]">
-                                <span v-for="(tag, idx) in batchTagChips" :key="idx"
-                                      class="px-2 py-1 bg-blue-600/30 text-blue-700 text-xs rounded-full flex items-center gap-1 cursor-pointer hover:bg-red-500 hover:text-white transition"
-                                      @click="removeBatchTag(idx)" title="点击移除">
-                                    {{ tag }} ✕
-                                </span>
-                                <span v-if="batchTagChips.length === 0" class="text-gray-400 text-xs self-center">尚未添加任何标签</span>
-                            </div>
-                        </div>
-
-                        <div>
-                            <div class="flex justify-between items-center mb-1">
-                                <label class="font-bold text-gray-600">💡 系统/常用标签库 (点击快速添加):</label>
-                                <span class="text-[10px] text-gray-400">已选: {{ batchTagChips.length }} 个</span>
-                            </div>
-                            
-                            <div class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto p-2 bg-gray-50 border border-gray-200 rounded custom-scrollbar">
-                                <button v-for="tag in systemCommonTags" :key="tag"
-                                        @click="toggleBatchCommonTag(tag)"
-                                        class="px-2 py-1 text-[11px] rounded border transition-colors"
-                                        :class="batchTagChips.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:border-blue-500 hover:text-blue-600'">
-                                    {{ batchTagChips.includes(tag) ? '✓ 已选' : '+ ' + tag }}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex justify-end gap-2">
-                        <button @click="showBatchTagModal = false" class="px-4 py-1.5 bg-white border border-gray-300 rounded text-gray-700">取消</button>
-                        <button @click="executeBatchTagSave" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold">确认应用</button>
-                    </div>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：批量标签（子组件 BatchTagModal） ] ================= -->
+        <batch-tag-modal
+            :show="showBatchTagModal"
+            :selected-count="selectedIds.length"
+            :batch-mode="batchMode"
+            :batch-input-tags="batchInputTags"
+            :batch-tag-chips="batchTagChips"
+            :system-common-tags="systemCommonTags"
+            @close="showBatchTagModal = false"
+            @confirm="executeBatchTagSave"
+            @update:batch-mode="batchMode = $event"
+            @update:batch-input-tags="batchInputTags = $event"
+            @remove-batch-tag="removeBatchTag($event)"
+            @toggle-common-tag="toggleBatchCommonTag($event)"
+        />
 
         <!-- ================= [ 弹窗：AI 智能批量打标 ] ================= -->
         <transition name="fade">
@@ -2028,6 +1986,7 @@ import Section from './Section.vue'; // SFC 单文件组件（由 Section.js 迁
 import DragOverlay from './DragOverlay.vue'; // 拖拽导入全屏遮罩
 import AppLoadingOverlay from './AppLoadingOverlay.vue'; // 启动过渡蒙版
 import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
+import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -2051,7 +2010,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';

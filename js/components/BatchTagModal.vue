@@ -1,0 +1,81 @@
+<!--
+  BatchTagModal 批量设置标签弹窗（子组件）
+  状态通过 props 单向传入，变更经 emits 回传（v-model 风格）
+-->
+<template>
+    <transition name="fade">
+        <div v-if="show" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh]">
+                <div class="px-4 py-3 bg-gray-100 border-b border-gray-200 flex justify-between items-center">
+                    <h3 class="font-bold text-sm text-gray-800">批量设置标签 (已选 {{ selectedCount }} 张卡片)</h3>
+                    <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600">✕</button>
+                </div>
+
+                <div class="p-4 overflow-y-auto space-y-4 flex-1 custom-scrollbar text-xs">
+                    <div>
+                        <label class="block font-bold text-gray-600 mb-1">操作模式:</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="radio" :checked="batchMode === 'append'" @change="$emit('update:batchMode', 'append')"> 追加标签 (保留原有)
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="radio" :checked="batchMode === 'overwrite'" @change="$emit('update:batchMode', 'overwrite')"> 覆盖标签 (清空旧标签)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-gray-600 mb-1">当前输入的标签 (用逗号分隔):</label>
+                        <input :value="batchInputTags" @input="$emit('update:batchInputTags', $event.target.value)" type="text" class="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="例如: Fantasy, Elf, 魔法">
+
+                        <!-- 🌟 已输入的标签芯片（点击 ✕ 移除） -->
+                        <div class="flex flex-wrap gap-2 mt-2 p-2 border border-gray-200 bg-gray-50 rounded min-h-[40px]">
+                            <span v-for="(tag, idx) in batchTagChips" :key="idx"
+                                  class="px-2 py-1 bg-blue-600/30 text-blue-700 text-xs rounded-full flex items-center gap-1 cursor-pointer hover:bg-red-500 hover:text-white transition"
+                                  @click="$emit('remove-batch-tag', idx)" title="点击移除">
+                                {{ tag }} ✕
+                            </span>
+                            <span v-if="batchTagChips.length === 0" class="text-gray-400 text-xs self-center">尚未添加任何标签</span>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="font-bold text-gray-600">💡 系统/常用标签库 (点击快速添加):</label>
+                            <span class="text-[10px] text-gray-400">已选: {{ batchTagChips.length }} 个</span>
+                        </div>
+
+                        <div class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto p-2 bg-gray-50 border border-gray-200 rounded custom-scrollbar">
+                            <button v-for="tag in systemCommonTags" :key="tag"
+                                    @click="$emit('toggle-common-tag', tag)"
+                                    class="px-2 py-1 text-[11px] rounded border transition-colors"
+                                    :class="batchTagChips.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:border-blue-500 hover:text-blue-600'">
+                                {{ batchTagChips.includes(tag) ? '✓ 已选' : '+ ' + tag }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex justify-end gap-2">
+                    <button @click="$emit('close')" class="px-4 py-1.5 bg-white border border-gray-300 rounded text-gray-700">取消</button>
+                    <button @click="$emit('confirm')" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold">确认应用</button>
+                </div>
+            </div>
+        </div>
+    </transition>
+</template>
+
+<script>
+export default {
+    name: 'BatchTagModal',
+    props: {
+        show: { type: Boolean, default: false },
+        selectedCount: { type: Number, default: 0 },
+        batchMode: { type: String, default: 'append' },
+        batchInputTags: { type: String, default: '' },
+        batchTagChips: { type: Array, default: () => [] },
+        systemCommonTags: { type: Array, default: () => [] }
+    },
+    emits: ['close', 'confirm', 'update:batchMode', 'update:batchInputTags', 'remove-batch-tag', 'toggle-common-tag']
+};
+</script>
