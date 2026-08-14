@@ -136,6 +136,12 @@ function writeTavernPNGChunk(buffer, updatedJson) {
 // 系统级应用数据目录（用于保存配置，不会随项目丢失）
 const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.json');
 
+// ================= Vite 构建双模式 =================
+// 开发模式：VITE_DEV_SERVER_URL 指向 Vite Dev Server（支持热更新）
+// 生产模式：app:// 协议加载 web/ 目录下的 Vite 构建产物
+const isDev = !!process.env.VITE_DEV_SERVER_URL;
+const appRoot = isDev ? __dirname : path.join(__dirname, 'web');
+
 // 将自定义协议注册为特权协议（必须在 app ready 之前调用）
 protocol.registerSchemesAsPrivileged([
   {
@@ -174,12 +180,12 @@ function registerAppProtocol() {
     // 根路径默认加载 index.html
     if (filePath === '/' || filePath === '') filePath = '/index.html';
 
-    const resolved = path.normalize(path.join(__dirname, filePath));
+    const resolved = path.normalize(path.join(appRoot, filePath));
 
-    // 安全校验：确保解析后的路径始终位于项目根目录内（防止路径穿越）
+    // 安全校验：确保解析后的路径始终位于应用根目录内（防止路径穿越）
     // 【修复】必须追加 path.sep，否则 "C:\App_Hacked".startsWith("C:\App") 会误判合法，导致跨目录越权读取
-    const rootPrefix = path.join(__dirname) + path.sep;
-    if (resolved !== path.join(__dirname) && !resolved.startsWith(rootPrefix)) {
+    const rootPrefix = appRoot + path.sep;
+    if (resolved !== appRoot && !resolved.startsWith(rootPrefix)) {
       return new Response('Forbidden', { status: 403 });
     }
 
@@ -234,13 +240,19 @@ function createWindow() {
     }
   });
 
-  // 通过自定义协议加载页面（支持 ES Modules 与 CDN）
-  win.loadURL('app://index.html');
+  // 通过自定义协议加载页面（生产加载 web/ 构建产物；开发加载 Vite Dev Server）
+  if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    win.loadURL(process.env.VITE_DEV_SERVER_URL);
+  } else {
+    win.loadURL('app://index.html');
+  }
 
   // 🔒 安全加固：禁止非 app:// 的一切导航（含拖放文件触发的 file:// 导航）与任何弹窗，
   // 防止图片/文件被误交给系统默认程序打开（如系统英文图片查看器）
+  // 开发模式下放行 Vite Dev Server 地址
   win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith('app://')) e.preventDefault();
+    const allowed = url.startsWith('app://') || url.startsWith('http://localhost:5173') || url.startsWith('http://127.0.0.1:5173');
+    if (!allowed) e.preventDefault();
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 

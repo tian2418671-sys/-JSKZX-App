@@ -129,6 +129,18 @@ npm install
 
 ### 2. 开发模式运行
 
+方式一：热更新开发（Vite Dev Server + Electron）
+
+```bash
+# 终端 1：启动 Vite Dev Server（改代码即时热更新）
+npm run dev
+
+# 终端 2：启动 Electron 连接 Dev Server
+npm run start:dev
+```
+
+方式二：直接运行（生产模式，自动构建 `web/` 后启动）
+
 ```bash
 npm start
 ```
@@ -143,6 +155,8 @@ npm start
 ```bash
 npm run build
 ```
+
+（自动先执行 `vite build` 构建前端产物到 `web/`，再 electron-builder 打包安装程序）
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版
@@ -382,7 +396,7 @@ if (value && value.trim() !== '') { /* 处理 */ }
 | 现象 | 原因 / 解决 |
 |------|------------|
 | 点击按钮无反应 | 大概率用了 `prompt()` → 改用 `appPrompt` |
-| 页面空白 | 检查 `vendor/` 是否缺失（不要引用外部 CDN）；`npm install` 后确认 vendor 文件存在 |
+| 页面空白 | 生产模式由 `app://` 加载 `web/` 构建产物——请先执行 `npm run build:web`；开发模式需先启动 `npm run dev` 再 `npm run start:dev` |
 | 世界书改完保存丢失 | `worldbookEntries` 必须返回 `reactive(entry)` 而非 `...entry` 拷贝 |
 | HTML 代码（`<head>` 等）不显示 | 未用 `renderHTML()` 转义 |
 | 大卡片切换卡顿 | 已用 `shallowRef` 优化；新增功能勿对 `cardData` 深层依赖响应式 |

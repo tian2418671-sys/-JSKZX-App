@@ -1,0 +1,7 @@
+/* ==========================================================
+   Tailwind CSS 入口（由 Vite/PostCSS 或 Tailwind CLI 编译）
+   自定义样式保留在 css/style.css 中，二者分层共存
+   ========================================================== */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

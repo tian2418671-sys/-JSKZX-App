@@ -5,6 +5,8 @@ node_modules/
 dist/
 dist_new/
 out/
+web/
+css/tailwind.out.css
 
 # Electron 二进制副本/缓存（本地构建用，勿提交）
 sillytavern-card-manager/

@@ -6,7 +6,8 @@
  *  - components/Section.js 文本块展示组件
  */
 import { createApp, ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef } from 'vue';
-import { Section } from './components/Section.js';
+import * as echarts from 'echarts'; // ECharts 由 npm 依赖提供（替代旧全局 script）
+import Section from './components/Section.vue'; // SFC 单文件组件（由 Section.js 迁移）
 import { processFile, normalizeCardData } from './utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from './utils/pngParser.js';
 

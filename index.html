@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SillyTavern 角色卡高级解析中心</title>
-    <!-- 引入 Tailwind CSS 用于快速页面样式（本地化，离线可用） -->
-    <script src="./vendor/tailwindcss.js"></script>
-    <!-- 引入 ECharts 用于渲染关系图谱（本地化，离线可用） -->
-    <script src="./vendor/echarts.min.js"></script>
+    <!-- Tailwind CSS：由 Vite/PostCSS 编译（替代旧 CDN 运行时脚本，离线构建） -->
+    <link rel="stylesheet" href="./css/tailwind.css">
     <!-- 引入自定义样式 -->
     <link rel="stylesheet" href="css/style.css">
     <style>
@@ -101,14 +99,6 @@
             font-size: var(--workspace-fs, 14px) !important;
         }
     </style>
-    <!-- Vue 3 依赖映射（ES Modules 导入方式，本地生产版） -->
-    <script type="importmap">
-        {
-            "imports": {
-                "vue": "./vendor/vue.esm-browser.prod.js"
-            }
-        }
-    </script>
 </head>
 <body class="bg-zinc-950 text-zinc-200 font-sans selection:bg-blue-200">
     <div id="app" :style="{
@@ -260,7 +250,7 @@
                         <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                             <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">本地资产检索 (I/O)</div>
                             <div class="px-3 py-1.5 text-zinc-300 flex items-center justify-between cursor-pointer hover:bg-zinc-700/50 transition" @click.stop="useSizeFilter = !useSizeFilter" title="开启后自动跳过小于 40KB 的贴图和图标">
-                                <span class="flex items-center gap-2"><span class="text-emerald-400">⚖️</span> 屏蔽非卡片小图 (< 40KB)</span>
+                                <span class="flex items-center gap-2"><span class="text-emerald-400">⚖️</span> 屏蔽非卡片小图 (&lt; 40KB)</span>
                                 <div class="w-8 h-4 bg-zinc-600 rounded-full relative transition-colors shadow-inner" :class="{'bg-emerald-500': useSizeFilter}">
                                     <div class="w-4 h-4 bg-white rounded-full absolute top-0 shadow transition-transform" :class="useSizeFilter ? 'translate-x-4' : 'translate-x-0'"></div>
                                 </div>
