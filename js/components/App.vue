@@ -301,7 +301,7 @@ import WbMergeModal from './WbMergeModal.vue'; // 多本世界书智能合并弹
 import WbImportModal from './WbImportModal.vue'; // 条目级导入合并弹窗
 import ContextMenu from './ContextMenu.vue'; // 角色卡右键快捷菜单
 import WbContextMenu from './WbContextMenu.vue'; // 世界书右键快捷菜单
-import AITagModal from './AITagModal.vue'; // AI 智能批量打标弹窗
+import AiTagModal from './AITagModal.vue'; // AI 智能批量打标弹窗（⚠️ 注册名须用 AiTagModal，kebab 标签 ai-tag-modal 解析为 AiTagModal 而非 AITagModal）
 import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
@@ -329,7 +329,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AITagModal, HeaderBar, SidebarPanel, EditorPanel },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
