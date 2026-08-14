@@ -651,6 +651,10 @@
                                 <span v-if="!isTranslating">🌐 一键汉化</span>
                                 <span v-else class="animate-pulse">⏳ AI 翻译中...</span>
                             </button>
+                            <button @click="refactorCardFormat" :disabled="isRefactoring" class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-600 disabled:cursor-not-allowed text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap" title="将旧格式（W++/JSON）设定重构为高密度 Markdown，大幅降低 Token 占用">
+                                <span v-if="!isRefactoring">✨ 格式升维 (降 Token)</span>
+                                <span v-else class="animate-pulse">⏳ AI 正在重构中...</span>
+                            </button>
                             <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
                                 💾 覆盖保存
                             </button>

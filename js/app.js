@@ -2732,6 +2732,69 @@ const app = createApp({
             }
         };
 
+        // ================= [ ✨ AI 提示词智能重构功能 ] =================
+        const isRefactoring = ref(false);
+
+        // 一键将卡片的旧格式设定（W++/JSON/冗长描述）重构为高密度 Markdown，降低 Token 占用、提升模型遵循度
+        const refactorCardFormat = async () => {
+            if (!cardData.value) return;
+
+            // 检查 API 配置（复用聊天/AI打标/汉化共用配置，经 IPC 转发绕过 CORS）
+            if (!apiEndpoint.value || !apiEndpoint.value.trim()) {
+                nativeAlert('请先在设置中配置大模型 API 接口与密钥！', 'warning');
+                return;
+            }
+
+            // 兼容 V2（cardData.data）与 V1（cardData 顶层）结构
+            const data = cardData.value?.data || cardData.value;
+            if (!data.description || data.description.trim() === '') {
+                nativeAlert('当前卡片的角色设定 (Description) 为空，无需重构。', 'info');
+                return;
+            }
+
+            const ok = await confirmDialog('将调用 AI 把当前卡片的「角色设定」从旧格式（如 W++/JSON）重构为更省 Token、模型遵循度更高的 Markdown/自然语言格式。\n这会覆盖原有设定，是否继续？');
+            if (!ok) return;
+
+            isRefactoring.value = true;
+
+            // 专为格式降维打击设计的 System Prompt
+            const systemPrompt = `你是一个大语言模型提示词优化专家和角色卡设定师。
+用户会发送一段可能由旧版 W++、JSON 或繁琐描述堆砌的角色卡设定 (Description)。
+请将其重构为极其紧凑、高信息密度的结构化 Markdown 格式。
+【绝对不可违背的规则】：
+1. 绝对不遗漏人物的原有特征、外貌、XP、弱点和世界观设定。
+2. 绝对不能更改、翻译或删除包裹在双大括号中的宏变量（如 {{user}}, {{char}}）。
+3. 去除无意义的括号、JSON 键名等冗余符号，极大压缩 Token 占用。
+4. 如果原文是英文，请用英文重构；如果原文是中文，请用中文重构。
+5. 直接输出重构后的纯文本，不要带有任何类似“好的”、“这是重构后的设定”的废话。`;
+
+            try {
+                // 经主进程 IPC 转发调用 AI（绕过 CORS；与聊天/AI打标/汉化共用通道）
+                const payload = {
+                    model: resolveApiModel(), // 复用配置的模型（OpenAI/Anthropic 自适应）
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: data.description }
+                    ],
+                    temperature: 0.3
+                };
+                const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+                const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
+                if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
+
+                // 覆盖设定
+                data.description = extractReplyContent(result).trim();
+                refreshCardData(); // shallowRef 深层修改后强制刷新右侧界面
+
+                nativeAlert('✨ 提示词重构完成！Token 占用已大幅优化，请在编辑器中检查并保存。', 'info');
+            } catch (error) {
+                console.error('重构失败:', error);
+                nativeAlert(`重构失败，请检查网络或 API 配置。\n错误信息: ${error.message}`, 'error');
+            } finally {
+                isRefactoring.value = false;
+            }
+        };
+
         // ================= [ 方法：重命名与导出世界书 ] =================
 
         // 重命名卡片
@@ -4471,6 +4534,7 @@ const app = createApp({
             enableAIExtraction, customAIPrompt, newAICandidateTag,
             addAICandidateTag, addAICandidateTagManual, removeAICandidateTag,
             isTranslating, translateCardContent,
+            isRefactoring, refactorCardFormat,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,
