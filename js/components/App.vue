@@ -9,24 +9,11 @@
          @dragover.prevent
          @drop="handleDrop">
 
-        <!-- 拖拽导入全屏遮罩：拖文件到窗口任意处时提示松开导入 -->
-        <transition name="fade">
-            <div v-if="isDragging" class="fixed inset-0 bg-blue-900/40 backdrop-blur-sm flex items-center justify-center border-8 border-blue-500 border-dashed pointer-events-none" style="z-index: 9999;">
-                <div class="text-4xl font-bold text-white flex flex-col items-center gap-4" style="text-shadow: 0 0 15px rgba(59,130,246,0.8);">
-                    <span class="text-6xl">📥</span>
-                    <span>松开鼠标，立即导入角色卡！</span>
-                </div>
-            </div>
-        </transition>
+        <!-- 拖拽导入全屏遮罩（子组件 DragOverlay） -->
+        <drag-overlay :is-dragging="isDragging" />
 
-        <!-- 启动过渡蒙版：数据就绪后淡出 -->
-        <transition name="fade">
-            <div v-if="isAppLoading" class="fixed inset-0 z-[999] bg-zinc-950 flex flex-col items-center justify-center select-none">
-                <div class="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
-                <div class="text-sm font-bold text-zinc-300 tracking-widest">SillyTavern Manager</div>
-                <div class="text-xs text-zinc-500 mt-1">正在载入资源与分类配置...</div>
-            </div>
-        </transition>
+        <!-- 启动过渡蒙版（子组件 AppLoadingOverlay） -->
+        <app-loading-overlay :is-loading="isAppLoading" />
         
         <!-- ================= [ 顶部菜单栏 (Top Menu Bar) ] ================= -->
         <header class="h-12 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 shadow-sm z-30 select-none">
@@ -2028,22 +2015,8 @@
         </div>
     </div>
 
-        <!-- ================= [ 全局 Toast 消息通知（右上角，非阻塞，必须在 #app 内） ] ================= -->
-        <div class="fixed top-6 right-6 flex flex-col gap-3 pointer-events-none items-end" style="z-index: 9999;">
-            <transition-group name="toast" tag="div" class="flex flex-col gap-3 items-end">
-                <div v-for="toast in toasts" :key="toast.id"
-                     :class="['px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 text-sm font-bold pointer-events-auto border backdrop-blur-sm',
-                              toast.type === 'success' ? 'bg-emerald-600/95 border-emerald-500 text-white' :
-                              toast.type === 'error' ? 'bg-rose-600/95 border-rose-500 text-white' :
-                              'bg-zinc-800/95 border-zinc-600 text-zinc-200']"
-                     style="min-width: 240px; max-width: 400px;">
-                    <span v-if="toast.type === 'success'" class="text-lg">✅</span>
-                    <span v-else-if="toast.type === 'error'" class="text-lg">❌</span>
-                    <span v-else class="text-lg">💡</span>
-                    <span class="leading-relaxed">{{ toast.message }}</span>
-                </div>
-            </transition-group>
-        </div>
+        <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
+        <toast-container :toasts="toasts" />
 
     </div>
 </template>
@@ -2052,6 +2025,9 @@
 import { ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef } from 'vue';
 import * as echarts from 'echarts'; // ECharts 由 npm 依赖提供（替代旧全局 script）
 import Section from './Section.vue'; // SFC 单文件组件（由 Section.js 迁移）
+import DragOverlay from './DragOverlay.vue'; // 拖拽导入全屏遮罩
+import AppLoadingOverlay from './AppLoadingOverlay.vue'; // 启动过渡蒙版
+import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -2075,7 +2051,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
