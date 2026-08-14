@@ -1904,45 +1904,13 @@
         </div>
     </div>
 
-    <!-- ================= [ 弹窗：版本更新检测 ] ================= -->
-    <div v-if="showUpdateModal" class="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" @click.self="showUpdateModal = false">
-        <div class="theme-surface border border-emerald-500/50 rounded-xl max-w-lg w-full flex flex-col shadow-[0_0_40px_rgba(16,185,129,0.15)] overflow-hidden">
-
-            <div class="px-5 py-4 bg-gradient-to-r from-emerald-900/40 to-transparent border-b border-zinc-800 flex items-start justify-between shrink-0">
-                <div>
-                    <h3 class="text-lg font-bold text-emerald-400 flex items-center gap-2 mb-1">
-                        <span>🚀 发现新版本可用！</span>
-                    </h3>
-                    <div class="flex items-center gap-2 text-xs font-mono">
-                        <span class="text-zinc-500 line-through">v{{ updateInfo.currentVersion }}</span>
-                        <span class="text-emerald-500">➔</span>
-                        <span class="text-white font-bold bg-emerald-600 px-1.5 py-0.5 rounded">v{{ updateInfo.latestVersion }}</span>
-                    </div>
-                </div>
-                <button @click="showUpdateModal = false" class="text-zinc-400 hover:text-white transition text-xl">✕</button>
-            </div>
-
-            <div class="p-5 flex-1 max-h-[40vh] overflow-y-auto custom-scrollbar bg-zinc-950/30">
-                <h4 class="text-xs font-bold text-zinc-400 mb-2">📄 更新日志 (Release Notes):</h4>
-                <div class="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed font-mono">
-                    {{ updateInfo.releaseNotes || '作者很懒，没有留下更新说明...' }}
-                </div>
-            </div>
-
-            <div class="px-5 py-3 border-t border-zinc-800 bg-zinc-900/90 flex items-center justify-between shrink-0">
-                <span class="text-[10px] text-zinc-500">点击下载后，将打开浏览器前往 GitHub Releases 页面。</span>
-                <div class="flex gap-2">
-                    <button @click="showUpdateModal = false" class="px-4 py-1.5 theme-element hover:bg-zinc-700 border border-zinc-700 rounded text-xs transition">
-                        下次再说
-                    </button>
-                    <button @click="openExternalUrl(updateInfo.downloadUrl)" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center gap-1">
-                        ⬇️ 前往下载更新
-                    </button>
-                </div>
-            </div>
-
-        </div>
-    </div>
+    <!-- ================= [ 弹窗：版本更新检测（子组件 UpdateModal） ] ================= -->
+    <update-modal
+        :show="showUpdateModal"
+        :info="updateInfo"
+        @close="showUpdateModal = false"
+        @download="openExternalUrl(updateInfo.downloadUrl)"
+    />
 
         <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
         <toast-container :toasts="toasts" />
@@ -1961,6 +1929,7 @@ import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
 import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prompt）
 import SingleTagModal from './SingleTagModal.vue'; // 单卡添加标签弹窗
 import DiskScanModal from './DiskScanModal.vue'; // 磁盘扫描进度弹窗
+import UpdateModal from './UpdateModal.vue'; // 版本更新检测弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -1984,7 +1953,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
