@@ -24,6 +24,11 @@ window.addEventListener('unhandledrejection', (event) => {
     console.error('[未处理的 Promise 拒绝]', event.reason);
 });
 
+// ================= [ 阻止 Electron 默认打开拖入的文件 ] =================
+// 全局按住浏览器的默认拖拽行为，禁止它私自打开/导航到文件（纵深防御，覆盖 #app 之外的边缘区域）
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => e.preventDefault());
+
 const app = createApp({
     components: { Section },
     setup() {
@@ -290,16 +295,27 @@ const app = createApp({
         const openChatTab = () => { currentTab.value = 'chat'; initChat(); };
 
         const isDragging = ref(false);
-        const dragDepth = ref(0); // 拖拽进入深度计数器（防止在子元素间移动时遮罩闪烁）
+        const dragCounter = ref(0); // 拖拽进入深度计数器（防止在子元素间移动时遮罩闪烁）
+
         // 拖拽进入窗口：深度 +1 并显示全屏遮罩
-        const onDragEnter = () => {
-            dragDepth.value++;
+        const handleDragEnter = (e) => {
+            e.preventDefault();
+            dragCounter.value++;
             isDragging.value = true;
         };
+
         // 拖拽离开窗口：深度 -1，归零后才隐藏遮罩
-        const onDragLeave = () => {
-            dragDepth.value = Math.max(0, dragDepth.value - 1);
-            if (dragDepth.value === 0) isDragging.value = false;
+        const handleDragLeave = (e) => {
+            e.preventDefault();
+            // 🔧 兜底修复：拖拽取消/拖出窗口时 relatedTarget 为 null，直接复位，
+            // 杜绝计数器残留导致下次拖入时遮罩不再消失
+            if (!e.relatedTarget) {
+                dragCounter.value = 0;
+                isDragging.value = false;
+                return;
+            }
+            dragCounter.value = Math.max(0, dragCounter.value - 1);
+            if (dragCounter.value === 0) isDragging.value = false;
         };
         const cardData = shallowRef(null); // 【优化】使用浅层响应式，完美解决大卡片切换卡顿
         const imgUrl = ref(null);
@@ -1437,8 +1453,9 @@ const app = createApp({
 
         // 系统级拖拽导入：将拖入的文件复制到卡片库文件夹
         const handleDrop = async (e) => {
+            e.preventDefault();
             isDragging.value = false;
-            dragDepth.value = 0;
+            dragCounter.value = 0; // 重置计数器
 
             // 检查是否已设置固定的卡片库文件夹
             if (!currentFolderPath.value) {
@@ -2649,6 +2666,70 @@ const app = createApp({
             setTimeout(() => {
                 showAITagModal.value = false;
             }, 1500);
+        };
+
+        // ================= [ 🌐 AI 一键汉化功能 ] =================
+        const isTranslating = ref(false);
+
+        // 一键汉化当前卡片的「角色设定/首条消息/场景/对话示例」（复用聊天与 AI 打标共用 API 配置）
+        const translateCardContent = async () => {
+            if (!cardData.value) return;
+
+            // 检查 API 配置（项目统一走 apiEndpoint/apiKey/apiType ref，经 IPC 转发绕过 CORS）
+            if (!apiEndpoint.value || !apiEndpoint.value.trim()) {
+                nativeAlert('请先在设置中配置大模型 API 接口与密钥！', 'warning');
+                return;
+            }
+
+            const ok = await confirmDialog('将调用 AI 翻译当前卡片的「角色设定」「首条消息」「场景」和「对话示例」。\n这可能会消耗一定 Token，是否继续？');
+            if (!ok) return;
+
+            isTranslating.value = true;
+
+            // 兼容 V2（cardData.data）与 V1（cardData 顶层）结构
+            const data = cardData.value?.data || cardData.value;
+
+            // 构建严格的翻译 Prompt
+            const systemPrompt = `你是一个专业的 SillyTavern 角色卡本地化翻译专家。
+请将用户发送的文本翻译成流畅、符合中文语境的网文/轻小说风格中文。
+【绝对不可违背的规则】：
+1. 绝对不要翻译、修改或删除任何包裹在双大括号中的宏变量（如 {{user}}, {{char}}, {{original}} 等）。
+2. 绝对不要翻译包裹在星号中的正则逻辑或代码。
+3. 保持原有的换行符和段落格式。
+4. 直接返回翻译后的纯文本，不要包含任何多余的解释、问候或引号。`;
+
+            // 定义内部调用 AI 的辅助函数（经主进程 IPC 转发，绕过 CORS；与聊天/AI打标共用通道）
+            const callAIForTranslation = async (text) => {
+                if (!text || text.trim() === '') return text;
+                const payload = {
+                    model: resolveApiModel(), // 复用配置的模型（OpenAI/Anthropic 自适应）
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: text }
+                    ],
+                    temperature: 0.3 // 偏低温度保证翻译稳定
+                };
+                const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+                const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
+                if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
+                return extractReplyContent(result).trim();
+            };
+
+            try {
+                // 依次翻译核心字段（防止拼在一起超长或弄乱格式）
+                if (data.description) data.description = await callAIForTranslation(data.description);
+                if (data.first_mes) data.first_mes = await callAIForTranslation(data.first_mes);
+                if (data.scenario) data.scenario = await callAIForTranslation(data.scenario);
+                if (data.mes_example) data.mes_example = await callAIForTranslation(data.mes_example);
+
+                refreshCardData(); // shallowRef 深层修改后强制刷新右侧界面
+                nativeAlert('🎉 翻译完成！请检查右侧内容，确认无误后点击「覆盖保存」。', 'info');
+            } catch (error) {
+                console.error('翻译失败:', error);
+                nativeAlert(`翻译失败，请检查网络或 API 配置。\n错误信息: ${error.message}`, 'error');
+            } finally {
+                isTranslating.value = false;
+            }
         };
 
         // ================= [ 方法：重命名与导出世界书 ] =================
@@ -4360,7 +4441,7 @@ const app = createApp({
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
-            isDragging, dragDepth, onDragEnter, onDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
+            isDragging, dragCounter, handleDragEnter, handleDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
@@ -4389,6 +4470,7 @@ const app = createApp({
             showAITagModal, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
             enableAIExtraction, customAIPrompt, newAICandidateTag,
             addAICandidateTag, addAICandidateTagManual, removeAICandidateTag,
+            isTranslating, translateCardContent,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
             defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
             isEditingSystemTags, addGlobalTag,

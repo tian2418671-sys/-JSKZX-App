@@ -237,6 +237,13 @@ function createWindow() {
   // 通过自定义协议加载页面（支持 ES Modules 与 CDN）
   win.loadURL('app://index.html');
 
+  // 🔒 安全加固：禁止非 app:// 的一切导航（含拖放文件触发的 file:// 导航）与任何弹窗，
+  // 防止图片/文件被误交给系统默认程序打开（如系统英文图片查看器）
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('app://')) e.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   // DOM 与 CSS 完全就绪后再显示视窗，杜绝启动闪烁
   win.once('ready-to-show', () => {
     win.show();

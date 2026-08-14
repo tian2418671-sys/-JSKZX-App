@@ -116,10 +116,10 @@
         fontFamily: appSettings.fontFamily,
         fontWeight: appSettings.fontWeight
     }" class="h-full flex flex-col text-[13px]"
+         @dragenter="handleDragEnter"
+         @dragleave="handleDragLeave"
          @dragover.prevent
-         @dragenter.prevent="onDragEnter"
-         @dragleave.prevent="onDragLeave"
-         @drop.prevent="handleDrop">
+         @drop="handleDrop">
 
         <!-- 拖拽导入全屏遮罩：拖文件到窗口任意处时提示松开导入 -->
         <transition name="fade">
@@ -410,7 +410,7 @@
                         <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-zinc-800 cursor-pointer shrink-0 accent-blue-500" style="width: 1.1em; height: 1.1em;">
 
                         <!-- 极小缩略图（尺寸随字号缩放） -->
-                        <img v-if="item.avatar" :src="item.avatar" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" style="width: 3.5em; height: 3.5em;">
+                        <img v-if="item.avatar" :src="item.avatar" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" style="width: 3.5em; height: 3.5em;">
                         <div v-else class="bg-zinc-700 rounded-md border border-zinc-600 shrink-0" style="width: 3.5em; height: 3.5em;"></div>
                         
                         <!-- 信息 -->
@@ -432,46 +432,37 @@
                     </div>
                 </div>
 
-                <!-- 🎴 网格视图（真·Grid：auto-fill + 原生 aspect-ratio 2:3，绝对自适应不塌陷） -->
+                <!-- 🎴 网格视图（侧边栏专属：固定 2 列自适应竖卡 + 原生 2:3 比例，不受窗口断点影响） -->
                 <div v-if="viewMode === 'grid'"
-                     class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4"
-                     style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; align-content: start;">
+                     class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2"
+                     style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-content: start;">
                      
                     <div v-for="(item, index) in paginatedLibrary" :key="item.id"
                          @click.prevent="handleCardClick($event, item, index)"
                          @contextmenu.prevent="openContextMenu($event, item)"
-                         :class="['group relative rounded-xl overflow-hidden shadow-lg cursor-pointer select-none transition-all duration-300 hover:scale-105 bg-zinc-800',
-                                  selectedIds.includes(item.id) ? 'ring-4 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.6)]' : 
-                                  (cardData && cardData === item.data) ? 'ring-2 ring-blue-400' : 'border border-zinc-700 hover:border-zinc-400']"
-                         style="aspect-ratio: 2/3; height: auto;">
+                         :class="['group relative rounded-lg overflow-hidden border cursor-pointer select-none transition-all duration-200 bg-zinc-800/80 hover:shadow-lg',
+                                  selectedIds.includes(item.id) ? 'border-blue-500 ring-2 ring-blue-500/50 shadow-blue-500/20' : 
+                                  (cardData && cardData === item.data) ? 'border-amber-500 ring-2 ring-amber-500/50' : 'border-zinc-700/80 hover:border-zinc-400']"
+                         style="position: relative; width: 100%; height: 0; padding-bottom: 150%;">
                          
-                        <div v-if="isMultiSelectMode" class="absolute top-2 left-2 z-20">
+                        <div v-if="isMultiSelectMode" class="absolute top-1.5 left-1.5 z-20">
                             <input type="checkbox" :checked="selectedIds.includes(item.id)"
                                    @click.stop="toggleSelection(item.id)"
-                                   class="w-5 h-5 rounded border-zinc-600 text-blue-600 focus:ring-blue-600 bg-zinc-900/90 cursor-pointer accent-blue-500">
+                                   class="w-4 h-4 rounded border-zinc-600 text-blue-600 focus:ring-blue-600 bg-zinc-900/90 cursor-pointer accent-blue-500">
                         </div>
 
-                        <!-- 卡片封面（绝对定位贴入 2:3 画框，绝不撑变形；无头像时显示首字占位） -->
-                        <img v-if="item.avatar" :src="item.avatar" class="absolute top-0 left-0 w-full h-full object-cover block">
-                        <div v-else class="absolute top-0 left-0 w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-700 to-zinc-900 text-4xl font-bold text-zinc-500 select-none">
+                        <!-- 卡片封面（绝对定位贴入 2:3 画框；无头像时显示首字占位） -->
+                        <img v-if="item.avatar" :src="item.avatar" draggable="false" class="absolute inset-0 w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105">
+                        <div v-else class="absolute inset-0 w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-700 to-zinc-900 text-2xl font-bold text-zinc-500 select-none">
                             {{ (item.name || '?').charAt(0) }}
                         </div>
                         
-                        <div class="absolute bottom-0 left-0 w-full z-10 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 pt-12 opacity-90">
-                            <h3 class="text-white font-bold truncate drop-shadow-md text-sm mb-1">{{ item.name }}</h3>
-                            
-                            <div class="flex flex-wrap items-center gap-1.5 mt-1">
-                                <span class="px-1.5 py-0.5 bg-blue-600/90 border border-blue-500/50 text-[10px] rounded text-white shadow-sm truncate max-w-[90px]">
-                                    {{ item.category || '未分类' }}
-                                </span>
-                                <span v-if="item.customTags && item.customTags.length" class="px-1.5 py-0.5 bg-zinc-700/90 border border-zinc-600/50 text-[10px] rounded text-zinc-200 shadow-sm truncate max-w-[70px]">
-                                    {{ displayTagText(item.customTags[0]) }}
-                                </span>
+                        <div class="absolute inset-x-0 bottom-0 p-2 pt-8 bg-gradient-to-t from-black/90 via-black/50 to-transparent flex flex-col justify-end pointer-events-none z-10">
+                            <div class="font-bold text-white text-xs truncate leading-tight drop-shadow">{{ item.name }}</div>
+                            <div class="flex items-center gap-1 mt-1 flex-wrap">
+                                <span class="text-[9px] px-1 py-0.5 rounded bg-blue-600/80 text-white font-mono leading-none truncate max-w-[60px]">{{ item.category || '未分类' }}</span>
+                                <span v-if="item.customTags && item.customTags.length" class="text-[9px] px-1 py-0.5 rounded bg-zinc-700/80 text-zinc-300 truncate max-w-[65px] leading-none">{{ displayTagText(item.customTags[0]) }}</span>
                             </div>
-                            
-                            <p class="text-[10px] text-zinc-400 line-clamp-2 mt-2 leading-tight font-mono opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                {{ (item.data?.data?.description || item.data?.description || '').trim().substring(0, 90) || '暂无描述...' }}
-                            </p>
                         </div>
                     </div>
                     
@@ -656,6 +647,10 @@
                             </div>
                         </div>
                         <div class="flex items-center gap-2 shrink-0">
+                            <button @click="translateCardContent" :disabled="isTranslating" class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-600 disabled:cursor-not-allowed text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap" title="调用 AI 翻译角色设定/首条消息/场景/对话示例">
+                                <span v-if="!isTranslating">🌐 一键汉化</span>
+                                <span v-else class="animate-pulse">⏳ AI 翻译中...</span>
+                            </button>
                             <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
                                 💾 覆盖保存
                             </button>
