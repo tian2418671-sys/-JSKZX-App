@@ -1,7 +1,7 @@
 # 🎴 SillyTavern 角色卡管理器
 
 > 本地桌面版 SillyTavern 角色卡高级解析与管理中心 —— 让几千张角色卡井井有条。
-> 基于 **Electron + Vue 3 + Tailwind CSS + ECharts**，完全离线可用（前端依赖已本地化）。
+> 完全离线可用（前端依赖已本地化）。
 
 ---
 
