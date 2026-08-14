@@ -9,7 +9,7 @@
 
 **🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限）：
 
-[⬇️ 下载安装包 `SillyTavern.Setup.1.5.0.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载安装包 `SillyTavern.Setup.1.6.0.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 **📦 绿色免安装版**（解压即用，无需安装）：
 
@@ -85,7 +85,7 @@
 | 📚 全局资产中心 | 聚合全库所有卡片的世界书条目与正则脚本，统一检视 |
 | 📦 打包导出 | 单卡整合包（主卡+世界书+正则）、批量打包、快捷单卡导出 |
 | 🛡️ 安全机制 | 保存前快照 `.bak_history`、删除移入 `.trash` 回收站、全局崩溃兜底日志 |
-| 🌐 离线可用 | 三大前端库已本地化到 `vendor/`，无网络也能完整运行 |
+| 🌐 离线可用 | 前端依赖经 Vite 构建全部打包进产物，无网络也能完整运行 |
 
 ---
 
@@ -160,7 +160,7 @@ npm run build
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版
-- `dist/SillyTavern 角色卡管理器 Setup 1.5.0.exe` —— NSIS 安装包
+- `dist/SillyTavern 角色卡管理器 Setup 1.6.0.exe` —— NSIS 安装包
 
 ---
 
@@ -169,23 +169,27 @@ npm run build
 ```
 ├── main.js                 # 主进程：窗口、app:// 协议、全部 IPC、PNG 写入、崩溃兜底
 ├── preload.js              # 预加载：contextBridge 安全暴露 electronAPI
-├── index.html              # 渲染进程页面骨架（引本地 vendor 资源）
+├── index.html              # 渲染进程挂载壳（<div id="app"> + 入口脚本）
 ├── package.json            # 项目配置 + electron-builder 打包配置
-├── css/style.css           # 自定义样式（暗色主题变量、过渡动画等）
+├── vite.config.mjs         # Vite 构建配置（Vue 完整版别名、Tailwind 等）
+├── tailwind.config.js      # Tailwind 内容扫描（index.html + js/**/*.{js,vue}）
+├── css/
+│   ├── tailwind.css        # Tailwind 指令入口（@tailwind base/…）
+│   └── style.css           # 自定义样式（主题变量、过渡动画等）
 ├── js/
-│   ├── app.js              # ★ 渲染进程核心：Vue setup() 全部业务逻辑
-│   ├── components/
-│   │   └── Section.js      # 文本块展示组件
+│   ├── main.js             # ★ 渲染进程入口：createApp(App) + 全局错误兜底
+│   ├── components/         # ★ 全部 Vue SFC 单文件组件（22 个）
+│   │   ├── App.vue         #   根组件：状态/逻辑中枢 + provide/inject 上下文
+│   │   ├── HeaderBar.vue   #   顶部菜单栏 + 紧凑工具栏
+│   │   ├── SidebarPanel.vue#   左侧资源管理器（角色卡/世界书库）+ 拖拽把手
+│   │   ├── EditorPanel.vue #   右侧编辑器（角色卡编辑 + 世界书 IDE + 日志控制台）
+│   │   ├── AITagModal.vue  #   AI 智能批量打标弹窗
+│   │   ├── GraphModal.vue  #   角色宇宙关系图谱（ECharts）
+│   │   ├── … （其余弹窗/菜单组件）
 │   └── utils/
 │       ├── cardLoader.js   # 卡片文件读取、数据规范化（V1/V2/V3 兼容）
-│       └── pngParser.js    # PNG/WebP tEXt/iTXt 块解析、深度扫描提取 JSON
-├── vendor/                 # ★ 本地化前端库（离线可用）
-│   ├── tailwindcss.js
-│   ├── echarts.min.js
-│   └── vue.esm-browser.prod.js
-├── build/
-│   ├── icon.ico / icon.png # 应用图标（生成脚本 generate-icon.ps1）
-│   └── generate-icon.ps1   # 图标生成脚本（用 pwsh 运行）
+│       ├── pngParser.js    # PNG/WebP tEXt/iTXt 块解析、深度扫描提取 JSON
+│       └── tokenEstimate.js# Token 估算工具（App 与 TextModal 共享）
 └── dist/                   # 打包产物（gitignore）
 ```
 
@@ -208,7 +212,11 @@ npm run build
 └───────────────┬─────────────────────────────────┘
                 │
 ┌───────────────▼─────────────────────────────────┐
-│  渲染进程 js/app.js（Vue 3 setup）                │
+│  渲染进程 js/main.js（Vue 3 SFC 组件化）          │
+│  App.vue 根组件 + 21 个 SFC 子组件               │
+│   ├─ HeaderBar / SidebarPanel / EditorPanel      │
+│   ├─ 14 个弹窗组件 + 2 个右键菜单组件            │
+│  App.vue 通过 provide/inject 共享上下文（ctx）    │
 │  仅能通过 window.electronAPI 访问主进程能力，      │
 │  无法直接触碰 Node.js                             │
 └─────────────────────────────────────────────────┘
@@ -230,7 +238,7 @@ npm run build
 | `file:exportPackage` | `exportPackage` | 单卡整合包导出 |
 | `file:exportBatchPackage` | `exportBatchPackage` | 批量打包导出 |
 
-> **新增 IPC 的三步套路**：`main.js` 注册 `ipcMain.handle` → `preload.js` 暴露 → `js/app.js` 调用。
+> **新增 IPC 的三步套路**：`main.js` 注册 `ipcMain.handle` → `preload.js` 暴露 → `js/main.js`（渲染进程）调用。
 
 ---
 
@@ -256,7 +264,7 @@ const newName = await appPrompt('请输入名称：', '默认值'); // 返回 Pr
 
 卡片/世界书内容可能含 `<html>`、`<head>` 等代码，直接 `v-html` 会被浏览器当 DOM 吞掉。
 
-✅ 使用 `js/app.js` 中的 `renderHTML()`（先转义 `& < >`，再 `\n→<br>`）。
+✅ 使用 `js/components/App.vue` 中的 `renderHTML()`（先转义 `& < >`，再 `\n→<br>`）。
 
 ### 4. `cardData` 是 `shallowRef`（性能优化）
 
@@ -291,9 +299,15 @@ return entries.map(entry => {
 - `has_lorebook` / `has_regex` 是特殊过滤 key（不在分组下拉中）
 - 「全部」(all) 是视图模式，不可重命名
 
-### 9. 前端库已本地化
+### 9. 前端依赖统一走 npm + Vite
 
-修改 `index.html` 不要引用外部 CDN；新库请放入 `vendor/` 并在 `package.json` 的 `files` 中加入。
+本项目已工程化升级：`vue` / `echarts` 等均通过 `npm install` 安装并由 Vite 打包（`vite build` 输出到 `web/`）。新增依赖：
+
+```bash
+npm install <包名>
+```
+
+⚠️ 依赖安装到 `node_modules` 会自动参与 Vite 打包；若需在渲染进程直接 `import`，请确认其可被 Vite 正确处理（或配置 `resolve.alias`）。
 
 ---
 
@@ -347,7 +361,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
 1. 修改 `package.json` 的 `version`
 2. `npm run build`
 3. 将以下产物上传到 GitHub Release：
-   - `dist/SillyTavern 角色卡管理器 Setup 1.5.0.exe`（安装包）
+   - `dist/SillyTavern 角色卡管理器 Setup 1.6.0.exe`（安装包）
    - `dist/win-unpacked/`（可选，绿色免安装版，建议压缩为 zip）
 
 ---
@@ -367,14 +381,21 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
    ```js
    newFeature: (arg) => ipcRenderer.invoke('my:newFeature', arg),
    ```
-3. **`js/app.js`** 在 `setup()` 中定义方法并加入 `return { ... }`。
-4. **`index.html`** 绑定 `@click` / `v-model` 等。
+3. **`js/components/App.vue`** 在 `setup()` 中定义方法并加入 `return { ... }`（同时加入 `provide('appCtx', ctx)` 供子组件共享）。
+4. **`index.html`** 绑定 `@click` / `v-model` 等（或拆分为新的 SFC 子组件挂到 `App.vue` 模板）。
 
 ### 新增一个「纯前端状态」的功能
 
-在 `js/app.js` 的 `setup()` 中：
+在 `js/components/App.vue` 的 `setup()` 中：
 1. 定义 `ref` / `computed` / `reactive`
 2. **务必加入 `return { ... }`**（模板只能访问暴露的成员）
+3. 若需在 HeaderBar / SidebarPanel / EditorPanel 等子组件中使用，需一并加入 `provide('appCtx', ctx)` 的 `ctx` 对象
+
+### 新增 / 拆分一个弹窗组件（SFC 规范）
+
+1. 在 `js/components/` 新建 `XxxModal.vue`，声明 `props`（父传子状态）+ `emits`（子传父事件）
+2. 在 `App.vue` 模板中挂载 `<xxx-modal :show="..." @close="..." />` 并注册组件
+3. ⚠️ **组件注册名陷阱**：模板 kebab 标签 `xxx-yyy-modal` 只能解析为 `XxxYyyModal`（首字母大写、连续大写字母会被折叠为单个大写）。若组件名含连续大写（如 `AITagModal`），必须用小写化注册名 `AiTagModal`，否则弹窗静默失效
 
 ### 需要输入的场景（禁止用 `prompt`）
 
@@ -383,11 +404,11 @@ const value = await appPrompt('标题：', '默认值');
 if (value && value.trim() !== '') { /* 处理 */ }
 ```
 
-### 新依赖 / 新 CDN 资源
+### 新依赖 / 新前端库
 
-1. 下载到 `vendor/`（如 `vendor/xxx.min.js`）
-2. `index.html` 本地引用：`<script src="./vendor/xxx.min.js">`
-3. `package.json` `build.files` 已含 `vendor/**/*`，无需改动
+1. `npm install <包名>`（Vite 自动打包进产物）
+2. 在 `js/components/*.vue` 或 `js/utils/*.js` 中 `import` 使用
+3. `package.json` `build.files` 已含 `web/**/*`（Vite 构建产物），无需额外配置
 
 ---
 
