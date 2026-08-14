@@ -1062,21 +1062,15 @@
             </div>
         </transition>
 
-        <!-- ================= [ 弹窗：通用输入（替代 prompt） ] ================= -->
-        <transition name="fade">
-            <div v-if="promptModalVisible" class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4" @click.self="cancelPrompt">
-                <div class="bg-white rounded-lg shadow-xl w-96 max-w-full p-5 border border-gray-200">
-                    <h3 class="text-sm font-bold text-gray-800 mb-3 whitespace-pre-line">📝 {{ promptModalTitle }}</h3>
-                    <input id="app-prompt-input" v-model="promptInput" type="text"
-                        class="w-full px-3 py-2 border border-gray-300 rounded outline-none focus:border-blue-500 text-sm mb-4"
-                        @keyup.enter="confirmPrompt" @keyup.esc="cancelPrompt">
-                    <div class="flex justify-end gap-2">
-                        <button @click="cancelPrompt" class="px-4 py-1.5 text-xs font-bold text-gray-500 hover:bg-gray-100 rounded border border-gray-300 transition">取消</button>
-                        <button @click="confirmPrompt" class="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-sm transition">确定</button>
-                    </div>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：通用输入（子组件 PromptModal，替代 prompt） ] ================= -->
+        <prompt-modal
+            :show="promptModalVisible"
+            :title="promptModalTitle"
+            :model-value="promptInput"
+            @update:model-value="promptInput = $event"
+            @confirm="confirmPrompt"
+            @cancel="cancelPrompt"
+        />
 
         <!-- ================= [ 弹窗：批量标签（子组件 BatchTagModal） ] ================= -->
         <batch-tag-modal
@@ -1987,6 +1981,7 @@ import DragOverlay from './DragOverlay.vue'; // 拖拽导入全屏遮罩
 import AppLoadingOverlay from './AppLoadingOverlay.vue'; // 启动过渡蒙版
 import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
 import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
+import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prompt）
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -2010,7 +2005,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
