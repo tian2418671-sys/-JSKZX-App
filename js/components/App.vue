@@ -1045,22 +1045,15 @@
             </main>
         </div>
 
-        <!-- ================= [ 弹窗：单卡添加标签 ] ================= -->
-        <transition name="fade">
-            <div v-if="tagModalVisible" class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4" @click.self="closeSingleTagModal">
-                <div class="bg-white rounded-lg shadow-xl w-96 max-w-full p-5 border border-gray-200">
-                    <h3 class="text-sm font-bold text-gray-800 mb-3">🏷️ {{ tagModalTitle }}</h3>
-                    <input id="single-tag-input" v-model="tagInput" type="text"
-                        placeholder="输入标签，多个用逗号分隔，如: 魔法, 精灵"
-                        class="w-full px-3 py-2 border border-gray-300 rounded outline-none focus:border-blue-500 text-sm mb-4"
-                        @keyup.enter="confirmSingleTag" @keyup.esc="closeSingleTagModal">
-                    <div class="flex justify-end gap-2">
-                        <button @click="closeSingleTagModal" class="px-4 py-1.5 text-xs font-bold text-gray-500 hover:bg-gray-100 rounded border border-gray-300 transition">取消</button>
-                        <button @click="confirmSingleTag" class="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-sm transition">确定</button>
-                    </div>
-                </div>
-            </div>
-        </transition>
+        <!-- ================= [ 弹窗：单卡添加标签（子组件 SingleTagModal） ] ================= -->
+        <single-tag-modal
+            :show="tagModalVisible"
+            :title="tagModalTitle"
+            :model-value="tagInput"
+            @update:model-value="tagInput = $event"
+            @confirm="confirmSingleTag"
+            @close="closeSingleTagModal"
+        />
 
         <!-- ================= [ 弹窗：通用输入（子组件 PromptModal，替代 prompt） ] ================= -->
         <prompt-modal
@@ -1982,6 +1975,7 @@ import AppLoadingOverlay from './AppLoadingOverlay.vue'; // 启动过渡蒙版
 import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
 import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
 import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prompt）
+import SingleTagModal from './SingleTagModal.vue'; // 单卡添加标签弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 
@@ -2005,7 +1999,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
