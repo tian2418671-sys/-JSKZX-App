@@ -1,0 +1,221 @@
+<!--
+  HeaderBar 顶部菜单栏 + 紧凑工具栏（子组件）
+  ⚠️ 所有状态/方法经 provide/inject 从 App.vue 共享（inject('appCtx') 后按名解构，
+      ref 解构后由模板顶层自动解包；importFileInput 模板 ref 绑定会写回父级 ref，
+      保证父级 importCards() 仍可触发本组件内隐藏文件输入）
+-->
+<template>
+    <!-- ================= [ 顶部菜单栏 (Top Menu Bar) ] ================= -->
+    <header class="h-12 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 shadow-sm z-30 select-none">
+        <!-- 左侧：Logo 与主菜单项 -->
+        <div class="flex items-center gap-6">
+            <div class="font-bold text-zinc-100 text-base tracking-wide flex items-center gap-2 cursor-pointer">
+                <span class="text-xl drop-shadow-md">🌌</span>
+                <span>角色卡管理中心</span>
+            </div>
+
+            <!-- 顶部下拉菜单系统 -->
+            <nav class="flex items-center gap-1 text-xs text-zinc-300 border-b border-zinc-800 bg-zinc-900/90 px-3 py-1.5 shrink-0 select-none z-30">
+                <!-- 隐藏文件输入：供【文件→导入角色卡】使用 -->
+                <input ref="importFileInput" type="file" accept=".png,.webp,.jpg,.jpeg,.json" multiple class="hidden" @change="handleImportFiles">
+
+                <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">文件(F)</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <button @click="selectFixedDirectory" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">📁 打开角色库目录... <span>Ctrl+O</span></button>
+                        <button @click="loadWorldbooks" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex justify-between">🌍 打开世界书目录...</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="importCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">➕ 导入角色卡 <span>Ctrl+I</span></button>
+                        <button @click="saveCurrentAsset" :disabled="!cardData && !activeWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">💾 物理保存修改 <span>Ctrl+S</span></button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="batchExportSelected" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📦 导出选中卡片...</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="openBakFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">⏱️ 查看历史快照 (.bak)</button>
+                        <button @click="openTrashFolder" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 查看回收站 (.trash)</button>
+                        <button @click="openGlobalTrash" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🗑️ 打开全局回收站 (jsTavern_Trash)</button>
+                    </div>
+                </div>
+
+                <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">编辑(E)</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[170px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <button @click="isMultiSelectMode = !isMultiSelectMode" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">
+                            ☑️ 批量选择模式 <span v-if="isMultiSelectMode">✓</span>
+                        </button>
+                        <button @click="selectAllCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">全选所有卡片</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="openAITagModal" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🏷️ AI 智能批量打标</button>
+                        <button @click="batchChangeCategoryModal" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 批量修改分类分组</button>
+                        <button @click="cleanGlobalTagsPrompt" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🧹 清理无效全局标签</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="startDedupeScan" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex items-center justify-between text-amber-400">
+                            <span>🔍 智能查重与版本清理...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">窗口(W)</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[220px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <button @click="viewOptions.showSidebar = !viewOptions.showSidebar" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>📁 侧边栏 (角色卡列表)</span> <span v-if="viewOptions.showSidebar" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <button @click="viewOptions.showToolbar = !viewOptions.showToolbar" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>🛠️ 快捷工具栏</span> <span v-if="viewOptions.showToolbar" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="viewOptions.showAvatarPreview = !viewOptions.showAvatarPreview" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>🖼️ 高清大立绘面板</span> <span v-if="viewOptions.showAvatarPreview" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <button @click="viewOptions.showTokenStats = !viewOptions.showTokenStats" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>📊 Token 分析看板</span> <span v-if="viewOptions.showTokenStats" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <button @click="viewOptions.showWorldbook = !viewOptions.showWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>🌍 世界书 Lorebook 区域</span> <span v-if="viewOptions.showWorldbook" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <button @click="viewOptions.showRegex = !viewOptions.showRegex" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>⚡ 正则脚本对照区</span> <span v-if="viewOptions.showRegex" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                        <button @click="viewOptions.showRawJson = !viewOptions.showRawJson" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
+                            <span>📄 Raw JSON 代码区</span> <span v-if="viewOptions.showRawJson" class="text-indigo-400 font-bold">✓</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">设置(S)</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[230px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <button @click="showApiModal = true" class="px-3 py-2 text-left hover:bg-indigo-600 hover:text-white font-medium flex items-center justify-between border-b border-zinc-700/50">
+                            <span>⚡ API 引擎与模型设置...</span>
+                            <span class="text-[10px] text-indigo-300">配置</span>
+                        </button>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <span class="block text-zinc-400 mb-1.5">🎨 界面主题风格</span>
+                            <div class="grid grid-cols-3 gap-1">
+                                <button @click="setTheme('dark')" :class="theme === 'dark' ? 'border-indigo-500 font-bold' : ''" class="px-1.5 py-1 bg-zinc-900 border text-[10px] rounded text-zinc-200">暗夜极客</button>
+                                <button @click="setTheme('slate')" :class="theme === 'slate' ? 'border-sky-500 font-bold' : ''" class="px-1.5 py-1 bg-slate-800 border text-[10px] rounded text-slate-200">雅致青灰</button>
+                                <button @click="setTheme('light')" :class="theme === 'light' ? 'border-amber-500 font-bold' : ''" class="px-1.5 py-1 bg-zinc-100 border text-[10px] rounded text-zinc-800">明亮白昼</button>
+                            </div>
+                        </div>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <div class="flex items-center justify-between text-zinc-300 mb-1">
+                                <span>🖼️ 界面 UI 字号</span>
+                                <span class="text-indigo-400 font-mono font-bold">{{ appSettings.uiFontSize }}px</span>
+                            </div>
+                            <input type="range" v-model.number="appSettings.uiFontSize" min="10" max="28" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <div class="flex items-center justify-between text-zinc-300 mb-1">
+                                <span>📝 工作区编辑字号</span>
+                                <span class="text-amber-400 font-mono font-bold">{{ appSettings.fontSize }}px</span>
+                            </div>
+                            <input type="range" v-model.number="appSettings.fontSize" min="10" max="36" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
+                        </div>
+                        <button @click="resetPersonalizationSettings" class="px-3 py-1.5 text-left hover:bg-zinc-700 text-zinc-300 mt-1">🎨 重置界面外观与字号</button>
+                        <button @click="resetApiSettings" class="px-3 py-1.5 text-left hover:bg-rose-600 hover:text-white text-rose-400">🔄 重置 API 接口参数</button>
+                        <div class="h-px bg-zinc-700/50 my-1 mx-2"></div>
+                        <button @click="checkForUpdatesManual" class="px-3 py-1.5 text-left hover:bg-emerald-600 hover:text-white flex items-center justify-between text-emerald-400 font-bold transition">
+                            <span>🔄 检查应用更新...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-amber-400 transition font-bold">🧪 实验与工具</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">本地资产检索 (I/O)</div>
+                        <div class="px-3 py-1.5 text-zinc-300 flex items-center justify-between cursor-pointer hover:bg-zinc-700/50 transition" @click.stop="useSizeFilter = !useSizeFilter" title="开启后自动跳过小于 40KB 的贴图和图标">
+                            <span class="flex items-center gap-2"><span class="text-emerald-400">⚖️</span> 屏蔽非卡片小图 (&lt; 40KB)</span>
+                            <div class="w-8 h-4 bg-zinc-600 rounded-full relative transition-colors shadow-inner" :class="{'bg-emerald-500': useSizeFilter}">
+                                <div class="w-4 h-4 bg-white rounded-full absolute top-0 shadow transition-transform" :class="useSizeFilter ? 'translate-x-4' : 'translate-x-0'"></div>
+                            </div>
+                        </div>
+                        <button @click="runDiskScan('specific')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 指定文件夹/盘符扫描</button>
+                        <button @click="runDiskScan('all')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">💽 全盘暴力检索卡片</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="openGraph" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">🌌 星系关系图 (ECharts)</button>
+                        <button @click="openChatTab" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">💬 本地 AI 对话测卡</button>
+                        <button @click="pushToTavern" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🚀 一键推送至酒馆</button>
+                    </div>
+                </div>
+            </nav>
+        </div>
+
+    </header>
+
+    <!-- ================= [ 顶部紧凑工具栏（可由 窗口(W) 菜单收起）] ================= -->
+    <header v-if="viewOptions.showToolbar" class="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-3 shrink-0 shadow-sm z-10">
+        <div class="flex items-center gap-2 overflow-x-auto custom-scrollbar-x">
+            <span class="font-bold text-zinc-100 flex items-center gap-2 whitespace-nowrap shrink-0">
+                <svg class="w-4 h-4 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/><path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/></svg>
+                SillyTavern Core
+            </span>
+            <div class="h-4 w-px bg-zinc-700 shrink-0"></div>
+            <button @click="selectFixedDirectory" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">📂 打开本地库</button>
+            <button @click="openGraph" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">🌌 关系图谱</button>
+            <button @click="showGlobalAssetModal = true" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0" title="查看全库收集的世界书与正则脚本">
+                📚 全局资产库
+            </button>
+            <label class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition cursor-pointer whitespace-nowrap shrink-0">
+                📥 恢复配置 <input type="file" class="hidden" accept=".json" @change="importLibraryDB">
+            </label>
+            <button @click="toggleTheme" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0" title="循环切换三套主题 (暗夜/青灰/白昼)">
+                {{ theme === 'dark' ? '🌙 暗夜' : (theme === 'slate' ? '🌊 青灰' : '☀️ 白昼') }}
+            </button>
+        </div>
+
+        <div class="flex items-center gap-3 shrink-0">
+            <span class="text-xs text-zinc-500 whitespace-nowrap">总计: {{ library.length }} 张卡片</span>
+            <button @click="exportLibraryDB" class="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap shrink-0">备份配置</button>
+        </div>
+    </header>
+</template>
+
+<script>
+import { inject } from 'vue';
+
+export default {
+    name: 'HeaderBar',
+    setup() {
+        const ctx = inject('appCtx');
+        return {
+            importFileInput: ctx.importFileInput,
+            handleImportFiles: ctx.handleImportFiles,
+            selectFixedDirectory: ctx.selectFixedDirectory,
+            loadWorldbooks: ctx.loadWorldbooks,
+            importCards: ctx.importCards,
+            saveCurrentAsset: ctx.saveCurrentAsset,
+            cardData: ctx.cardData,
+            activeWorldbook: ctx.activeWorldbook,
+            batchExportSelected: ctx.batchExportSelected,
+            openBakFolder: ctx.openBakFolder,
+            openTrashFolder: ctx.openTrashFolder,
+            openGlobalTrash: ctx.openGlobalTrash,
+            isMultiSelectMode: ctx.isMultiSelectMode,
+            selectAllCards: ctx.selectAllCards,
+            openAITagModal: ctx.openAITagModal,
+            batchChangeCategoryModal: ctx.batchChangeCategoryModal,
+            cleanGlobalTagsPrompt: ctx.cleanGlobalTagsPrompt,
+            startDedupeScan: ctx.startDedupeScan,
+            viewOptions: ctx.viewOptions,
+            showApiModal: ctx.showApiModal,
+            setTheme: ctx.setTheme,
+            theme: ctx.theme,
+            appSettings: ctx.appSettings,
+            resetPersonalizationSettings: ctx.resetPersonalizationSettings,
+            resetApiSettings: ctx.resetApiSettings,
+            checkForUpdatesManual: ctx.checkForUpdatesManual,
+            useSizeFilter: ctx.useSizeFilter,
+            runDiskScan: ctx.runDiskScan,
+            openGraph: ctx.openGraph,
+            openChatTab: ctx.openChatTab,
+            pushToTavern: ctx.pushToTavern,
+            showGlobalAssetModal: ctx.showGlobalAssetModal,
+            importLibraryDB: ctx.importLibraryDB,
+            exportLibraryDB: ctx.exportLibraryDB,
+            toggleTheme: ctx.toggleTheme,
+            library: ctx.library
+        };
+    }
+};
+</script>
