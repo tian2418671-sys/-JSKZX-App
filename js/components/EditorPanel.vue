@@ -404,14 +404,28 @@
                         <button @click="toggleAllEntriesCollapse" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap">
                             {{ isAllEntriesCollapsed ? '↔️ 展开' : '↕️ 折叠' }}
                         </button>
+                        <!-- ✅ [词条区收起/展开] 折叠整个词条列表释放右侧空间 -->
+                        <button @click="isWbListCollapsed = !isWbListCollapsed"
+                                :class="isWbListCollapsed ? 'bg-zinc-700 text-white border-zinc-500' : 'theme-element hover:border-emerald-500'"
+                                class="px-2 py-1 border rounded text-[11px] font-medium transition whitespace-nowrap"
+                                :title="isWbListCollapsed ? '展开词条列表' : '收起词条列表 (释放编辑空间)'">
+                            📖 {{ isWbListCollapsed ? '展开列表' : '收起列表' }}
+                        </button>
                         <button @click="exportActiveWorldbook" class="px-2 py-1 theme-element hover:border-indigo-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="导出单文件">📤</button>
                         <button @click="addWorldbookEntry" class="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded shadow transition whitespace-nowrap">➕ 新增</button>
                         <button @click="saveActiveWorldbook" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded shadow transition whitespace-nowrap">💾 保存</button>
                     </div>
                 </div>
 
-                <!-- 词条列表编辑区（紧凑化：更小间距/卡片） -->
-                <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 pb-32">
+                <!-- ✅ 词条列表已收起：紧凑计数条（点击展开） -->
+                <div v-if="isWbListCollapsed" @click="isWbListCollapsed = false"
+                     class="shrink-0 flex items-center justify-center gap-2 py-2 text-zinc-500 border-b border-zinc-800 bg-zinc-900/60 cursor-pointer select-none hover:text-emerald-400 transition"
+                     title="展开词条列表">
+                    📖 词条列表已收起（{{ filteredWorldbookEntries.length }} 条）· 点击展开
+                </div>
+
+                <!-- 词条列表编辑区（紧凑化：更小间距/卡片；可整体收起释放空间） -->
+                <div v-show="!isWbListCollapsed" class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 pb-32">
                     <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
                          :id="'wb-entry-' + getEntryUid(entry)"
                          class="group theme-surface border rounded-lg p-2 shadow-sm transition-all"
@@ -561,13 +575,16 @@
 </template>
 
 <script>
-import { inject } from 'vue';
+import { inject, ref } from 'vue';
 
 export default {
     name: 'EditorPanel',
     setup() {
         const ctx = inject('appCtx');
+        // ✅ [世界书词条区收起/展开] 折叠词条列表释放右侧编辑空间
+        const isWbListCollapsed = ref(false);
         return {
+            isWbListCollapsed,
             appMode: ctx.appMode,
             cardData: ctx.cardData,
             imgUrl: ctx.imgUrl,
