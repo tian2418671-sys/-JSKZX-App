@@ -148,20 +148,20 @@
                  :class="['group relative flex items-center gap-2 rounded-md cursor-pointer border select-none transition-all duration-150',
                           selectedIds.includes(item.id) ? 'bg-amber-950/20 border-amber-600/40' :
                           (cardData && cardData === item.data) ? 'bg-blue-600 border-blue-600 text-white shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
-                 :style="isCompactMode ? 'padding: 0.2em 0.4em; margin-bottom: 0.2em;' : 'padding: 0.3em 0.5em; margin-bottom: 0.3em;'">
+                 :style="isCompactMode ? 'padding: 0.12em 0.3em; margin-bottom: 0.12em;' : 'padding: 0.35em 0.55em; margin-bottom: 0.35em;'">
 
-                <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0 accent-blue-500">
+                <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" :class="isCompactMode ? 'w-3 h-3' : 'w-3.5 h-3.5'" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0 accent-blue-500">
 
-                <!-- 行内小头像（40-44px 高度压缩） -->
+                <!-- 行内小头像（常规 2.4em / 紧凑极致 1.5em） -->
                 <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false"
                      class="rounded overflow-hidden bg-zinc-900 border border-zinc-700/40 object-cover shrink-0"
-                     :style="isCompactMode ? 'width: 1.8em; height: 1.8em;' : 'width: 2.2em; height: 2.2em;'">
-                <div v-else class="rounded bg-zinc-700 border border-zinc-600 shrink-0" :style="isCompactMode ? 'width: 1.8em; height: 1.8em;' : 'width: 2.2em; height: 2.2em;'"></div>
+                     :style="isCompactMode ? 'width: 1.5em; height: 1.5em;' : 'width: 2.4em; height: 2.4em;'">
+                <div v-else class="rounded bg-zinc-700 border border-zinc-600 shrink-0" :style="isCompactMode ? 'width: 1.5em; height: 1.5em;' : 'width: 2.4em; height: 2.4em;'"></div>
 
-                <!-- 两行信息：名字+分类 / Token+世界书+标签截断 -->
-                <div class="flex-1 min-w-0 flex flex-col justify-center overflow-hidden" style="gap: 0.15em;">
+                <!-- 两行信息：名字+分类 / Token+世界书+标签截断（紧凑模式仅单行名字） -->
+                <div class="flex-1 min-w-0 flex flex-col justify-center overflow-hidden" :style="isCompactMode ? 'gap: 0;' : 'gap: 0.15em;'">
                     <div class="flex items-center justify-between gap-1">
-                        <span class="text-xs font-medium truncate leading-tight" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</span>
+                        <span :class="[isCompactMode ? 'text-[10px]' : 'text-xs', (cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400']" class="font-medium truncate leading-tight">{{ item.name }}</span>
                         <span v-if="!isCompactMode && item.category && item.category !== '未分类'" class="text-[9px] px-1 rounded shrink-0 bg-zinc-800 text-zinc-400 border border-zinc-700/50">{{ item.category }}</span>
                     </div>
                     <div v-if="!isCompactMode" class="flex items-center gap-1.5 text-[10px] text-zinc-500 leading-none">
@@ -174,8 +174,8 @@
                     </div>
                 </div>
 
-                <!-- ✅ [UI 方案2] hover 快捷操作：平时隐藏，鼠标移入显示 -->
-                <div class="hidden group-hover:flex items-center gap-0.5 absolute right-1.5 bg-zinc-800/90 backdrop-blur-sm px-1 rounded border border-zinc-700/50 z-10">
+                <!-- ✅ hover 快捷操作（紧凑模式隐藏，保持纯净单行） -->
+                <div v-if="!isCompactMode" class="hidden group-hover:flex items-center gap-0.5 absolute right-1.5 bg-zinc-800/90 backdrop-blur-sm px-1 rounded border border-zinc-700/50 z-10">
                     <button @click.stop="quickTag(item)" title="为这张卡添加标签" class="p-1 text-[10px] text-zinc-400 hover:text-amber-400">🏷️</button>
                     <button @click.stop="deleteCardItem(item)" title="删除卡片(移入回收站)" class="p-1 text-[10px] text-zinc-400 hover:text-rose-400">🗑️</button>
                 </div>
