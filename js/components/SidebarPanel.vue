@@ -25,8 +25,26 @@
 
         <!-- ============ 角色卡模式 ============ -->
         <template v-if="appMode === 'characters'">
-        <!-- 过滤器（四行排列：分类 / 搜索 / 快捷过滤 / 语言） -->
-        <div class="px-1.5 pt-1.5 pb-1 border-b border-zinc-800 flex flex-col gap-1 bg-zinc-900">
+        <!-- ✅ [UI 瘦身·方案1] 顶部搜索行 + 漏斗（高级筛选折叠入口，sticky） -->
+        <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex gap-1 items-center sticky top-0 z-10">
+            <div class="relative flex-1">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                <input id="global-search-input" v-model="searchQueryInput" type="text"
+                       placeholder="搜索名称/标签/世界书 (Ctrl+F)"
+                       title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)"
+                       class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded-md pl-8 pr-6 py-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500">
+                <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
+            </div>
+            <button @click="showAdvancedFilters = !showAdvancedFilters"
+                    class="p-1.5 rounded-md transition shrink-0"
+                    :class="hasActiveFilters ? 'text-amber-500 border border-amber-500/50 bg-amber-500/10' : 'text-zinc-400 hover:text-zinc-200 border border-zinc-700 bg-zinc-800'"
+                    :title="showAdvancedFilters ? '收起高级筛选' : '展开高级筛选'">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 9h12M10 14h4M12 19h0"/></svg>
+            </button>
+        </div>
+
+        <!-- 高级筛选折叠面板（点击漏斗展开；平时不占空间） -->
+        <div v-if="showAdvancedFilters" class="px-1.5 pt-1.5 pb-1 border-b border-zinc-800 flex flex-col gap-1 bg-zinc-900 shadow-lg z-20">
             <!-- 行1：分组下拉 + 新增/重命名/删除 -->
             <div class="flex gap-1 items-center">
                 <select v-model="currentCategoryKey" class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 text-xs rounded px-1.5 py-1 outline-none text-zinc-200 focus:border-blue-500">
@@ -37,13 +55,6 @@
                 <button @click="addNewCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="新增分组">➕</button>
                 <button @click="renameCurrentCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="重命名分组">✏️</button>
                 <button v-if="customCategories.includes(currentCategoryKey)" @click="deleteCustomCategory(currentCategoryKey)" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-red-600 hover:text-white text-xs text-zinc-300 shrink-0" title="删除当前自定义分组">🗑️</button>
-            </div>
-
-            <!-- 行2：搜索（独立一行，全宽；300ms 防抖） -->
-            <div class="relative">
-                <input id="global-search-input" v-model="searchQueryInput" type="text" placeholder="搜索名称/标签/世界书 (Ctrl+F)" title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)" class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded pl-6 pr-5 py-1 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500">
-                <svg class="w-3 h-3 text-zinc-500 absolute left-2 top-[7px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-1.5 top-[6px] text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
             </div>
 
             <!-- 行2.5：快捷标签搜索（点击直接填入搜索框并立即过滤） -->
@@ -329,13 +340,23 @@
 </template>
 
 <script>
-import { inject } from 'vue';
+import { inject, ref, computed } from 'vue';
 
 export default {
     name: 'SidebarPanel',
     setup() {
         const ctx = inject('appCtx');
+
+        // ✅ [UI 瘦身·方案1] 高级筛选折叠面板：平时只留搜索框+漏斗，点击才展开分类/标签/语言
+        const showAdvancedFilters = ref(false);
+        // 漏斗高亮提示：有激活的筛选条件（非全部 或 非默认双语）时点亮
+        const hasActiveFilters = computed(() =>
+            ctx.currentCategoryKey.value !== 'all' || ctx.tagLangMode.value !== 'both'
+        );
+
         return {
+            showAdvancedFilters,
+            hasActiveFilters,
             viewOptions: ctx.viewOptions,
             sidebarEl: ctx.sidebarEl,
             sidebarStyle: ctx.sidebarStyle,
