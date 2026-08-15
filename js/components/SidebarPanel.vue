@@ -254,65 +254,83 @@
 
         <!-- ============ 🌍 世界书模式 ============ -->
         <template v-if="appMode === 'worldbooks'">
-            <!-- 🌐 网址导入世界书工具栏 -->
-            <div class="p-2 border-b border-zinc-800 bg-zinc-900 shrink-0">
-                <div class="flex items-center gap-1.5">
-                    <div class="flex-1 flex items-center bg-black/40 border border-zinc-700 rounded overflow-hidden transition focus-within:border-emerald-500/50 min-w-0">
-                        <span class="pl-2.5 text-zinc-500 text-[10px] shrink-0">🔗 URL</span>
-                        <input v-model="importUrl" type="text"
-                               placeholder="粘贴 Discord / GitHub 的 .json 直链..."
-                               class="w-full bg-transparent text-xs text-zinc-300 px-2 py-1.5 outline-none"
-                               @keyup.enter="importWorldbookFromUrl">
+            <!-- ✅ 顶部搜索行 + 折叠按钮（与角色卡模式同款） -->
+            <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-1.5 shrink-0 z-10">
+                <!-- 行1：搜索 + 合并 + 查重 + 折叠 -->
+                <div class="flex items-center gap-1">
+                    <div class="relative flex-1">
+                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                        <input v-model="wbSearchQuery" type="text" placeholder="搜索世界书..."
+                               class="w-full h-7 bg-zinc-800/80 border border-zinc-700/60 rounded pl-7 pr-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-amber-500/80 transition">
                     </div>
-                    <button @click="importWorldbookFromUrl" :disabled="isImportingWb"
-                            class="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="从 JSON 直链导入世界书">
-                        <span v-if="isImportingWb" class="animate-spin">⌛</span>
-                        <span v-else>⬇️</span>
-                        云端导入
+                    <button @click="openWbMergeModal" title="选择多本世界书进行合并"
+                            class="h-7 px-2 flex items-center justify-center rounded text-xs font-bold transition shrink-0 bg-zinc-800 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30">
+                        🔗 合并
+                    </button>
+                    <button @click="startWorldbookDedupeScan" title="世界书对比与查重"
+                            class="h-7 px-2 flex items-center justify-center rounded text-xs font-bold transition shrink-0 bg-amber-600 hover:bg-amber-500 text-white">
+                        🔍 查重
+                    </button>
+                    <button @click="showWbAdvanced = !showWbAdvanced"
+                            class="h-7 px-2 flex items-center justify-center rounded transition shrink-0"
+                            :class="showWbAdvanced ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50'"
+                            :title="showWbAdvanced ? '收起高级功能区' : '展开高级功能区 (导入/分组/筛选)'">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                     </button>
                 </div>
-                <!-- 📂 独立的世界书文件夹导入 -->
-                <div class="mt-1.5 flex items-center gap-1.5">
-                    <label class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded border border-zinc-700/60 cursor-pointer transition shadow-sm"
-                           title="选择世界书文件夹，自动穿透所有子文件夹扫描 .json 世界书">
-                        📂 打开世界书目录
-                        <input type="file" webkitdirectory directory multiple class="hidden" @change="handleWorldbookFolderSelect">
-                    </label>
-                    <button @click="syncWorldbooksToDisk" title="将仍停留在内存中（无本地文件）的世界书统一落盘保存到世界书目录"
-                            class="px-3 py-1.5 bg-zinc-800 hover:bg-emerald-600 text-zinc-200 hover:text-white text-xs rounded border border-zinc-700/60 transition shadow-sm shrink-0">
-                        💾 落盘
-                    </button>
-                </div>
-            </div>
-            <!-- 📁 世界书分组切换导航条 -->
-            <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 shrink-0">
-                <div class="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
-                    <button @click="currentWbCategory = '全部'"
-                            :class="currentWbCategory === '全部' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
-                            class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
-                        🌍 全部
-                    </button>
-                    <button v-for="cat in wbCategories" :key="cat"
-                            @click="currentWbCategory = cat"
-                            :class="currentWbCategory === cat ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
-                            class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
-                        📁 {{ cat }}
-                    </button>
-                </div>
-            </div>
-            <!-- 世界书筛选：搜索 + 词条数过滤 + 查重入口 -->
-            <div class="p-2 border-b border-zinc-800 bg-zinc-900 space-y-1.5 shrink-0">
-                <div class="flex gap-1.5">
-                    <input v-model="wbSearchQuery" type="text" placeholder="🔍 搜索世界书..." class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs outline-none text-zinc-200 placeholder-zinc-500 focus:border-amber-500">
-                    <button @click="openWbMergeModal" class="px-2 py-1 bg-zinc-800 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30 text-xs font-bold rounded shrink-0 shadow" title="选择多本世界书进行合并">🔗 合并</button>
-                    <button @click="startWorldbookDedupeScan" class="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shrink-0 shadow" title="世界书对比与查重">🔍 查重</button>
-                </div>
-                <div class="flex gap-1 text-[10px]">
-                    <button @click="wbFilterType = 'all'" :class="wbFilterType === 'all' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">全部 ({{ worldbooks.length }})</button>
-                    <button @click="wbFilterType = 'small'" :class="wbFilterType === 'small' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">1-15条</button>
-                    <button @click="wbFilterType = 'large'" :class="wbFilterType === 'large' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">15+条</button>
-                    <button @click="wbFilterType = 'empty'" :class="wbFilterType === 'empty' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">空书</button>
+
+                <!-- 高级功能区折叠面板（URL导入 / 打开目录 / 分组 / 筛选） -->
+                <div v-if="showWbAdvanced" class="flex flex-col gap-1.5 pt-0.5">
+                    <!-- 🌐 网址导入世界书 -->
+                    <div class="flex items-center gap-1.5">
+                        <div class="flex-1 flex items-center bg-black/40 border border-zinc-700 rounded overflow-hidden transition focus-within:border-emerald-500/50 min-w-0">
+                            <span class="pl-2.5 text-zinc-500 text-[10px] shrink-0">🔗 URL</span>
+                            <input v-model="importUrl" type="text"
+                                   placeholder="粘贴 Discord / GitHub 的 .json 直链..."
+                                   class="w-full bg-transparent text-xs text-zinc-300 px-2 py-1 outline-none"
+                                   @keyup.enter="importWorldbookFromUrl">
+                        </div>
+                        <button @click="importWorldbookFromUrl" :disabled="isImportingWb"
+                                class="px-2.5 py-1 bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="从 JSON 直链导入世界书">
+                            <span v-if="isImportingWb" class="animate-spin">⌛</span>
+                            <span v-else>⬇️</span>
+                            云端导入
+                        </button>
+                    </div>
+                    <!-- 📂 打开世界书目录 + 落盘 -->
+                    <div class="flex items-center gap-1.5">
+                        <label class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded border border-zinc-700/60 cursor-pointer transition shadow-sm"
+                               title="选择世界书文件夹，自动穿透所有子文件夹扫描 .json 世界书">
+                            📂 打开世界书目录
+                            <input type="file" webkitdirectory directory multiple class="hidden" @change="handleWorldbookFolderSelect">
+                        </label>
+                        <button @click="syncWorldbooksToDisk" title="将仍停留在内存中（无本地文件）的世界书统一落盘保存到世界书目录"
+                                class="px-3 py-1 bg-zinc-800 hover:bg-emerald-600 text-zinc-200 hover:text-white text-xs rounded border border-zinc-700/60 transition shadow-sm shrink-0">
+                            💾 落盘
+                        </button>
+                    </div>
+                    <!-- 📁 世界书分组切换导航条 -->
+                    <div class="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
+                        <button @click="currentWbCategory = '全部'"
+                                :class="currentWbCategory === '全部' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                                class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                            🌍 全部
+                        </button>
+                        <button v-for="cat in wbCategories" :key="cat"
+                                @click="currentWbCategory = cat"
+                                :class="currentWbCategory === cat ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                                class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                            📁 {{ cat }}
+                        </button>
+                    </div>
+                    <!-- 词条数筛选 chips -->
+                    <div class="flex gap-1 text-[10px]">
+                        <button @click="wbFilterType = 'all'" :class="wbFilterType === 'all' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">全部 ({{ worldbooks.length }})</button>
+                        <button @click="wbFilterType = 'small'" :class="wbFilterType === 'small' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">1-15条</button>
+                        <button @click="wbFilterType = 'large'" :class="wbFilterType === 'large' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">15+条</button>
+                        <button @click="wbFilterType = 'empty'" :class="wbFilterType === 'empty' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">空书</button>
+                    </div>
                 </div>
             </div>
 
@@ -400,9 +418,13 @@ export default {
             ctx.currentCategoryKey.value !== 'all' || ctx.tagLangMode.value !== 'both'
         );
 
+        // ✅ [世界书模式] 顶部高级功能区折叠面板（URL导入/目录/分组/筛选收进面板，与角色卡模式一致）
+        const showWbAdvanced = ref(false);
+
         return {
             showAdvancedFilters,
             hasActiveFilters,
+            showWbAdvanced,
             viewOptions: ctx.viewOptions,
             sidebarEl: ctx.sidebarEl,
             sidebarStyle: ctx.sidebarStyle,
