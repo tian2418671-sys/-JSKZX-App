@@ -1282,9 +1282,17 @@ export default {
         const closeGraph = () => {
             showGraph.value = false;
             window.removeEventListener('resize', handleGraphResize); // 解绑 resize，防止泄漏
+
+            // ✅ [补丁] 加入延迟销毁：给 Vue 移除 DOM 的过渡动画时间，
+            // 防止 dblclick 穿梭回调里 closeGraph 时 Canvas/WebGL 上下文未释放导致低配机内存溢出（OOM）
             if (echartsInstance) {
-                echartsInstance.dispose();
+                const instanceToDestroy = echartsInstance;
                 echartsInstance = null;
+                setTimeout(() => {
+                    if (instanceToDestroy && !instanceToDestroy.isDisposed()) {
+                        instanceToDestroy.dispose();
+                    }
+                }, 300);
             }
         };
 
@@ -1897,6 +1905,10 @@ export default {
             }
             // V1 / Character.ai 格式：必须有角色名 + 至少一个内容字段
             if (typeof data.name === 'string' && data.name.trim() !== '') {
+                // ✅ [补丁] 增加更严格的排他条件：酒馆 config.json 等标准配置文件即使带 name 也直接抛弃，
+                // 防止其被误当成 V1 角色卡混入库中
+                if (data.system_settings || data.api_keys || data.public_api) return false;
+
                 return typeof data.description === 'string' ||
                        typeof data.personality === 'string' ||
                        typeof data.first_mes === 'string' ||
@@ -1954,8 +1966,25 @@ export default {
                     }
 
                     // 触发自动标签和分类（会优先应用导入的历史配置）
+                    const oldTagsLen = (cardInfo.customTags || []).length;
+                    const oldCategory = cardInfo.category;
                     processAutoTagsAndCategory(cardInfo);
                     library.value.push(cardInfo);
+
+                    // ✅ [补丁] 如果自动分类/打标签使数据发生了变更，必须立即覆盖物理文件！
+                    // （否则新卡导入的自动标签/分类只活在内存，重启后全部丢失）
+                    if (oldCategory !== cardInfo.category || oldTagsLen !== (cardInfo.customTags || []).length) {
+                        if (window.electronAPI && !/\.json$/i.test(cardInfo.path)) {
+                            // 只写入原生 data 的 tags，保证卡片格式不被污染
+                            const dataLayer = cardInfo.data?.data || cardInfo.data || {};
+                            dataLayer.tags = Array.from(new Set([...(dataLayer.tags || []), ...(cardInfo.customTags || [])]));
+                            try {
+                                await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                            } catch (e) {
+                                console.warn(`自动打标物理保存失败 [${cardInfo.name}]:`, e);
+                            }
+                        }
+                    }
                     return true;
                 }
             } catch (err) {
@@ -2197,7 +2226,11 @@ export default {
 
         // 换页逻辑
         const changePage = (page) => {
-            if (page >= 1 && page <= totalPages.value) currentPage.value = page;
+            if (page >= 1 && page <= totalPages.value) {
+                currentPage.value = page;
+                // ✅ [补丁] 翻页时清理上一次点击索引，防止跨页 Shift 连选基于页内索引超界误选当页卡片
+                lastSelectedIndex.value = -1;
+            }
         };
 
         // ================= [ 方法：导出/导入 本地库文件 ] =================
