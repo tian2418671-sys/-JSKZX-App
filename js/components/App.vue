@@ -275,6 +275,22 @@
         <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
         <toast-container :toasts="toasts" />
 
+        <!-- ================= [ 批量操作悬浮控制台（页面正下方固定，宽敞现代，不挤侧边栏） ] ================= -->
+        <div v-if="selectedIds.length > 0"
+             class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800/95 backdrop-blur-sm text-zinc-100 p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs border border-gray-700 rounded-xl"
+             style="min-width: 420px; max-width: 92vw;">
+            <div class="flex justify-between items-center px-1">
+                <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
+                <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
+            </div>
+            <div class="grid grid-cols-4 gap-1">
+                <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1.5 rounded transition font-medium">📁 移分组</button>
+                <button @click="showBatchTagModal = true" class="bg-gray-700 hover:bg-purple-600 py-1.5 rounded transition font-medium">🏷️ 贴标签</button>
+                <button @click="openAITagModal" class="bg-gray-700 hover:bg-amber-600 py-1.5 rounded transition font-medium">🤖 AI 打标</button>
+                <button @click="batchExportSelected" class="bg-gray-700 hover:bg-emerald-600 py-1.5 rounded transition font-medium">📦 导出</button>
+            </div>
+        </div>
+
     </div>
 </template>
 
@@ -2389,6 +2405,14 @@ export default {
             viewMode.value = viewMode.value === 'list' ? 'grid' : 'list';
             try { localStorage.setItem('jsTavernViewMode', viewMode.value); } catch (e) { /* 忽略 */ }
         };
+
+        // ✅ [UI 瘦身] 列表紧凑模式（隐藏副行/缩头像，一屏显示更多卡片；localStorage 持久化）
+        const isCompactMode = ref((() => {
+            try { return localStorage.getItem('jsTavernCompactMode') === '1'; } catch (e) { return false; }
+        })());
+        watch(isCompactMode, (v) => {
+            try { localStorage.setItem('jsTavernCompactMode', v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        });
 
         // 右键菜单状态
         const contextMenu = ref({
@@ -5182,7 +5206,7 @@ export default {
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
             selectedIds, handleCardClick, toggleSelection, clearSelection,
-            isMultiSelectMode, viewMode, toggleViewMode,
+            isMultiSelectMode, viewMode, toggleViewMode, isCompactMode,
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
             batchChangeCategory, batchAddTag,

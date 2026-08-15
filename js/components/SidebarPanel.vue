@@ -94,6 +94,12 @@
                     <span v-if="viewMode === 'list'">🎴 网格</span>
                     <span v-else>📜 列表</span>
                 </button>
+                <!-- ✅ [UI 瘦身] 紧凑模式切换：仅列表视图下生效（隐藏副行/缩头像，一屏更多卡片） -->
+                <button v-if="viewMode === 'list'" @click="isCompactMode = !isCompactMode"
+                        :class="isCompactMode ? 'bg-indigo-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
+                        class="px-2 py-0.5 rounded transition font-medium" :title="isCompactMode ? '当前：紧凑模式 (点击切换常规)' : '当前：常规模式 (点击切换紧凑)'">
+                    {{ isCompactMode ? '📱 常规' : '🗜️ 紧凑' }}
+                </button>
                 <button @click="isMultiSelectMode = !isMultiSelectMode"
                         :class="isMultiSelectMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
                         class="px-2 py-0.5 rounded transition font-medium">
@@ -110,18 +116,21 @@
                  :class="['group relative flex items-center rounded-lg cursor-pointer border select-none transition-all duration-200',
                           selectedIds.includes(item.id) ? 'bg-blue-900/20 border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.2)]' :
                           (cardData && cardData === item.data) ? 'bg-blue-600 text-white border-blue-600 shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
-                 style="padding: 0.6em; gap: 0.6em; margin-bottom: 0.45em;">
+                 :style="isCompactMode ? 'padding: 0.35em; gap: 0.5em; margin-bottom: 0.25em;' : 'padding: 0.6em; gap: 0.6em; margin-bottom: 0.45em;'">
 
                 <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-zinc-800 cursor-pointer shrink-0 accent-blue-500" style="width: 1.1em; height: 1.1em;">
 
-                <!-- 极小缩略图 -->
-                <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" style="width: 3.5em; height: 3.5em;">
-                <div v-else class="bg-zinc-700 rounded-md border border-zinc-600 shrink-0" style="width: 3.5em; height: 3.5em;"></div>
+                <!-- 极小缩略图（紧凑模式更小） -->
+                <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" :style="isCompactMode ? 'width: 2.2em; height: 2.2em;' : 'width: 3.5em; height: 3.5em;'">
+                <div v-else class="bg-zinc-700 rounded-md border border-zinc-600 shrink-0" :style="isCompactMode ? 'width: 2.2em; height: 2.2em;' : 'width: 3.5em; height: 3.5em;'"></div>
 
-                <!-- 信息 -->
+                <!-- 信息（紧凑模式隐藏副行/标签，只留名字） -->
                 <div class="flex-1 min-w-0 overflow-hidden">
-                    <div class="font-bold truncate leading-tight transition-colors" style="font-size: 1.05em;" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</div>
-                    <div class="truncate leading-tight mt-0.5" style="font-size: 0.8em;" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500 opacity-70'">{{ item.category }} · {{ displayTagText(item.customTags[0]) || '无标签' }}</div>
+                    <div class="font-bold truncate leading-tight transition-colors" :style="isCompactMode ? 'font-size: 0.95em;' : 'font-size: 1.05em;'" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</div>
+                    <!-- ✅ [UI 瘦身] 标签截断：只显示 1 个标签，多余用 +N 代替（紧凑模式整体隐藏） -->
+                    <div v-if="!isCompactMode" class="truncate leading-tight mt-0.5" style="font-size: 0.8em;" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500 opacity-70'">
+                        {{ item.category }}<template v-if="displayTagText(item.customTags[0])"><span> · {{ displayTagText(item.customTags[0]) }}</span><span v-if="extraTagsCount(item.customTags) > 0" class="text-amber-500"> +{{ extraTagsCount(item.customTags) }}</span></template>
+                    </div>
                 </div>
             </div>
 
@@ -183,19 +192,7 @@
             </div>
         </div>
 
-        <!-- 批量操作栏 -->
-        <div v-if="selectedIds.length > 0" class="absolute bottom-0 left-0 right-0 bg-gray-800 text-zinc-100 p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs z-20 border-t border-gray-700">
-            <div class="flex justify-between items-center px-1">
-                <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
-                <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
-            </div>
-            <div class="grid grid-cols-4 gap-1">
-                <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1 rounded transition font-medium">📁 移分组</button>
-                <button @click="showBatchTagModal = true" class="bg-gray-700 hover:bg-purple-600 py-1 rounded transition font-medium">🏷️ 贴标签</button>
-                <button @click="openAITagModal" class="bg-gray-700 hover:bg-amber-600 py-1 rounded transition font-medium">🤖 AI 打标</button>
-                <button @click="batchExportSelected" class="bg-gray-700 hover:bg-emerald-600 py-1 rounded transition font-medium">📦 导出</button>
-            </div>
-        </div>
+        <!-- 批量操作栏已迁移至 App.vue 全局底部悬浮控制台（fixed bottom-4），不再挤占侧边栏 -->
         </template>
 
         <!-- ============ 🌍 世界书模式 ============ -->
@@ -365,6 +362,7 @@ export default {
             paginatedLibrary: ctx.paginatedLibrary,
             viewMode: ctx.viewMode,
             toggleViewMode: ctx.toggleViewMode,
+            isCompactMode: ctx.isCompactMode,
             isMultiSelectMode: ctx.isMultiSelectMode,
             selectedIds: ctx.selectedIds,
             handleCardClick: ctx.handleCardClick,
@@ -372,6 +370,8 @@ export default {
             toggleSelection: ctx.toggleSelection,
             cardData: ctx.cardData,
             displayTagText: ctx.displayTagText,
+            // ✅ [UI 瘦身] 标签截断辅助：最多显示 1 个标签，多余用 +N 代替
+            extraTagsCount: (tags) => (Array.isArray(tags) && tags.length > 1 ? tags.length - 1 : 0),
             changePage: ctx.changePage,
             currentPage: ctx.currentPage,
             totalPages: ctx.totalPages,
