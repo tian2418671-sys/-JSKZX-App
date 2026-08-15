@@ -422,9 +422,13 @@
                              @click="entry._collapsed = !entry._collapsed">
 
                             <div class="flex items-center gap-2 min-w-0 flex-1">
-                                <!-- ✅ 启用状态圆点（紧凑可视化） -->
-                                <span class="shrink-0 w-2 h-2 rounded-full transition-colors"
-                                      :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></span>
+                                <!-- ✅ 启用状态圆点（可点击切换启用/停用） -->
+                                <button @click.stop="toggleEntryState(entry)"
+                                        :title="entry.enabled === false ? '已停用，点击启用' : '已启用，点击停用'"
+                                        class="shrink-0 flex items-center justify-center w-3 h-4 cursor-pointer">
+                                    <span class="w-2 h-2 rounded-full transition-colors"
+                                          :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></span>
+                                </button>
                                 <span class="text-xs text-amber-500 transition-transform font-mono shrink-0" :class="{ '-rotate-90': entry._collapsed }">▼</span>
                                 <span class="text-[11px] font-mono opacity-50 shrink-0">#{{ index + 1 }}</span>
 
@@ -611,6 +615,12 @@ export default {
             updateEntryKeys: ctx.updateEntryKeys,
             // ✅ [紧凑化] 世界书词条插入位置可读化（position: 0顶部/1底部/2聊天前）
             getEntryPositionText: (p) => ({ 0: '顶部', 1: '底部', 2: '聊天前' })[p] || '默认',
+            // ✅ [紧凑化] 点击启用圆点切换词条启用/停用（缺失 enabled 视为启用，首次点击=停用）
+            toggleEntryState: (entry) => {
+                if (!entry) return;
+                if (entry.enabled === undefined) entry.enabled = false;
+                else entry.enabled = !entry.enabled;
+            },
             regexScripts: ctx.regexScripts,
             addRegexScript: ctx.addRegexScript,
             getRegexUid: ctx.getRegexUid,
