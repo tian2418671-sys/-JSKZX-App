@@ -4333,7 +4333,6 @@ export default {
         // 🎛️ 世界书词条 IDE 控制栏（搜索 / 折叠 / 克隆）
         // =========================================================
         const entrySearchQuery = ref('');         // 词条关键字实时搜索
-        const isAllEntriesCollapsed = ref(false); // 词条全局折叠状态
 
         // 动态过滤搜索后的词条（触发词 / 次级触词 / 正文 / 备注 全字段匹配）
         const filteredWorldbookEntries = computed(() => {
@@ -4352,14 +4351,6 @@ export default {
                        commentStr.toLowerCase().includes(q);
             });
         });
-
-        // 一键全部折叠/展开
-        const toggleAllEntriesCollapse = () => {
-            isAllEntriesCollapsed.value = !isAllEntriesCollapsed.value;
-            if (activeWorldbook.value && Array.isArray(activeWorldbook.value.data.entries)) {
-                activeWorldbook.value.data.entries.forEach(e => { e._collapsed = isAllEntriesCollapsed.value; });
-            }
-        };
 
         // 克隆指定词条（在后方插入副本）
         const duplicateWorldbookEntry = (entry) => {
@@ -5282,7 +5273,7 @@ export default {
             syncWorldbooksToDisk,
             // 🌍 世界书词条深度编辑 (Entry IDE)
             addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
-            entrySearchQuery, isAllEntriesCollapsed, filteredWorldbookEntries, toggleAllEntriesCollapse,
+            entrySearchQuery, filteredWorldbookEntries,
             // 🎨 三主题切换（暗夜/青灰/白昼）
             setTheme,
             // 🚀 首屏加载状态

@@ -401,131 +401,136 @@
                         <button @click="exportFilteredWorldbook" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="将当前搜索过滤出的词条拆分为独立世界书">
                             📤 拆分导出
                         </button>
-                        <button @click="toggleAllEntriesCollapse" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap">
-                            {{ isAllEntriesCollapsed ? '↔️ 展开' : '↕️ 折叠' }}
-                        </button>
-                        <!-- ✅ [词条区收起/展开] 折叠整个词条列表释放右侧空间 -->
-                        <button @click="isWbListCollapsed = !isWbListCollapsed"
-                                :class="isWbListCollapsed ? 'bg-zinc-700 text-white border-zinc-500' : 'theme-element hover:border-emerald-500'"
-                                class="px-2 py-1 border rounded text-[11px] font-medium transition whitespace-nowrap"
-                                :title="isWbListCollapsed ? '展开词条列表' : '收起词条列表 (释放编辑空间)'">
-                            📖 {{ isWbListCollapsed ? '展开列表' : '收起列表' }}
-                        </button>
                         <button @click="exportActiveWorldbook" class="px-2 py-1 theme-element hover:border-indigo-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="导出单文件">📤</button>
                         <button @click="addWorldbookEntry" class="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded shadow transition whitespace-nowrap">➕ 新增</button>
                         <button @click="saveActiveWorldbook" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded shadow transition whitespace-nowrap">💾 保存</button>
                     </div>
                 </div>
 
-                <!-- ✅ 词条列表已收起：紧凑计数条（点击展开） -->
-                <div v-if="isWbListCollapsed" @click="isWbListCollapsed = false"
-                     class="shrink-0 flex items-center justify-center gap-2 py-2 text-zinc-500 border-b border-zinc-800 bg-zinc-900/60 cursor-pointer select-none hover:text-emerald-400 transition"
-                     title="展开词条列表">
-                    📖 词条列表已收起（{{ filteredWorldbookEntries.length }} 条）· 点击展开
-                </div>
+                <!-- ✅ 世界书编辑器：左侧词条列表（可收起）+ 右侧详情编辑 -->
+                <div class="flex-1 flex overflow-hidden min-h-0 relative">
 
-                <!-- 词条列表编辑区（紧凑化：更小间距/卡片；可整体收起释放空间） -->
-                <div v-show="!isWbListCollapsed" class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 pb-32">
-                    <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
-                         :id="'wb-entry-' + getEntryUid(entry)"
-                         class="group theme-surface border rounded-lg p-2 shadow-sm transition-all"
-                         :class="{ 'opacity-50 border-dashed': !entry.enabled }">
+                    <!-- 左：词条列表侧栏 -->
+                    <div class="relative h-full flex flex-col border-r border-zinc-800 bg-zinc-900/90 transition-all duration-300 shrink-0"
+                         :class="isWbSidebarCollapsed ? 'w-12' : 'w-64'">
 
-                        <!-- 词条头部（紧凑：启用圆点 + 触发词 + 折叠信息徽章） -->
-                        <div class="flex items-center justify-between cursor-pointer select-none gap-2"
-                             @click="entry._collapsed = !entry._collapsed">
+                        <button @click="isWbSidebarCollapsed = !isWbSidebarCollapsed"
+                                class="absolute -right-3 top-4 z-20 w-6 h-6 bg-zinc-800 border border-zinc-700 rounded-full flex items-center justify-center text-[10px] text-zinc-400 hover:text-white shadow-md transition"
+                                :title="isWbSidebarCollapsed ? '展开词条列表' : '收起词条列表'">
+                            {{ isWbSidebarCollapsed ? '▶' : '◀' }}
+                        </button>
 
-                            <div class="flex items-center gap-2 min-w-0 flex-1">
-                                <!-- ✅ 启用状态圆点（可点击切换启用/停用） -->
-                                <button @click.stop="toggleEntryState(entry)"
-                                        :title="entry.enabled === false ? '已停用，点击启用' : '已启用，点击停用'"
-                                        class="shrink-0 flex items-center justify-center w-3 h-4 cursor-pointer">
-                                    <span class="w-2 h-2 rounded-full transition-colors"
-                                          :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></span>
-                                </button>
-                                <span class="text-xs text-amber-500 transition-transform font-mono shrink-0" :class="{ '-rotate-90': entry._collapsed }">▼</span>
-                                <span class="text-[11px] font-mono opacity-50 shrink-0">#{{ index + 1 }}</span>
-
-                                <span class="text-xs font-bold truncate">
-                                    {{ entry.comment || (Array.isArray(entry.key) && entry.key.length ? entry.key.join(', ') : '未命名词条') }}
-                                </span>
-
-                                <!-- 折叠态：触发词标签 + 字数 + 插入位置徽章 -->
-                                <div v-if="entry._collapsed" class="flex items-center gap-1 overflow-hidden shrink-0 ml-1">
-                                    <span v-for="k in (entry.key || []).slice(0, 3)" :key="k" class="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded font-mono">{{ k }}</span>
-                                    <span v-if="(entry.key || []).length > 3" class="text-[9px] opacity-40">+{{ (entry.key || []).length - 3 }}</span>
-                                    <span v-if="!entry.enabled" class="text-[9px] bg-rose-500/10 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded">停用</span>
-                                    <span class="text-[9px] text-zinc-500 shrink-0 whitespace-nowrap">{{ entry.content ? entry.content.length : 0 }}字</span>
-                                    <span class="text-[9px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded shrink-0 whitespace-nowrap">{{ getEntryPositionText(entry.position) }}</span>
-                                </div>
-                            </div>
-
-                            <!-- ✅ [紧凑化] 右侧操作：折叠时 hover 显示，展开时保持可见（编辑需要） -->
-                            <div class="flex items-center gap-2 shrink-0 transition-opacity duration-150"
-                                 :class="entry._collapsed ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'"
-                                 @click.stop>
-                                <label class="flex items-center gap-1 cursor-pointer text-xs">
-                                    <input type="checkbox" v-model="entry.enabled" class="rounded theme-element text-amber-500 focus:ring-0">
-                                    <span :class="entry.enabled ? 'text-amber-400 font-bold' : 'opacity-40'">{{ entry.enabled ? '已启用' : '已停用' }}</span>
-                                </label>
-                                <button @click="duplicateWorldbookEntry(entry)" class="p-1 hover:text-indigo-400 text-xs opacity-60 hover:opacity-100" title="复制词条">📋</button>
-                                <button @click="deleteWorldbookEntry(entry)" class="p-1 hover:text-rose-400 text-xs opacity-60 hover:opacity-100" title="删除词条">🗑️</button>
-                            </div>
+                        <!-- 收起态：只显示 📖 + 词条数 -->
+                        <div v-if="isWbSidebarCollapsed" class="flex-1 flex flex-col items-center py-4 gap-3 text-zinc-500">
+                            <span class="text-lg" title="世界书词条">📖</span>
+                            <span class="text-[10px] font-mono font-bold">{{ (activeWorldbook.data && activeWorldbook.data.entries) ? activeWorldbook.data.entries.length : 0 }} 词条</span>
                         </div>
 
-                        <!-- 展开态：全字段编辑 -->
-                        <div v-show="!entry._collapsed" class="mt-3 pt-3 border-t border-zinc-700/40 space-y-3">
-
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div>
-                                    <label class="block text-[10px] opacity-60 mb-1">📌 词条备注/名称 (Comment)</label>
-                                    <input v-model="entry.comment" @input="refreshCardData" type="text" placeholder="例: 主角家乡背景" class="w-full theme-element border rounded px-2.5 py-1 text-xs focus:outline-none">
+                        <!-- 展开态：搜索 + 词条列表 -->
+                        <div v-else class="flex-1 flex flex-col overflow-hidden">
+                            <div class="p-2 border-b border-zinc-800 flex gap-1.5 items-center shrink-0 bg-zinc-900">
+                                <div class="relative flex-1">
+                                    <span class="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                                    <input v-model="entrySearchQuery" type="text" placeholder="搜索触发词/备注..."
+                                           class="w-full h-7 bg-zinc-800 border border-zinc-700 rounded pl-7 pr-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500 transition">
                                 </div>
-                                <div>
-                                    <label class="block text-[10px] text-amber-400 mb-1">🔑 主触发词 (Keys) <span class="opacity-50 font-normal">逗号分隔</span></label>
-                                    <input :value="(entry.key || []).join(', ')" @input="updateEntryKeys(entry, 'key', $event.target.value)" type="text" placeholder="例: 城堡, 魔法" class="w-full theme-element border rounded px-2.5 py-1 text-xs font-mono focus:outline-none">
-                                </div>
+                                <button @click="addWorldbookEntry" title="新建词条" class="h-7 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs shrink-0 transition flex items-center">➕</button>
                             </div>
 
-                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                <div class="col-span-2">
-                                    <label class="block text-[10px] opacity-60 mb-1">🪝 次级触词 (Secondary Keys)</label>
-                                    <input :value="(entry.keysecondary || []).join(', ')" @input="updateEntryKeys(entry, 'keysecondary', $event.target.value)" type="text" placeholder="逻辑与匹配" class="w-full theme-element border rounded px-2.5 py-1 text-xs font-mono focus:outline-none">
-                                </div>
-                                <div>
-                                    <label class="block text-[10px] opacity-60 mb-1 truncate">⚖️ 权重 (Order)</label>
-                                    <input type="number" v-model.number="entry.order" class="w-full theme-element border rounded px-2 py-1 text-xs">
-                                </div>
-                                <div>
-                                    <label class="block text-[10px] opacity-60 mb-1 truncate">⬇️ 深度 (Insertion)</label>
-                                    <input type="number" v-model.number="entry.insertion_order" class="w-full theme-element border rounded px-2 py-1 text-xs">
-                                </div>
-                                <div>
-                                    <label class="block text-[10px] opacity-60 mb-1 truncate">📍 插入位置</label>
-                                    <select v-model.number="entry.position" class="w-full theme-element border rounded px-2 py-1 text-xs">
-                                        <option value="0">0: 顶部</option>
-                                        <option value="1">1: 底部</option>
-                                        <option value="2">2: 聊天前</option>
-                                    </select>
-                                </div>
-                                <div class="flex items-center">
-                                    <label class="flex items-center gap-1.5 cursor-pointer text-xs whitespace-nowrap">
-                                        <input type="checkbox" v-model="entry.constant" class="rounded theme-element text-indigo-500 focus:ring-0">
-                                        📌 全局常驻
-                                    </label>
-                                </div>
-                            </div>
+                            <div class="flex-1 overflow-y-auto p-1 custom-scrollbar">
+                                <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
+                                     :id="'wb-entry-' + getEntryUid(entry)"
+                                     @click="selectEntry(entry)"
+                                     class="group relative flex items-center gap-2 p-1.5 px-2 mb-0.5 rounded cursor-pointer border transition"
+                                     :class="currentEntry === entry ? 'bg-zinc-800 border-emerald-500/50' : 'border-transparent hover:bg-zinc-800/80'">
 
-                            <div>
-                                <label class="block text-[10px] text-amber-500 mb-1 font-bold">📝 设定集正文 (Content)</label>
-                                <textarea v-model="entry.content" @input="refreshCardData" rows="4" placeholder="在此输入当触发词匹配时注入给 AI 的背景设定..." class="w-full theme-element border rounded p-2.5 text-xs focus:outline-none custom-scrollbar resize-y min-h-[70px]"></textarea>
+                                    <button @click.stop="toggleEntryState(entry)" class="shrink-0 w-2 h-2 rounded-full transition-colors cursor-pointer"
+                                            :title="entry.enabled === false ? '已停用，点击启用' : '已启用，点击停用'"
+                                            :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></button>
+
+                                    <div class="flex-1 min-w-0 flex flex-col justify-center">
+                                        <span class="text-[11px] font-bold truncate leading-tight" :class="entry.enabled !== false ? 'text-emerald-400' : 'text-zinc-500'">
+                                            {{ Array.isArray(entry.key) && entry.key.length ? entry.key.join(', ') : (entry.comment || '未定义触发词') }}
+                                        </span>
+                                        <span v-if="entry.comment" class="text-[9px] text-zinc-500 truncate leading-none mt-0.5">{{ entry.comment }}</span>
+                                    </div>
+
+                                    <div class="hidden group-hover:flex items-center gap-1 absolute right-1 bg-zinc-800/90 px-1 py-0.5 rounded border border-zinc-700 shadow-sm z-10">
+                                        <button @click.stop="duplicateWorldbookEntry(entry)" class="text-[10px] hover:text-blue-400" title="复制词条">📋</button>
+                                        <button @click.stop="deleteWorldbookEntry(entry)" class="text-[10px] hover:text-rose-400" title="删除词条">🗑️</button>
+                                    </div>
+                                </div>
+
+                                <div v-if="filteredWorldbookEntries.length === 0" class="text-center py-8 text-zinc-500 text-xs">
+                                    <p>🔍 没有匹配「{{ entrySearchQuery }}」的词条</p>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- 搜索无结果提示 -->
-                    <div v-if="filteredWorldbookEntries.length === 0" class="text-center py-10 text-zinc-500 text-sm">
-                        <p>🔍 没有匹配「{{ entrySearchQuery }}」的词条</p>
+                    <!-- 右：详情编辑 -->
+                    <div v-if="currentEntry" class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-[10px] opacity-60 mb-1">📌 词条备注/名称 (Comment)</label>
+                                <input v-model="currentEntry.comment" @input="refreshCardData" type="text" placeholder="例: 主角家乡背景" class="w-full theme-element border rounded px-2.5 py-1 text-xs focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-amber-400 mb-1">🔑 主触发词 (Keys) <span class="opacity-50 font-normal">逗号分隔</span></label>
+                                <input :value="(currentEntry.key || []).join(', ')" @input="updateEntryKeys(currentEntry, 'key', $event.target.value)" type="text" placeholder="例: 城堡, 魔法" class="w-full theme-element border rounded px-2.5 py-1 text-xs font-mono focus:outline-none">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div class="col-span-2">
+                                <label class="block text-[10px] opacity-60 mb-1">🪝 次级触词 (Secondary Keys) <span class="opacity-50 font-normal">逗号分隔</span></label>
+                                <input :value="(currentEntry.keysecondary || []).join(', ')" @input="updateEntryKeys(currentEntry, 'keysecondary', $event.target.value)" type="text" placeholder="逻辑与匹配" class="w-full theme-element border rounded px-2.5 py-1 text-xs font-mono focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] opacity-60 mb-1 truncate">⚖️ 权重 (Order)</label>
+                                <input type="number" v-model.number="currentEntry.order" class="w-full theme-element border rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] opacity-60 mb-1 truncate">⬇️ 深度 (Insertion)</label>
+                                <input type="number" v-model.number="currentEntry.insertion_order" class="w-full theme-element border rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] opacity-60 mb-1 truncate">📍 插入位置</label>
+                                <select v-model.number="currentEntry.position" class="w-full theme-element border rounded px-2 py-1 text-xs">
+                                    <option value="0">0: 顶部</option>
+                                    <option value="1">1: 底部</option>
+                                    <option value="2">2: 聊天前</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center">
+                                <label class="flex items-center gap-1.5 cursor-pointer text-xs whitespace-nowrap">
+                                    <input type="checkbox" v-model="currentEntry.constant" class="rounded theme-element text-indigo-500 focus:ring-0">
+                                    📌 全局常驻
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <label class="flex items-center gap-1.5 cursor-pointer text-xs whitespace-nowrap">
+                                    <input type="checkbox" v-model="currentEntry.enabled" class="rounded theme-element text-amber-500 focus:ring-0">
+                                    {{ currentEntry.enabled !== false ? '✅ 已启用' : '⛔ 已停用' }}
+                                </label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-[10px] text-amber-500 mb-1 font-bold flex justify-between items-center">
+                                <span>📝 设定集正文 (Content)</span>
+                                <span class="text-zinc-500 font-mono text-[10px]">{{ currentEntry.content ? currentEntry.content.length : 0 }} 字</span>
+                            </label>
+                            <textarea v-model="currentEntry.content" @input="refreshCardData" rows="8" placeholder="在此输入当触发词匹配时注入给 AI 的背景设定..." class="w-full theme-element border rounded p-2.5 text-xs focus:outline-none custom-scrollbar resize-y min-h-[120px]"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- 未选择词条时的占位 -->
+                    <div v-else class="flex-1 flex items-center justify-center text-zinc-500 text-sm">
+                        <div class="text-center flex flex-col items-center gap-2">
+                            <span class="text-3xl opacity-30">📖</span>
+                            <p>在左侧选择一个词条进行编辑</p>
+                        </div>
                     </div>
                 </div>
 
@@ -581,10 +586,19 @@ export default {
     name: 'EditorPanel',
     setup() {
         const ctx = inject('appCtx');
-        // ✅ [世界书词条区收起/展开] 折叠词条列表释放右侧编辑空间
-        const isWbListCollapsed = ref(false);
+        // ✅ [世界书编辑器] 左侧词条列表可收起（纯视觉，不影响数据）
+        const isWbSidebarCollapsed = ref(false);
+        // ✅ [世界书编辑器] 当前选中编辑的词条（列表+详情布局）
+        const currentEntry = ref(null);
+        const selectEntry = (entry) => {
+            if (!entry) return;
+            currentEntry.value = entry;
+            if (isWbSidebarCollapsed.value) isWbSidebarCollapsed.value = false; // 选中时自动展开侧栏
+        };
         return {
-            isWbListCollapsed,
+            isWbSidebarCollapsed,
+            currentEntry,
+            selectEntry,
             appMode: ctx.appMode,
             cardData: ctx.cardData,
             imgUrl: ctx.imgUrl,
@@ -630,8 +644,6 @@ export default {
             collapseAllWorldbook: ctx.collapseAllWorldbook,
             getKeysString: ctx.getKeysString,
             updateEntryKeys: ctx.updateEntryKeys,
-            // ✅ [紧凑化] 世界书词条插入位置可读化（position: 0顶部/1底部/2聊天前）
-            getEntryPositionText: (p) => ({ 0: '顶部', 1: '底部', 2: '聊天前' })[p] || '默认',
             // ✅ [紧凑化] 点击启用圆点切换词条启用/停用（缺失 enabled 视为启用，首次点击=停用）
             toggleEntryState: (entry) => {
                 if (!entry) return;
@@ -666,8 +678,6 @@ export default {
             openWbGraphModal: ctx.openWbGraphModal,
             openWbImportModal: ctx.openWbImportModal,
             exportFilteredWorldbook: ctx.exportFilteredWorldbook,
-            toggleAllEntriesCollapse: ctx.toggleAllEntriesCollapse,
-            isAllEntriesCollapsed: ctx.isAllEntriesCollapsed,
             exportActiveWorldbook: ctx.exportActiveWorldbook,
             addWorldbookEntry: ctx.addWorldbookEntry,
             saveActiveWorldbook: ctx.saveActiveWorldbook,
