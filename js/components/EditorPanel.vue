@@ -414,7 +414,7 @@
                 <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 pb-32">
                     <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
                          :id="'wb-entry-' + getEntryUid(entry)"
-                         class="theme-surface border rounded-lg p-2 shadow-sm transition-all"
+                         class="group theme-surface border rounded-lg p-2 shadow-sm transition-all"
                          :class="{ 'opacity-50 border-dashed': !entry.enabled }">
 
                         <!-- 词条头部（紧凑：启用圆点 + 触发词 + 折叠信息徽章） -->
@@ -442,7 +442,10 @@
                                 </div>
                             </div>
 
-                            <div class="flex items-center gap-2 shrink-0" @click.stop>
+                            <!-- ✅ [紧凑化] 右侧操作：折叠时 hover 显示，展开时保持可见（编辑需要） -->
+                            <div class="flex items-center gap-2 shrink-0 transition-opacity duration-150"
+                                 :class="entry._collapsed ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'"
+                                 @click.stop>
                                 <label class="flex items-center gap-1 cursor-pointer text-xs">
                                     <input type="checkbox" v-model="entry.enabled" class="rounded theme-element text-amber-500 focus:ring-0">
                                     <span :class="entry.enabled ? 'text-amber-400 font-bold' : 'opacity-40'">{{ entry.enabled ? '已启用' : '已停用' }}</span>
