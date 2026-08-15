@@ -71,13 +71,9 @@
 
         <!-- 高级筛选折叠面板（点击漏斗展开；平时不占空间） -->
         <div v-if="showAdvancedFilters" class="px-1.5 pt-1.5 pb-1 border-b border-zinc-800 flex flex-col gap-1 bg-zinc-900 shadow-lg z-20">
-            <!-- 行1：分组下拉 + 新增/重命名/删除 -->
-            <div class="flex gap-1 items-center">
-                <select v-model="currentCategoryKey" class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 text-xs rounded px-1.5 py-1 outline-none text-zinc-200 focus:border-blue-500">
-                    <option v-for="cat in allCategories" :key="cat.key" :value="cat.key">
-                        📁 {{ getCategoryDisplayName(cat) }}
-                    </option>
-                </select>
+            <!-- 行1：分组管理按钮（分类下拉已在顶部行2，避免重复的"All (全部)"下拉） -->
+            <div class="flex items-center gap-1">
+                <span class="text-[10px] text-zinc-500 font-medium shrink-0">📁 分组:</span>
                 <button @click="addNewCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="新增分组">➕</button>
                 <button @click="renameCurrentCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="重命名分组">✏️</button>
                 <button v-if="customCategories.includes(currentCategoryKey)" @click="deleteCustomCategory(currentCategoryKey)" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-red-600 hover:text-white text-xs text-zinc-300 shrink-0" title="删除当前自定义分组">🗑️</button>
