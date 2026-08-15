@@ -46,12 +46,17 @@
                         </div>
 
                         <div class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto p-2 bg-gray-50 border border-gray-200 rounded custom-scrollbar">
-                            <button v-for="tag in systemCommonTags" :key="tag"
-                                    @click="$emit('toggle-common-tag', tag)"
-                                    class="px-2 py-1 text-[11px] rounded border transition-colors"
-                                    :class="batchTagChips.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:border-blue-500 hover:text-blue-600'">
-                                {{ batchTagChips.includes(tag) ? '✓ 已选' : '+ ' + tag }}
-                            </button>
+                            <div v-for="tag in systemCommonTags" :key="tag" class="flex items-center group shadow-sm rounded">
+                                <button @click="$emit('toggle-common-tag', tag)"
+                                        class="px-2 py-1 text-[11px] border transition-colors rounded-l"
+                                        :class="batchTagChips.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:border-blue-500 hover:text-blue-600'">
+                                    {{ batchTagChips.includes(tag) ? '✓ 已选' : '+ ' + tag }}
+                                </button>
+                                <button @click.stop="$emit('remove-system-common-tag', tag)"
+                                        class="px-1.5 py-1 text-[11px] border border-l-0 border-gray-300 bg-gray-200 text-gray-500 hover:bg-red-500 hover:text-white hover:border-red-500 rounded-r transition-colors" title="从全局系统库中彻底删除此标签">
+                                    ✕
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -76,6 +81,6 @@ export default {
         batchTagChips: { type: Array, default: () => [] },
         systemCommonTags: { type: Array, default: () => [] }
     },
-    emits: ['close', 'confirm', 'update:batchMode', 'update:batchInputTags', 'remove-batch-tag', 'toggle-common-tag']
+    emits: ['close', 'confirm', 'update:batchMode', 'update:batchInputTags', 'remove-batch-tag', 'toggle-common-tag', 'remove-system-common-tag']
 };
 </script>

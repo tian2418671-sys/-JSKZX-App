@@ -37,15 +37,20 @@
                                     class="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 text-white rounded text-xs transition shrink-0">＋ 添加</button>
                         </div>
 
-                        <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签：</div>
+                        <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签（✕ 可彻底删除）：</div>
                         <div class="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 custom-scrollbar">
-                            <button v-for="tag in systemCommonTags" :key="tag"
-                                    @click="$emit('add-ai-candidate-tag', tag)"
-                                    :disabled="isAITagging || aiCandidateTags.includes(tag)"
-                                    :class="['px-2 py-0.5 text-[11px] rounded border transition-colors',
-                                             aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
-                                + {{ tag }}
-                            </button>
+                            <div v-for="tag in systemCommonTags" :key="tag" class="group flex items-center shadow-sm rounded">
+                                <button @click="$emit('add-ai-candidate-tag', tag)"
+                                        :disabled="isAITagging || aiCandidateTags.includes(tag)"
+                                        :class="['px-2 py-0.5 text-[11px] border transition-colors rounded-l',
+                                                 aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
+                                    + {{ tag }}
+                                </button>
+                                <button @click.stop="$emit('remove-system-common-tag', tag)" :disabled="isAITagging"
+                                        class="px-1.5 py-0.5 text-[11px] border border-l-0 border-gray-300 bg-gray-100 text-gray-400 hover:bg-red-500 hover:text-white hover:border-red-500 rounded-r transition-colors" title="从全局系统库中彻底删除此标签">
+                                    ✕
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -192,7 +197,7 @@ export default {
         'add-ai-candidate-tag', 'update:enableAIExtraction', 'update:customAIPrompt',
         'add-system-prompt-preset', 'update:activeSystemPromptId', 'save-system-prompts',
         'delete-system-prompt-preset', 'fetch-available-models', 'update:apiEndpoint',
-        'update:apiKey', 'update:apiModel', 'start-tagging'
+        'update:apiKey', 'update:apiModel', 'start-tagging', 'remove-system-common-tag'
     ]
 };
 </script>

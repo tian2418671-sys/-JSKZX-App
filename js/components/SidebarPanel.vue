@@ -46,6 +46,16 @@
                 <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-1.5 top-[6px] text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
             </div>
 
+            <!-- 行2.5：快捷标签搜索（点击直接填入搜索框并立即过滤） -->
+            <div class="flex flex-wrap gap-1 mt-1 px-1 max-h-16 overflow-y-auto custom-scrollbar">
+                <span class="text-[10px] text-zinc-500 font-medium flex items-center shrink-0">🔍 快捷:</span>
+                <span v-for="tag in systemCommonTags" :key="'search-'+tag"
+                      @click="appendTagToSearch(tag)"
+                      class="px-1.5 py-0.5 bg-zinc-800/80 text-zinc-400 text-[10px] rounded border border-zinc-700 cursor-pointer hover:bg-blue-600 hover:text-white hover:border-blue-500 transition whitespace-nowrap">
+                    {{ tag }}
+                </span>
+            </div>
+
             <!-- 行3：快捷过滤 chips -->
             <div class="flex items-center gap-1">
                 <button @click="currentCategoryKey = 'all'"
@@ -347,6 +357,8 @@ export default {
             deleteCustomCategory: ctx.deleteCustomCategory,
             searchQueryInput: ctx.searchQueryInput,
             searchQuery: ctx.searchQuery,
+            appendTagToSearch: ctx.appendTagToSearch,
+            systemCommonTags: ctx.systemCommonTags,
             toggleTagLangMode: ctx.toggleTagLangMode,
             tagLangMode: ctx.tagLangMode,
             filteredLibrary: ctx.filteredLibrary,

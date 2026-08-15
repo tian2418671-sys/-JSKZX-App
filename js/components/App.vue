@@ -62,6 +62,7 @@
             @update:batch-input-tags="batchInputTags = $event"
             @remove-batch-tag="removeBatchTag($event)"
             @toggle-common-tag="toggleBatchCommonTag($event)"
+            @remove-system-common-tag="removeTagFromGlobalPool"
         />
 
         <!-- ================= [ 弹窗：AI 智能批量打标（子组件 AITagModal） ] ================= -->
@@ -99,6 +100,7 @@
             @update:apiKey="apiKey = $event"
             @update:apiModel="apiModel = $event"
             @start-tagging="startAITagging"
+            @remove-system-common-tag="removeTagFromGlobalPool"
         />
 
         <!-- ================= [ 弹窗：关系图谱（子组件 GraphModal） ] ================= -->
@@ -2684,17 +2686,13 @@ export default {
         };
 
         // ================= 系统/全局标签库支持 =================
-        // 1. 系统预设常用标签（可按需增减）
-        const defaultSystemTags = ref([
-            '原创', '同人', '男性', '女性', '双性', '奇幻', '科幻', 
-            '现代', '古代', '克苏鲁', '日常', '战斗', '病娇', '御姐', '萝莉', '少年'
-        ]);
-
+        // ⚠️ 统一数据源：全部增删操作基于 systemCommonTags（已内置 watch deep 持久化到 localStorage `customSystemTags`）
+        //    彻底废弃内存级 defaultSystemTags（不持久化，重启丢失且与弹窗数据源分裂）
         const newGlobalTagInput = ref(''); // 用于绑定直接新增标签的输入框
 
-        // 2. 动态计算：从当前所有已导入的卡片中聚合提取出所有的标签
+        // 2. 动态计算：从当前所有已导入的卡片中聚合提取出所有的标签（基于 systemCommonTags + 全库标签）
         const globalAvailableTags = computed(() => {
-            const tagSet = new Set(defaultSystemTags.value);
+            const tagSet = new Set(systemCommonTags.value);
             library.value.forEach(item => {
                 // 提取自定义标签
                 if (item.customTags && Array.isArray(item.customTags)) {
@@ -2713,19 +2711,23 @@ export default {
             return Array.from(tagSet);
         });
 
-        // 3. 允许在系统/常用标签栏直接添加新标签
+        // 3. 允许在系统/常用标签栏直接添加新标签（写入统一池，watch deep 自动持久化）
         const addTagToGlobalPool = () => {
             const val = newGlobalTagInput.value.trim();
-            if (val && !defaultSystemTags.value.includes(val)) {
-                defaultSystemTags.value.push(val);
+            if (val && !systemCommonTags.value.includes(val)) {
+                systemCommonTags.value.push(val);
                 newGlobalTagInput.value = '';
             }
         };
 
-        // 4. 彻底清洗：点击 × 删除系统标签，从所有卡片中洗掉脏标签，并将受影响的卡片物理落盘
+        // 4. 彻底清洗：点击 × 删除系统标签，从统一池移除（自动持久化）并清洗所有卡片，将受影响的卡片物理落盘
         const removeTagFromGlobalPool = async (tagToRemove) => {
-            // 从预设池移除
-            defaultSystemTags.value = defaultSystemTags.value.filter(t => t !== tagToRemove);
+            // 确认（Electron 中 window.confirm 静默返回 null，必须用 confirmDialog）
+            const ok = await confirmDialog(`确定要从系统常用标签库中彻底删除 [${tagToRemove}] 吗？\n（这也会清洗掉所有卡片中残留的该标签！）`);
+            if (!ok) return;
+
+            // 从统一预设池移除（watch deep 自动持久化）
+            systemCommonTags.value = systemCommonTags.value.filter(t => t !== tagToRemove);
 
             // 深度清洗库中所有卡片的该标签，并记录被修改的卡片
             const modifiedItems = [];
@@ -2764,6 +2766,15 @@ export default {
             }
 
             nativeAlert(`已从系统库彻底清洗标签：[${tagToRemove}]\n${savedCount > 0 ? `并已将 ${savedCount} 张受影响卡片物理保存到本地！` : '（库中未发现残留该标签的卡片）'}`, 'info');
+        };
+
+        // 5. 搜索快捷追加：点击搜索栏下方的快捷标签，直接填入搜索框并立即过滤
+        const appendTagToSearch = (tag) => {
+            if (!searchQueryInput.value) {
+                searchQueryInput.value = tag;
+            } else if (!searchQueryInput.value.includes(tag)) {
+                searchQueryInput.value = searchQueryInput.value + ' ' + tag;
+            }
         };
 
         // 标签快捷栏展开状态（点击展开/收起系统标签面板）
@@ -4912,7 +4923,7 @@ export default {
             isRefactoring, refactorCardFormat,
             toasts, showToast,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
-            defaultSystemTags, globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool,
+            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, appendTagToSearch,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             rebindTavernPath,
