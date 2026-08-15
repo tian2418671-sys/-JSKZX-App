@@ -369,6 +369,36 @@ app.whenReady().then(() => {
     return null;
   });
 
+  // IPC：读取全局标签库（userData/tavern_manager_config.json 的 globalTags 字段）
+  // ⚠️ 必须用主进程配置文件而非 localStorage：dev(localhost) 与生产(app://) 是不同 origin，localStorage 互不共享
+  ipcMain.handle('config:getGlobalTags', () => {
+    try {
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (Array.isArray(config.globalTags)) return config.globalTags;
+      }
+    } catch (e) {
+      console.error('读取全局标签配置失败', e);
+    }
+    return null;
+  });
+
+  // IPC：保存全局标签库（合并写入 userData/tavern_manager_config.json 的 globalTags 字段）
+  ipcMain.handle('config:saveGlobalTags', (event, tags) => {
+    try {
+      let config = {};
+      if (fs.existsSync(configPath)) {
+        try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { config = {}; }
+      }
+      config.globalTags = Array.isArray(tags) ? tags : [];
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      return { success: true };
+    } catch (e) {
+      console.error('保存全局标签配置失败', e);
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：读取单个文件内容（返回二进制 Buffer）
   ipcMain.handle('file:readBuffer', (event, filePath) => {
     return fs.readFileSync(filePath);

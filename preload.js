@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     selectFolder: () => ipcRenderer.invoke('dialog:openFolder'),
     // 加载上次的配置（返回扫描结果）
     loadConfig: () => ipcRenderer.invoke('config:load'),
+    // 读取全局标签库（主进程配置文件，跨 dev/生产统一持久化）
+    getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
+    // 保存全局标签库到主进程配置文件
+    saveGlobalTags: (tags) => ipcRenderer.invoke('config:saveGlobalTags', tags),
     // 读取图片二进制数据（用于解析内置 JSON）
     readBuffer: (filePath) => ipcRenderer.invoke('file:readBuffer', filePath),
     // 读取文本（用于 JSON 卡片）

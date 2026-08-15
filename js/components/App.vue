@@ -405,7 +405,14 @@ export default {
                 uiFontSize: defaultUiFs     // 智能分配的界面字号
             };
             let loadedSettings = defaults;
-            try { loadedSettings = JSON.parse(localStorage.getItem('appSettings')) || defaults; } catch (e) { /* 忽略 */ }
+            try {
+                const saved = JSON.parse(localStorage.getItem('appSettings'));
+                if (saved) {
+                    // 【修复】必须解构合并，让 defaults 兜底缺失字段
+                    // （旧版本存档可能没有 fontFamily/fontWeight 等新字段，直接整体覆盖会变 undefined 导致样式错乱）
+                    loadedSettings = { ...defaults, ...saved };
+                }
+            } catch (e) { /* 忽略 */ }
             // 兼容旧存档：缺失双轨字号时补智能默认值
             if (loadedSettings.uiFontSize === undefined) loadedSettings.uiFontSize = defaultUiFs;
             if (loadedSettings.fontSize === undefined) loadedSettings.fontSize = defaultWsFs;
@@ -1801,11 +1808,19 @@ export default {
                 const copiedFiles = await window.electronAPI.copyToLibrary(filePaths, currentFolderPath.value);
 
                 if (copiedFiles.length > 0) {
-                    nativeAlert(`成功将 ${copiedFiles.length} 张新卡片导入到你的卡片库中！\n正在刷新...`, 'info');
+                    nativeAlert(`成功将 ${copiedFiles.length} 张新卡片导入到你的卡片库中！`, 'info');
 
-                    // 复制完成后，重新扫描文件夹，让新卡片显示在界面
-                    const result = await window.electronAPI.loadConfig();
-                    if (result) await processElectronFiles(result);
+                    // 【性能修复】只解析并追加新拖入的文件（O(1) 增量），
+                    // 避免原实现调 processElectronFiles 清空全库后逐张重读重解析（千卡库拖 1 张也全量重载）
+                    for (const newFilePath of copiedFiles) {
+                        const fName = newFilePath.split(/[\\/]/).pop();
+                        const isImg = /\.(png|jpe?g|webp)$/i.test(fName);
+                        await parseAndAddCard({
+                            name: fName,
+                            path: newFilePath,
+                            url: isImg ? 'local-file://img/?path=' + encodeURIComponent(newFilePath) : null
+                        });
+                    }
                 } else {
                     nativeAlert('导入失败：卡片格式不支持，或者库中已存在同名文件。', 'warning');
                 }
@@ -2145,12 +2160,38 @@ export default {
             setTimeout(() => { silentCheckForUpdates(); }, 3000);
         });
 
-        // 手动贴标签
+        // 手动贴标签（单张卡片：内存 customTags + 原生 data.tags 双写，并物理落盘）
         const addManualTag = async (item) => {
             const newTag = await appPrompt(`为 ${item.name} 添加新标签 (多个标签用逗号分隔):`);
             if (newTag) {
                 const tags = newTag.split(',').map(t => t.trim()).filter(t => t);
-                item.customTags = Array.from(new Set([...(item.customTags || []), ...tags]));
+                let isModified = false;
+
+                // 1. 内存自定义标签层
+                const newCustom = Array.from(new Set([...(item.customTags || []), ...tags]));
+                if (newCustom.length !== item.customTags?.length) {
+                    item.customTags = newCustom;
+                    isModified = true;
+                }
+
+                // 2. 原生 data.tags 层（兼容 V1/V2）
+                const dataLayer = item.data?.data || item.data || {};
+                if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+                const newDataTags = Array.from(new Set([...dataLayer.tags, ...tags]));
+                if (newDataTags.length !== dataLayer.tags.length) {
+                    dataLayer.tags = newDataTags;
+                    isModified = true;
+                }
+
+                // 3. 物理落盘
+                if (isModified && window.electronAPI) {
+                    try {
+                        const plainData = JSON.parse(JSON.stringify(item.data));
+                        await window.electronAPI.saveCard(item.path, plainData);
+                    } catch (e) {
+                        console.error('手动贴标签物理保存失败:', e);
+                    }
+                }
             }
         };
 
@@ -2521,7 +2562,7 @@ export default {
             }
         };
 
-        // 批量添加标签
+        // 批量添加标签（多张卡片：内存 customTags + 原生 data.tags 双写，并逐张物理落盘）
         const batchAddTag = async () => {
             if (selectedIds.value.length === 0) return;
 
@@ -2529,14 +2570,41 @@ export default {
 
             if (newTag && newTag.trim() !== '') {
                 const tagsToAdd = newTag.split(',').map(t => t.trim()).filter(t => t);
+                let savedCount = 0;
 
-                library.value.forEach(item => {
-                    if (selectedIds.value.includes(item.id)) {
-                        item.customTags = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
+                for (const item of library.value) {
+                    if (!selectedIds.value.includes(item.id)) continue;
+                    let isModified = false;
+
+                    // 1. 内存 customTags
+                    const newCustom = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
+                    if (newCustom.length !== item.customTags?.length) {
+                        item.customTags = newCustom;
+                        isModified = true;
                     }
-                });
 
-                await nativeAlert(`批量打标签成功！`, 'info');
+                    // 2. 原生 data.tags
+                    const dataLayer = item.data?.data || item.data || {};
+                    if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+                    const newDataTags = Array.from(new Set([...dataLayer.tags, ...tagsToAdd]));
+                    if (newDataTags.length !== dataLayer.tags.length) {
+                        dataLayer.tags = newDataTags;
+                        isModified = true;
+                    }
+
+                    // 3. 物理落盘
+                    if (isModified && window.electronAPI) {
+                        try {
+                            const plainData = JSON.parse(JSON.stringify(item.data));
+                            const res = await window.electronAPI.saveCard(item.path, plainData);
+                            if (res && res.success) savedCount++;
+                        } catch (e) {
+                            console.error(`批量添加标签物理保存失败 [${item.name}]:`, e);
+                        }
+                    }
+                }
+
+                await nativeAlert(`批量打标签成功！并成功物理保存了 ${savedCount} 张`, 'info');
                 clearSelection();
             }
         };
@@ -2577,19 +2645,46 @@ export default {
                 'RPG (文字游戏/跑团)', 'Scenario (特定情景剧)', 'Narrator (旁白驱动)', 'Assistant (AI助手/工具卡)'
             ];
             // 优先读取 localStorage 中用户自定义的标签（越用越懂你）；无记录/损坏时回退默认池
+            // ⚠️ 防御历史污染：旧版 bug 曾导致 localStorage 只存了部分自定义标签（默认标签全丢）
             try {
                 const saved = JSON.parse(localStorage.getItem('customSystemTags'));
                 if (Array.isArray(saved) && saved.length > 0) {
-                    return Array.from(new Set(saved.filter(t => typeof t === 'string' && t.trim() !== '')));
+                    const clean = saved.filter(t => typeof t === 'string' && t.trim() !== '');
+                    const defaultHits = defaults.filter(d => clean.includes(d)).length;
+                    // 若保存列表缺失大半默认标签 → 判定为污染数据，合并默认补全；否则视为完整状态（尊重用户删除操作）
+                    if (defaultHits < defaults.length / 2) {
+                        return Array.from(new Set([...defaults, ...clean]));
+                    }
+                    return Array.from(new Set(clean));
                 }
             } catch (e) { /* 忽略 */ }
             return defaults;
         })());
 
-        // 系统/常用标签库变化时自动持久化到 localStorage（customSystemTags）
+        // 系统/常用标签库变化时自动持久化：主进程配置文件（跨 dev localhost / 生产 app:// 统一）+ localStorage 兜底（浏览器环境）
         watch(systemCommonTags, (val) => {
+            try {
+                if (window.electronAPI && window.electronAPI.saveGlobalTags) {
+                    // ⚠️ 关键：IPC 前必须深拷贝剥离 Vue 响应式 Proxy，否则 Electron 报 "An object could not be cloned"
+                    window.electronAPI.saveGlobalTags(JSON.parse(JSON.stringify(val)));
+                }
+            } catch (e) { /* 忽略 */ }
             try { localStorage.setItem('customSystemTags', JSON.stringify(val)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
+
+        // 从主进程配置文件加载全局标签（与现有池合并，避免丢默认标签；dev 与生产共享同一份 userData 配置）
+        const loadGlobalTagsFromDisk = async () => {
+            if (!window.electronAPI || !window.electronAPI.getGlobalTags) return;
+            try {
+                const saved = await window.electronAPI.getGlobalTags();
+                if (Array.isArray(saved) && saved.length > 0) {
+                    // 合并（去重）：配置为完整列表时结果不变；若配置不完整也不丢默认标签
+                    const merged = Array.from(new Set([...systemCommonTags.value, ...saved.filter(t => typeof t === 'string' && t.trim() !== '')]));
+                    systemCommonTags.value = merged;
+                }
+            } catch (e) { console.warn('加载全局标签失败', e); }
+        };
+        loadGlobalTagsFromDisk(); // setup 阶段即发起异步加载（不阻塞首屏）
 
         // ================= 标签中英文切换系统 =================
         // 标签语言模式: 'cn' (纯中文), 'en' (纯英文), 'both' (中英双语)
@@ -2780,28 +2875,90 @@ export default {
         // 标签快捷栏展开状态（点击展开/收起系统标签面板）
         const isEditingSystemTags = ref(false);
 
-        // 点击系统/全局标签快速添加到当前卡片（写入库项目 customTags，与单卡标签栏共用数据源）
-        const addGlobalTag = (tag) => {
+        // 点击系统/全局标签快速添加到当前卡片（内存 customTags + 原生 data.tags 双写，并物理落盘）
+        const addGlobalTag = async (tag) => {
             const libItem = library.value.find(item => item.data === cardData.value);
             if (!libItem) return;
-            libItem.customTags = Array.from(new Set([...(libItem.customTags || []), tag]));
+
+            let isModified = false;
+
+            // 1. 内存层
+            if (!libItem.customTags?.includes(tag)) {
+                libItem.customTags = Array.from(new Set([...(libItem.customTags || []), tag]));
+                isModified = true;
+            }
+
+            // 2. 原生数据层（兼容 V1/V2：data?.data || data）
+            const dataLayer = libItem.data?.data || libItem.data || {};
+            if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+            if (!dataLayer.tags.includes(tag)) {
+                dataLayer.tags.push(tag);
+                isModified = true;
+            }
+
+            // 3. 物理落盘（剥离 Proxy 后经 IPC 覆写原文件）
+            if (isModified && window.electronAPI) {
+                try {
+                    const plainData = JSON.parse(JSON.stringify(libItem.data));
+                    await window.electronAPI.saveCard(libItem.path, plainData);
+                } catch (e) {
+                    console.error('全局标签快捷添加物理保存失败:', e);
+                }
+            }
         };
 
-        const executeBatchTagSave = () => {
+        // 批量贴标签（多张卡片：内存 customTags + 原生 data.tags 双写，并逐张物理落盘）
+        const executeBatchTagSave = async () => {
             if (selectedIds.value.length === 0) return;
             const tagsToAdd = batchInputTags.value.split(',').map(t => t.trim()).filter(t => t);
-            
-            library.value.forEach(item => {
-                if (selectedIds.value.includes(item.id)) {
-                    if (batchMode.value === 'overwrite') {
-                        item.customTags = [...tagsToAdd];
-                    } else {
-                        item.customTags = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
+
+            let savedCount = 0;
+
+            for (const item of library.value) {
+                if (!selectedIds.value.includes(item.id)) continue;
+
+                let isModified = false;
+
+                // 1. 同步内存 customTags
+                if (batchMode.value === 'overwrite') {
+                    item.customTags = [...tagsToAdd];
+                    isModified = true;
+                } else {
+                    const newTags = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
+                    if (newTags.length !== item.customTags?.length) {
+                        item.customTags = newTags;
+                        isModified = true;
                     }
                 }
-            });
 
-            nativeAlert(`成功为 ${selectedIds.value.length} 张卡片更新标签！`, 'info');
+                // 2. 同步原生数据 tags
+                const dataLayer = item.data?.data || item.data || {};
+                if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+
+                if (batchMode.value === 'overwrite') {
+                    dataLayer.tags = [...tagsToAdd];
+                    isModified = true;
+                } else {
+                    const newDataTags = Array.from(new Set([...dataLayer.tags, ...tagsToAdd]));
+                    if (newDataTags.length !== dataLayer.tags.length) {
+                        dataLayer.tags = newDataTags;
+                        isModified = true;
+                    }
+                }
+
+                // 3. 物理落盘
+                if (isModified && window.electronAPI) {
+                    try {
+                        const plainData = JSON.parse(JSON.stringify(item.data));
+                        const res = await window.electronAPI.saveCard(item.path, plainData);
+                        if (res && res.success) savedCount++;
+                    } catch (e) {
+                        console.error(`批量打标物理保存失败 [${item.name}]:`, e);
+                    }
+                }
+            }
+
+            nativeAlert(`成功为 ${selectedIds.value.length} 张卡片更新标签，并成功物理保存了 ${savedCount} 张！`, 'info');
             showBatchTagModal.value = false;
             batchInputTags.value = '';
             clearSelection();
@@ -3297,11 +3454,38 @@ export default {
             });
         };
 
-        const confirmSingleTag = () => {
+        // 单卡手动输入贴标签（内存 customTags + 原生 data.tags 双写，并物理落盘）
+        const confirmSingleTag = async () => {
             const libItem = library.value.find(item => item.data === cardData.value);
             if (libItem && tagInput.value.trim()) {
                 const tags = tagInput.value.split(',').map(t => t.trim()).filter(t => t);
-                libItem.customTags = Array.from(new Set([...(libItem.customTags || []), ...tags]));
+                let isModified = false;
+
+                // 1. 更新内存自定义标签层
+                const newCustom = Array.from(new Set([...(libItem.customTags || []), ...tags]));
+                if (newCustom.length !== libItem.customTags?.length) {
+                    libItem.customTags = newCustom;
+                    isModified = true;
+                }
+
+                // 2. 同步到物理卡片原生的 data.tags 层（兼容 V1/V2）
+                const dataLayer = libItem.data?.data || libItem.data || {};
+                if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
+                const newDataTags = Array.from(new Set([...dataLayer.tags, ...tags]));
+                if (newDataTags.length !== dataLayer.tags.length) {
+                    dataLayer.tags = newDataTags;
+                    isModified = true;
+                }
+
+                // 3. 物理落盘保存（剥离 Proxy 后经 IPC 覆写原文件）
+                if (isModified && window.electronAPI) {
+                    try {
+                        const plainData = JSON.parse(JSON.stringify(libItem.data));
+                        await window.electronAPI.saveCard(libItem.path, plainData);
+                    } catch (e) {
+                        console.error('标签物理保存失败:', e);
+                    }
+                }
             }
             tagModalVisible.value = false;
         };
@@ -3344,10 +3528,37 @@ export default {
             promptModalResolve = null;
         };
 
-        const removeSingleTag = (tag) => {
+        // 删除单卡某个标签（内存 customTags + 原生 data.tags 双清，并物理落盘）
+        const removeSingleTag = async (tag) => {
             const libItem = library.value.find(item => item.data === cardData.value);
-            if (libItem) {
-                libItem.customTags = (libItem.customTags || []).filter(t => t !== tag);
+            if (!libItem) return;
+
+            let isModified = false;
+
+            // 1. 从自定义标签中移除
+            if (libItem.customTags && libItem.customTags.includes(tag)) {
+                libItem.customTags = libItem.customTags.filter(t => t !== tag);
+                isModified = true;
+            }
+
+            // 2. 从原生数据层 tags 移除（兼顾旧版卡片的字符串格式）
+            const dataLayer = libItem.data?.data || libItem.data || {};
+            if (Array.isArray(dataLayer.tags) && dataLayer.tags.includes(tag)) {
+                dataLayer.tags = dataLayer.tags.filter(t => t !== tag);
+                isModified = true;
+            } else if (typeof dataLayer.tags === 'string' && dataLayer.tags.includes(tag)) {
+                dataLayer.tags = dataLayer.tags.split(',').map(t => t.trim()).filter(t => t && t !== tag).join(', ');
+                isModified = true;
+            }
+
+            // 3. 物理落盘保存
+            if (isModified && window.electronAPI) {
+                try {
+                    const plainData = JSON.parse(JSON.stringify(libItem.data));
+                    await window.electronAPI.saveCard(libItem.path, plainData);
+                } catch (e) {
+                    console.error('删除标签物理保存失败:', e);
+                }
             }
         };
 
@@ -4532,6 +4743,7 @@ export default {
                 const fieldsToCompare = [
                     { key: 'description', label: '📝 角色描述 (Description)' },
                     { key: 'personality', label: '🎭 性格设定 (Personality)' },
+                    { key: 'scenario', label: '🎬 当前场景 (Scenario)' }, // ✅ 补上漏掉的场景字段（此前场景改动在查重面板上不显示，可能误删新版本）
                     { key: 'first_mes', label: '💬 开场首句 (First Message)' },
                     { key: 'mes_example', label: '🗣️ 示例对话 (Mes Example)' }
                 ];
@@ -4754,7 +4966,9 @@ export default {
             };
 
             const newWbItem = {
-                path: `virtual_merged_${Date.now()}.json`,
+                // 【修复】path 设为空字符串，让保存系统知道它还从未落盘，
+                // 触发 syncWorldbooksToDisk 的智能落盘分配（否则假路径会让 Electron 报“原文件不存在”）
+                path: '',
                 name: `${mergeName}.json`,
                 data: mergedWbData
             };

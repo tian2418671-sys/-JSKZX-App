@@ -23,10 +23,9 @@ export function decodeBase64UTF8(base64) {
  */
 export function deepScanForJSON(buffer) {
     const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
+    // 【性能修复】用 latin1 一次性转码，替代逐字节字符串拼接（O(N²) 内存灾难，
+    // 5MB 大图会执行 500 万次拼接导致主线程卡死/内存狂飙）
+    const binary = new TextDecoder('latin1').decode(bytes);
 
     // 匹配以 eyJ（即 '{"' 的 Base64 编码）开头的 Base64 块
     const base64Regex = /(eyJ[A-Za-z0-9+/=]+)/g;
