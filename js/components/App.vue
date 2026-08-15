@@ -4021,6 +4021,17 @@ export default {
             const cloneData = JSON.parse(JSON.stringify(wb.data || {}));
             cloneData.name = cloneName;
 
+            // ✅ [补丁] 深度遍历清洗：重新生成所有词条的唯一 UID，防止与母本冲突
+            // （Vue v-for :key 强依赖 UID，克隆副本若与母本共享 UID 会导致渲染错乱/“Duplicate keys detected”）
+            if (cloneData && Array.isArray(cloneData.entries)) {
+                cloneData.entries.forEach(entry => {
+                    // 生成全新的 UID（时间戳 + 随机串），与母本彻底隔离
+                    entry.uid = Date.now() + Math.random().toString(36).substring(2, 9);
+                    // 清理可能遗留的前端折叠状态
+                    delete entry._collapsed;
+                });
+            }
+
             const safeFileName = `${cloneName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
             const newWb = { path: '', name: safeFileName, data: cloneData };
 
