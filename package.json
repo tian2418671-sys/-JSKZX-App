@@ -49,5 +49,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "dependencies": {
+    "dompurify": "^3.4.13"
   }
 }

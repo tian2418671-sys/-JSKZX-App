@@ -143,6 +143,37 @@ function writeTavernPNGChunk(buffer, updatedJson) {
 // 系统级应用数据目录（用于保存配置，不会随项目丢失）
 const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.json');
 
+// ================= 路径安全白名单 =================
+// 所有涉及任意 filePath 的 IPC handler 必须先过 isPathAllowed 校验，
+// 防止渲染层被注入脚本后越权读写/删除白名单外的任意本地文件。
+// 安全根目录集合：用户已选定的卡片库 + 世界书目录 + 酒馆根 + 全盘扫描过的根 + userData
+const allowedRoots = new Set();
+function addAllowedRoot(p) {
+  try { if (p && typeof p === 'string') allowedRoots.add(path.resolve(p)); } catch (e) { /* 忽略非法路径 */ }
+}
+function isPathAllowed(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  let resolved;
+  try {
+    resolved = path.resolve(filePath);
+  } catch (e) {
+    return false;
+  }
+  // userData（配置/备份/回收站）总允许
+  try {
+    const ud = path.resolve(app.getPath('userData'));
+    if (resolved === ud || resolved.startsWith(ud + path.sep)) return true;
+  } catch (e) { /* 忽略 */ }
+  for (const root of allowedRoots) {
+    if (resolved === root || resolved.startsWith(root + path.sep)) return true;
+  }
+  return false;
+}
+// 给渲染进程一个统一的拒绝返回体，方便前端识别
+function forbidden() {
+  return { success: false, error: '路径越界，操作被拒绝' };
+}
+
 // ================= Vite 构建双模式 =================
 // 开发模式：VITE_DEV_SERVER_URL 指向 Vite Dev Server（支持热更新）
 // 生产模式：app:// 协议加载 web/ 目录下的 Vite 构建产物
@@ -226,6 +257,10 @@ function registerAppProtocol() {
     // 路径通过查询参数传递（如 local-file://img/?path=E:\...），
     // 避免 Windows 盘符冒号被 URL 规范化当作端口剥离
     const filePath = url.searchParams.get('path');
+    // 【安全加固】仅放行白名单内的本地文件（防 XSS 后借 local-file:// 越权读取任意文件）
+    if (!isPathAllowed(filePath)) {
+      return new Response('Forbidden', { status: 403 });
+    }
     return net.fetch(pathToFileURL(filePath).toString());
   });
 }
@@ -408,11 +443,13 @@ app.whenReady().then(() => {
 
   // IPC：读取单个文件内容（返回二进制 Buffer）
   ipcMain.handle('file:readBuffer', (event, filePath) => {
+    if (!isPathAllowed(filePath)) return forbidden();
     return fs.readFileSync(filePath);
   });
 
   // IPC：读取单个文件文本（用于 JSON 卡片）
   ipcMain.handle('file:readText', (event, filePath) => {
+    if (!isPathAllowed(filePath)) return forbidden();
     return fs.readFileSync(filePath, 'utf-8');
   });
 
@@ -443,6 +480,9 @@ app.whenReady().then(() => {
       folderToScan = result.filePaths[0];
     }
 
+    // 【安全加固】用户显式选择的扫描根目录加入白名单（扫描结果可正常读写/展示）
+    addAllowedRoot(folderToScan);
+
     event.sender.send('scan-progress', { status: `正在急速遍历: ${folderToScan}`, count: 0 });
     // 将 useSizeFilter 传递给扫描引擎
     const cardFiles = await scanDirectoryForCards(folderToScan, event, { count: 0 }, useSizeFilter);
@@ -455,6 +495,8 @@ app.whenReady().then(() => {
       if (!targetPath) return { success: false, error: '路径为空。' };
       // 相对路径转为绝对路径（相对项目根目录）；绝对路径原样使用
       const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(__dirname, targetPath);
+      // 【安全加固】仅放行白名单内的路径（库内 .bak_history/.trash 与 userData 均已在白名单）
+      if (!isPathAllowed(fullPath)) return forbidden();
       // 目录不存在则自动创建（防御：仅当非文件路径时自动建目录，避免把 "1.png" 这类文件路径误建成文件夹）
       if (!fs.existsSync(fullPath) && !path.extname(fullPath)) {
         fs.mkdirSync(fullPath, { recursive: true });
@@ -479,6 +521,8 @@ app.whenReady().then(() => {
     try {
       const baseUrl = String(tavernUrl || '').trim().replace(/\/+$/, '');
       if (!baseUrl) return { success: false, error: '酒馆地址为空' };
+      // 【安全加固】源卡片必须在白名单内
+      if (!isPathAllowed(cardPath)) return forbidden();
       if (!cardPath || !fs.existsSync(cardPath)) return { success: false, error: '卡片文件不存在: ' + cardPath };
 
       const importUrl = baseUrl + '/api/characters/import';
@@ -534,6 +578,8 @@ app.whenReady().then(() => {
         const hasServerJs = fs.existsSync(path.join(testPath, 'server.js'));
         const hasPublicDir = fs.existsSync(path.join(testPath, 'public'));
         if (hasServerJs && hasPublicDir) {
+          // 【安全加固】探测到的酒馆根目录加入白名单（pushDir 直推用）
+          addAllowedRoot(testPath);
           console.log('✅ 智能嗅探到酒馆路径:', testPath);
           return testPath;
         }
@@ -552,12 +598,19 @@ app.whenReady().then(() => {
       title: '选择 SillyTavern (酒馆) 根目录'
     });
     if (canceled || filePaths.length === 0) return null;
+    // 【安全加固】用户选定的酒馆根目录加入白名单
+    addAllowedRoot(filePaths[0]);
     return filePaths[0]; // 只返回纯字符串路径
   });
 
   // IPC：物理跨目录拷贝卡片到酒馆 characters 目录（本地直推，无需 API / 无 CORS / 无 403）
   ipcMain.handle('tavern:pushDir', async (event, sourcePaths, stRootPath) => {
     try {
+      // 【安全加固】源卡片须在白名单内；酒馆根目录加入白名单
+      addAllowedRoot(stRootPath);
+      for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
+        if (!isPathAllowed(src)) return forbidden();
+      }
       if (!fs.existsSync(stRootPath)) return { success: false, error: '无效的酒馆根目录路径' };
 
       // 智能兼容：新版酒馆(多用户结构) 和 老版酒馆 的角色存储路径
@@ -593,6 +646,8 @@ app.whenReady().then(() => {
   // IPC：系统级拖拽复制文件到库
   ipcMain.handle('file:copyToLibrary', (event, sourcePaths, targetFolder) => {
     const copiedFiles = [];
+    // 【安全加固】目标必须落在白名单内（卡片库）；源为拖拽授权，不做限制
+    if (!isPathAllowed(targetFolder)) return copiedFiles;
     for (const src of sourcePaths) {
       try {
         // 确保拖入的是支持的文件格式
@@ -616,6 +671,7 @@ app.whenReady().then(() => {
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history）
   ipcMain.handle('file:saveCard', (event, filePath, updatedJson) => {
     try {
+      if (!isPathAllowed(filePath)) return forbidden();
       if (!fs.existsSync(filePath)) {
         return { success: false, error: "原文件不存在，无法保存。" };
       }
@@ -706,6 +762,8 @@ app.whenReady().then(() => {
       if (!dirPath || !fs.existsSync(dirPath)) {
         return { success: false, error: '目录不存在: ' + dirPath };
       }
+      // 【安全加固】用户选择的世界书目录加入白名单（该目录内文件可读可写）
+      addAllowedRoot(dirPath);
       const results = [];
 
       // 深度递归扫描（不限层级；跳过隐藏文件/目录）
@@ -751,6 +809,8 @@ app.whenReady().then(() => {
   ipcMain.handle('wb:save', async (event, { filePath, data }) => {
     try {
       if (!filePath) return { success: false, error: '文件路径为空。' };
+      // 【安全加固】仅放行白名单内的世界书文件
+      if (!isPathAllowed(filePath)) return forbidden();
       if (!fs.existsSync(filePath)) return { success: false, error: '原文件不存在，无法保存。' };
 
       // 1. 数据清洗 (剔除 _collapsed 等临时 UI 字段 + 前端临时 uid，保证落盘 JSON 100% 符合酒馆原生规范)
@@ -821,6 +881,8 @@ app.whenReady().then(() => {
   ipcMain.handle('wb:create', async (event, { filePath, data }) => {
     try {
       if (!filePath) return { success: false, error: '文件路径为空。' };
+      // 【安全加固】仅允许在世界书白名单目录内新建
+      if (!isPathAllowed(filePath)) return forbidden();
       if (fs.existsSync(filePath)) return { success: false, error: '目标文件已存在，请换一个文件名。' };
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
       const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
@@ -838,6 +900,8 @@ app.whenReady().then(() => {
   ipcMain.handle('wb:rename', async (event, { oldPath, newPath }) => {
     try {
       if (!oldPath || !newPath) return { success: false, error: '路径为空。' };
+      // 【安全加固】新旧路径都必须在白名单内（防越权移动文件）
+      if (!isPathAllowed(oldPath) || !isPathAllowed(newPath)) return forbidden();
       if (!fs.existsSync(oldPath)) return { success: false, error: '原文件不存在。' };
       if (fs.existsSync(newPath)) return { success: false, error: '目标文件已存在，请换一个名称。' };
       await fs.promises.rename(oldPath, newPath);
@@ -872,6 +936,8 @@ app.whenReady().then(() => {
 
       let trashedCount = 0;
       for (const p of (Array.isArray(filePaths) ? filePaths : [])) {
+        // 【安全加固】仅处理白名单内的文件（防越权移动任意文件）
+        if (!isPathAllowed(p)) continue;
         if (p && fs.existsSync(p)) {
           const fileName = path.basename(p);
           // 加上时间戳前缀防重名覆盖
@@ -905,6 +971,8 @@ app.whenReady().then(() => {
     try {
       const stats = {};
       for (const p of (Array.isArray(filePaths) ? filePaths : [])) {
+        // 【安全加固】仅统计白名单内的文件
+        if (!isPathAllowed(p)) continue;
         if (p && fs.existsSync(p)) {
           const stat = await fs.promises.stat(p);
           stats[p] = {
@@ -928,6 +996,8 @@ app.whenReady().then(() => {
   ipcMain.handle('sys:showItemInFolder', (event, filePath) => {
     try {
       if (!filePath) return { success: false, error: '路径为空。' };
+      // 【安全加固】仅放行白名单内的文件
+      if (!isPathAllowed(filePath)) return forbidden();
       shell.showItemInFolder(filePath);
       return { success: true };
     } catch (err) {
@@ -938,6 +1008,8 @@ app.whenReady().then(() => {
   // 2. 物理复制文件（创建带时间戳的副本，供大改前留档）
   ipcMain.handle('sys:duplicateFile', async (event, sourcePath) => {
     try {
+      // 【安全加固】仅放行白名单内的源文件
+      if (!isPathAllowed(sourcePath)) return forbidden();
       if (!sourcePath || !fs.existsSync(sourcePath)) {
         return { success: false, error: '源文件不存在: ' + sourcePath };
       }
@@ -1120,6 +1192,8 @@ app.whenReady().then(() => {
   // IPC：删除卡片（移入本地回收站 .trash 而非物理删除）
   ipcMain.handle('file:delete', (event, filePath) => {
     try {
+      // 【安全加固】仅放行白名单内的卡片
+      if (!isPathAllowed(filePath)) return forbidden();
       if (!fs.existsSync(filePath)) {
         return { success: false, error: "未找到该文件" };
       }
@@ -1147,6 +1221,8 @@ app.whenReady().then(() => {
       if (!filePath || !fs.existsSync(filePath)) {
         return { success: false, error: "原文件路径无效" };
       }
+      // 【安全加固】源卡片必须在白名单内（目标目录由用户 dialog 显式选择，视为授权）
+      if (!isPathAllowed(filePath)) return forbidden();
       
       // 弹出文件夹选择对话框，让用户选择导出的目标父目录
       const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -1197,6 +1273,10 @@ app.whenReady().then(() => {
       if (!filePaths || filePaths.length === 0) {
         return { success: false, error: "未选择任何卡片" };
       }
+      // 【安全加固】源卡片均须在白名单内
+      for (const fp of filePaths) {
+        if (!isPathAllowed(fp)) return forbidden();
+      }
       
       const { canceled, filePaths: targetDirs } = await dialog.showOpenDialog({
         properties: ['openDirectory'],
@@ -1243,8 +1323,16 @@ app.on('window-all-closed', () => {
  */
 function scanAndSaveFolder(folderPath) {
   try {
-    // 静默保存配置
-    fs.writeFileSync(configPath, JSON.stringify({ lastFolder: folderPath }));
+    // 【新增】记录当前库根目录，供白名单校验使用
+    addAllowedRoot(folderPath);
+
+    // 【修复】合并写入而非整体覆盖，避免冲掉已保存的 globalTags 等字段
+    let config = {};
+    if (fs.existsSync(configPath)) {
+      try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { config = {}; }
+    }
+    config.lastFolder = folderPath;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
     // 读取目录下所有文件，过滤出支持的格式
     const files = fs.readdirSync(folderPath);

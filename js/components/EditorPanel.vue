@@ -343,7 +343,7 @@
                                     <div class="text-[10px] text-zinc-400 mb-0.5" :class="msg.role === 'user' ? 'text-right' : ''">{{ msg.name }}</div>
                                     <div :class="msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-zinc-800 border border-zinc-700 text-zinc-200'" class="p-2.5 rounded shadow-sm leading-relaxed text-[12px]">
                                         <div v-if="!isChatRenderMode" v-html="renderHTML(cleanMarkdownFences(msg.content))"></div>
-                                        <div v-else v-html="cleanMarkdownFences(msg.content)"></div>
+                                        <div v-else v-html="renderSafeHTML(cleanMarkdownFences(msg.content))"></div>
                                     </div>
                                 </div>
                             </div>
@@ -682,6 +682,7 @@ export default {
             chatContainer: ctx.chatContainer,
             chatHistory: ctx.chatHistory,
             renderHTML: ctx.renderHTML,
+            renderSafeHTML: ctx.renderSafeHTML,
             cleanMarkdownFences: ctx.cleanMarkdownFences,
             isChatting: ctx.isChatting,
             chatInput: ctx.chatInput,

@@ -296,6 +296,7 @@
 
 <script>
 import { ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef, provide } from 'vue';
+import DOMPurify from 'dompurify'; // 渲染模式 XSS 清洗（本地依赖，随 Vite 打包，离线可用）
 import * as echarts from 'echarts'; // ECharts 由 npm 依赖提供（替代旧全局 script）
 import Section from './Section.vue'; // SFC 单文件组件（由 Section.js 迁移）
 import DragOverlay from './DragOverlay.vue'; // 拖拽导入全屏遮罩
@@ -1101,6 +1102,25 @@ export default {
             // 2. 替换换行，保留多个空格以便代码缩进不丢失
             return safeText.replace(/\n/g, '<br>')
                            .replace(/\s\s/g, '&nbsp;&nbsp;');
+        };
+
+        // 【安全加固】渲染模式专用：允许基本排版标签，但剥离脚本/事件/危险协议
+        // 经 DOMPurify 清洗后再 v-html，从源头掐断聊天内容 XSS（追踪像素/内网探测/脚本注入）
+        const renderSafeHTML = (text) => {
+            if (!text) return '';
+            return DOMPurify.sanitize(text, {
+                ALLOWED_TAGS: [
+                    'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span',
+                    'ul', 'ol', 'li', 'blockquote', 'code', 'pre',
+                    'h1', 'h2', 'h3', 'h4', 'table', 'thead', 'tbody', 'tr', 'td', 'th'
+                ],
+                ALLOWED_ATTR: ['class', 'style', 'title'],
+                ALLOW_DATA_ATTR: false,
+                FORBID_ATTR: [/^on/i],
+                // 【额外加固】禁止外联图片（追踪像素/内网探测）与 data: 之外的危险协议
+                // 需要显示卡片渲染外部图时可在白名单放开 img + http(s)
+                ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp):\/\/|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i
+            });
         };
 
         // 【修复】清洗 Markdown 代码块标记（```html、```yaml、```json 等），
@@ -5253,7 +5273,7 @@ export default {
             showTextModal, textModalTitle, textModalContent, textModalFontSize, openTextModal, saveTextModal,
             showImageModal, previewImageUrl, openImageModal,
             showGlobalAssetModal, globalAssetTab, globalAllWorldbooks, globalAllRegexScripts,
-            renderHTML, cleanMarkdownFences, deleteCard, updateName, saveToLocalDisk, exportPackage,
+            renderHTML, renderSafeHTML, cleanMarkdownFences, deleteCard, updateName, saveToLocalDisk, exportPackage,
             activeCardTags, addSingleTag, removeSingleTag,
             tagModalVisible, tagInput, tagModalTitle,
             confirmSingleTag, closeSingleTagModal,
