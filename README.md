@@ -9,7 +9,7 @@
 
 **🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限）：
 
-[⬇️ 下载安装包 `SillyTavern.Setup.1.6.0.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载安装包 `SillyTavern.Setup.1.6.1.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 **📦 绿色免安装版**（解压即用，无需安装）：
 
@@ -160,7 +160,7 @@ npm run build
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版
-- `dist/SillyTavern 角色卡管理器 Setup 1.6.0.exe` —— NSIS 安装包
+- `dist/SillyTavern 角色卡管理器 Setup 1.6.1.exe` —— NSIS 安装包
 
 ---
 
@@ -361,7 +361,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
 1. 修改 `package.json` 的 `version`
 2. `npm run build`
 3. 将以下产物上传到 GitHub Release：
-   - `dist/SillyTavern 角色卡管理器 Setup 1.6.0.exe`（安装包）
+   - `dist/SillyTavern 角色卡管理器 Setup 1.6.1.exe`（安装包）
    - `dist/win-unpacked/`（可选，绿色免安装版，建议压缩为 zip）
 
 ---
