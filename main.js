@@ -7,7 +7,7 @@
  * - `local-file://` 特权协议安全读取磁盘图片：无需关闭 webSecurity 即可展示本地立绘；
  * - 文件夹选择通过原生 dialog 弹出，选中的路径静默保存到系统 userData 目录。
  */
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -383,6 +383,30 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
 
 app.whenReady().then(() => {
   registerAppProtocol();
+
+  // 【安全加固】生产模式 (app://) 注入 CSP 响应头（纵深防御兜底：
+  // 限制内联脚本/外部连接，即使未来出现新的不安全 v-html 渲染也有兜底）
+  // 开发模式 (Vite Dev Server) 不注入，避免破坏 HMR 的 ws:// 与内联脚本需求
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (String(details.url || '').startsWith('app://')) {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self' app: local-file:; " +
+            "img-src 'self' app: local-file: data: blob:; " +
+            "style-src 'self' app: 'unsafe-inline'; " +   // Vue/Tailwind 运行时内联样式所需
+            "script-src 'self' app:; " +
+            "font-src 'self' app: data:; " +
+            "connect-src 'self' http: https: ws: wss:"   // 聊天测卡需连用户自定义 LLM 地址
+          ]
+        }
+      });
+    } else {
+      callback({ responseHeaders: details.responseHeaders });
+    }
+  });
+
   createWindow();
 
   // IPC：打开文件夹弹窗并扫描
@@ -441,16 +465,16 @@ app.whenReady().then(() => {
     }
   });
 
-  // IPC：读取单个文件内容（返回二进制 Buffer）
-  ipcMain.handle('file:readBuffer', (event, filePath) => {
+  // IPC：读取单个文件内容（返回二进制 Buffer；异步化防大图卡主进程消息循环）
+  ipcMain.handle('file:readBuffer', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();
-    return fs.readFileSync(filePath);
+    return fs.promises.readFile(filePath);
   });
 
-  // IPC：读取单个文件文本（用于 JSON 卡片）
-  ipcMain.handle('file:readText', (event, filePath) => {
+  // IPC：读取单个文件文本（用于 JSON 卡片；异步化）
+  ipcMain.handle('file:readText', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();
-    return fs.readFileSync(filePath, 'utf-8');
+    return fs.promises.readFile(filePath, 'utf-8');
   });
 
   // IPC：获取所有存在的盘符 (Windows 专属 C:, D:, E: ...)
@@ -668,8 +692,8 @@ app.whenReady().then(() => {
     return copiedFiles; // 返回成功复制的文件路径数组
   });
 
-  // IPC：保存卡片（写入前自动备份历史快照到 .bak_history）
-  ipcMain.handle('file:saveCard', (event, filePath, updatedJson) => {
+  // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
+  ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {
       if (!isPathAllowed(filePath)) return forbidden();
       if (!fs.existsSync(filePath)) {
@@ -680,7 +704,7 @@ app.whenReady().then(() => {
       const dir = path.dirname(filePath);
       const bakDir = path.join(dir, '.bak_history');
       if (!fs.existsSync(bakDir)) {
-        fs.mkdirSync(bakDir, { recursive: true });
+        await fs.promises.mkdir(bakDir, { recursive: true });
       }
 
       const fileName = path.basename(filePath);
@@ -688,29 +712,31 @@ app.whenReady().then(() => {
       const bakPath = path.join(bakDir, `${timeStr}_${fileName}`);
 
       // 复制当前老文件到备份目录
-      fs.copyFileSync(filePath, bakPath);
+      await fs.promises.copyFile(filePath, bakPath);
 
       // --- 【新增】备份数量上限：每张卡只保留最近 5 份快照，防止 .bak_history 磁盘膨胀 ---
       try {
-        const baks = fs.readdirSync(bakDir).filter(f => f.includes(fileName));
-        if (baks.length > 5) {
+        const baks = await fs.promises.readdir(bakDir);
+        const mine = baks.filter(f => f.includes(fileName));
+        if (mine.length > 5) {
           // 文件名以 ISO 时间戳开头，字典序即时间序；删除最旧的超出部分
-          baks.sort().slice(0, baks.length - 5).forEach(oldBak => {
-            fs.unlinkSync(path.join(bakDir, oldBak));
-          });
+          const toDelete = mine.sort().slice(0, mine.length - 5);
+          for (const oldBak of toDelete) {
+            await fs.promises.unlink(path.join(bakDir, oldBak)).catch(() => { });
+          }
         }
       } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
       // --------------------------------------------------
 
       const ext = path.extname(filePath).toLowerCase();
       if (ext === '.json') {
-        fs.writeFileSync(filePath, JSON.stringify(updatedJson, null, 2), 'utf-8');
+        await fs.promises.writeFile(filePath, JSON.stringify(updatedJson, null, 2), 'utf-8');
         return { success: true };
       } else if (ext === '.png') {
-        const buffer = fs.readFileSync(filePath);
+        const buffer = await fs.promises.readFile(filePath);
         const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
         if (newBuffer) {
-          fs.writeFileSync(filePath, newBuffer);
+          await fs.promises.writeFile(filePath, newBuffer);
           return { success: true };
         } else {
           return { success: false, error: "无法写入 PNG 结构。" };
@@ -1032,7 +1058,11 @@ app.whenReady().then(() => {
   // ==========================================
 
   // 1. 调用系统默认浏览器打开外部网页（跳转 GitHub Releases 下载页）
+  // 【安全加固】仅放行 http/https 链接，防止被滥用触发本机任意 URL scheme handler（Electron 已知 CVE 类型）
   ipcMain.handle('sys:openExternal', async (event, url) => {
+    if (!/^https?:\/\//i.test(String(url || ''))) {
+      return { success: false, error: '仅支持 http/https 链接' };
+    }
     try {
       await shell.openExternal(url);
       return { success: true };
