@@ -1673,6 +1673,20 @@ export default {
                 const isMatch = name.includes(query) || creator.includes(query) || tagsMatch ||
                                 desc.includes(query) || personality.includes(query) || firstMes.includes(query) || wbMatch;
                 return matchesCategory && isMatch;
+            }).sort((a, b) => {
+                // ✅ [UI 方案1] 列表排序（在过滤结果上稳定排序，不修改原始 library）
+                if (sortBy.value === 'name') {
+                    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
+                }
+                if (sortBy.value === 'time') {
+                    const ta = Date.parse((a.data?.data || a.data || {}).create_date) || 0;
+                    const tb = Date.parse((b.data?.data || b.data || {}).create_date) || 0;
+                    return tb - ta; // 最新优先
+                }
+                if (sortBy.value === 'tokens') {
+                    return estimateCardTokens(b) - estimateCardTokens(a); // Token 多优先
+                }
+                return 0;
             });
         });
 
@@ -2412,6 +2426,17 @@ export default {
         })());
         watch(isCompactMode, (v) => {
             try { localStorage.setItem('jsTavernCompactMode', v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        });
+
+        // ✅ [UI 方案1] 列表排序方式：'name' 名称 | 'time' 最新 | 'tokens' Token（localStorage 持久化）
+        const sortBy = ref((() => {
+            try {
+                const s = localStorage.getItem('jsTavernSortBy');
+                return ['name', 'time', 'tokens'].includes(s) ? s : 'name';
+            } catch (e) { return 'name'; }
+        })());
+        watch(sortBy, (v) => {
+            try { localStorage.setItem('jsTavernSortBy', v); } catch (e) { /* 忽略 */ }
         });
 
         // 右键菜单状态
@@ -5206,7 +5231,7 @@ export default {
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
             selectedIds, handleCardClick, toggleSelection, clearSelection,
-            isMultiSelectMode, viewMode, toggleViewMode, isCompactMode,
+            isMultiSelectMode, viewMode, toggleViewMode, isCompactMode, sortBy,
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
             batchChangeCategory, batchAddTag,
@@ -5233,7 +5258,7 @@ export default {
             graphLayoutMode, graphSearchKeyword, minLinkWeight,
             isolateCurrentGroup, edgeFilters,
             updateGraphLayout, renderGraph,
-            estimateTokens, cardTokenStats,
+            estimateTokens, cardTokenStats, estimateCardTokens,
             showTextModal, textModalTitle, textModalContent, textModalFontSize, openTextModal, saveTextModal,
             showImageModal, previewImageUrl, openImageModal,
             showGlobalAssetModal, globalAssetTab, globalAllWorldbooks, globalAllRegexScripts,

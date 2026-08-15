@@ -25,22 +25,48 @@
 
         <!-- ============ 角色卡模式 ============ -->
         <template v-if="appMode === 'characters'">
-        <!-- ✅ [UI 瘦身·方案1] 顶部搜索行 + 漏斗（高级筛选折叠入口，sticky） -->
-        <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex gap-1 items-center sticky top-0 z-10">
-            <div class="relative flex-1">
-                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
-                <input id="global-search-input" v-model="searchQueryInput" type="text"
-                       placeholder="搜索名称/标签/世界书 (Ctrl+F)"
-                       title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)"
-                       class="w-full bg-zinc-800 border border-zinc-700 text-xs rounded-md pl-8 pr-6 py-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500">
-                <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
+        <!-- ✅ [UI 方案1] 顶部两行紧凑：行1=搜索+多选+扫描+漏斗，行2=分类+排序 -->
+        <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-1.5 shrink-0 z-10">
+            <!-- 行1：搜索 + 多选 + 扫描 + 高级筛选漏斗 -->
+            <div class="flex items-center gap-1">
+                <div class="relative flex-1">
+                    <span class="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                    <input id="global-search-input" v-model="searchQueryInput" type="text"
+                           placeholder="搜索名称/标签/世界书 (Ctrl+F)"
+                           title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)"
+                           class="w-full h-7 bg-zinc-800/80 border border-zinc-700/60 rounded pl-7 pr-6 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500/80 transition">
+                    <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
+                </div>
+                <button @click="isMultiSelectMode = !isMultiSelectMode"
+                        :title="isMultiSelectMode ? '退出批量多选' : '开启批量多选'"
+                        class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0"
+                        :class="isMultiSelectMode ? 'bg-amber-600 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50'">
+                    ☑️
+                </button>
+                <button @click="runDiskScan('specific')" title="扫描本地文件夹/盘符" class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50">
+                    🔄
+                </button>
+                <button @click="showAdvancedFilters = !showAdvancedFilters"
+                        class="h-7 px-2 flex items-center justify-center rounded transition shrink-0"
+                        :class="hasActiveFilters ? 'text-amber-500 border border-amber-500/50 bg-amber-500/10' : 'text-zinc-400 hover:text-zinc-200 border border-zinc-700/50 bg-zinc-800'"
+                        :title="showAdvancedFilters ? '收起高级筛选' : '展开高级筛选'">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 9h12M10 14h4M12 19h0"/></svg>
+                </button>
             </div>
-            <button @click="showAdvancedFilters = !showAdvancedFilters"
-                    class="p-1.5 rounded-md transition shrink-0"
-                    :class="hasActiveFilters ? 'text-amber-500 border border-amber-500/50 bg-amber-500/10' : 'text-zinc-400 hover:text-zinc-200 border border-zinc-700 bg-zinc-800'"
-                    :title="showAdvancedFilters ? '收起高级筛选' : '展开高级筛选'">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 9h12M10 14h4M12 19h0"/></svg>
-            </button>
+
+            <!-- 行2：分类下拉 + 排序下拉 -->
+            <div class="flex items-center gap-1.5 text-[11px]">
+                <select v-model="currentCategoryKey" class="flex-1 min-w-0 h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1.5 text-zinc-300 focus:outline-none focus:border-blue-500/80 truncate">
+                    <option v-for="cat in allCategories" :key="cat.key" :value="cat.key">
+                        📁 {{ getCategoryDisplayName(cat) }}
+                    </option>
+                </select>
+                <select v-model="sortBy" title="列表排序方式" class="w-28 h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1.5 text-zinc-400 focus:outline-none focus:border-blue-500/80 truncate shrink-0">
+                    <option value="name">排序: 名称</option>
+                    <option value="time">排序: 最新</option>
+                    <option value="tokens">排序: Token</option>
+                </select>
+            </div>
         </div>
 
         <!-- 高级筛选折叠面板（点击漏斗展开；平时不占空间） -->
@@ -111,11 +137,6 @@
                         class="px-2 py-0.5 rounded transition font-medium" :title="isCompactMode ? '当前：紧凑模式 (点击切换常规)' : '当前：常规模式 (点击切换紧凑)'">
                     {{ isCompactMode ? '📱 常规' : '🗜️ 紧凑' }}
                 </button>
-                <button @click="isMultiSelectMode = !isMultiSelectMode"
-                        :class="isMultiSelectMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
-                        class="px-2 py-0.5 rounded transition font-medium">
-                    {{ isMultiSelectMode ? '✓ 退出多选' : '☑ 批量多选' }}
-                </button>
             </div>
         </div>
 
@@ -124,24 +145,39 @@
             <div v-for="(item, index) in paginatedLibrary" :key="item.id"
                  @click.prevent="handleCardClick($event, item, index)"
                  @contextmenu.prevent="openContextMenu($event, item)"
-                 :class="['group relative flex items-center rounded-lg cursor-pointer border select-none transition-all duration-200',
-                          selectedIds.includes(item.id) ? 'bg-blue-900/20 border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.2)]' :
-                          (cardData && cardData === item.data) ? 'bg-blue-600 text-white border-blue-600 shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
-                 :style="isCompactMode ? 'padding: 0.35em; gap: 0.5em; margin-bottom: 0.25em;' : 'padding: 0.6em; gap: 0.6em; margin-bottom: 0.45em;'">
+                 :class="['group relative flex items-center gap-2 rounded-md cursor-pointer border select-none transition-all duration-150',
+                          selectedIds.includes(item.id) ? 'bg-amber-950/20 border-amber-600/40' :
+                          (cardData && cardData === item.data) ? 'bg-blue-600 border-blue-600 text-white shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
+                 :style="isCompactMode ? 'padding: 0.2em 0.4em; margin-bottom: 0.2em;' : 'padding: 0.3em 0.5em; margin-bottom: 0.3em;'">
 
-                <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-zinc-800 cursor-pointer shrink-0 accent-blue-500" style="width: 1.1em; height: 1.1em;">
+                <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" class="w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0 accent-blue-500">
 
-                <!-- 极小缩略图（紧凑模式更小） -->
-                <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false" class="object-cover rounded-md border border-zinc-600 shrink-0 bg-zinc-900 group-hover:scale-105 transition-transform" :style="isCompactMode ? 'width: 2.2em; height: 2.2em;' : 'width: 3.5em; height: 3.5em;'">
-                <div v-else class="bg-zinc-700 rounded-md border border-zinc-600 shrink-0" :style="isCompactMode ? 'width: 2.2em; height: 2.2em;' : 'width: 3.5em; height: 3.5em;'"></div>
+                <!-- 行内小头像（40-44px 高度压缩） -->
+                <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false"
+                     class="rounded overflow-hidden bg-zinc-900 border border-zinc-700/40 object-cover shrink-0"
+                     :style="isCompactMode ? 'width: 1.8em; height: 1.8em;' : 'width: 2.2em; height: 2.2em;'">
+                <div v-else class="rounded bg-zinc-700 border border-zinc-600 shrink-0" :style="isCompactMode ? 'width: 1.8em; height: 1.8em;' : 'width: 2.2em; height: 2.2em;'"></div>
 
-                <!-- 信息（紧凑模式隐藏副行/标签，只留名字） -->
-                <div class="flex-1 min-w-0 overflow-hidden">
-                    <div class="font-bold truncate leading-tight transition-colors" :style="isCompactMode ? 'font-size: 0.95em;' : 'font-size: 1.05em;'" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</div>
-                    <!-- ✅ [UI 瘦身] 标签截断：只显示 1 个标签，多余用 +N 代替（紧凑模式整体隐藏） -->
-                    <div v-if="!isCompactMode" class="truncate leading-tight mt-0.5" style="font-size: 0.8em;" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500 opacity-70'">
-                        {{ item.category }}<template v-if="displayTagText(item.customTags[0])"><span> · {{ displayTagText(item.customTags[0]) }}</span><span v-if="extraTagsCount(item.customTags) > 0" class="text-amber-500"> +{{ extraTagsCount(item.customTags) }}</span></template>
+                <!-- 两行信息：名字+分类 / Token+世界书+标签截断 -->
+                <div class="flex-1 min-w-0 flex flex-col justify-center overflow-hidden" style="gap: 0.15em;">
+                    <div class="flex items-center justify-between gap-1">
+                        <span class="text-xs font-medium truncate leading-tight" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-200 group-hover:text-blue-400'">{{ item.name }}</span>
+                        <span v-if="!isCompactMode && item.category && item.category !== '未分类'" class="text-[9px] px-1 rounded shrink-0 bg-zinc-800 text-zinc-400 border border-zinc-700/50">{{ item.category }}</span>
                     </div>
+                    <div v-if="!isCompactMode" class="flex items-center gap-1.5 text-[10px] text-zinc-500 leading-none">
+                        <span v-if="itemTokenCount(item) > 0" class="font-mono text-amber-500/80 shrink-0" title="Token 估算">{{ itemTokenCount(item) }}T</span>
+                        <span v-if="hasLorebook(item)" class="text-emerald-500/80 shrink-0" title="包含世界书">🌍</span>
+                        <div class="flex items-center gap-1 overflow-hidden truncate">
+                            <span v-for="tag in listTags(item).slice(0, 2)" :key="tag" class="px-1 bg-zinc-800/80 text-zinc-400 rounded text-[9px] truncate max-w-[60px]">#{{ tag }}</span>
+                            <span v-if="listTags(item).length > 2" class="text-[9px] text-zinc-600 shrink-0">+{{ listTags(item).length - 2 }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ✅ [UI 方案2] hover 快捷操作：平时隐藏，鼠标移入显示 -->
+                <div class="hidden group-hover:flex items-center gap-0.5 absolute right-1.5 bg-zinc-800/90 backdrop-blur-sm px-1 rounded border border-zinc-700/50 z-10">
+                    <button @click.stop="quickTag(item)" title="为这张卡添加标签" class="p-1 text-[10px] text-zinc-400 hover:text-amber-400">🏷️</button>
+                    <button @click.stop="deleteCardItem(item)" title="删除卡片(移入回收站)" class="p-1 text-[10px] text-zinc-400 hover:text-rose-400">🗑️</button>
                 </div>
             </div>
 
@@ -391,8 +427,29 @@ export default {
             toggleSelection: ctx.toggleSelection,
             cardData: ctx.cardData,
             displayTagText: ctx.displayTagText,
-            // ✅ [UI 瘦身] 标签截断辅助：最多显示 1 个标签，多余用 +N 代替
-            extraTagsCount: (tags) => (Array.isArray(tags) && tags.length > 1 ? tags.length - 1 : 0),
+            sortBy: ctx.sortBy,
+            runDiskScan: ctx.runDiskScan,
+            deleteCardItem: ctx.deleteCardItem,
+            // ✅ [UI 方案2] 列表项辅助：Token 估算 / 世界书标记 / 标签合并 / 快捷打标
+            itemTokenCount: (item) => {
+                if (!item || typeof ctx.estimateCardTokens !== 'function') return 0;
+                const t = ctx.estimateCardTokens(item);
+                return t >= 1000 ? (Math.round(t / 100) / 10) + 'k' : Math.round(t);
+            },
+            hasLorebook: (item) => {
+                const d = (item && (item.data?.data || item.data)) || {};
+                const book = d.character_book || (item && item.data && item.data.character_book) || {};
+                return !!(book && Array.isArray(book.entries) && book.entries.length);
+            },
+            listTags: (item) => {
+                const d = (item && (item.data?.data || item.data)) || {};
+                const arr = [...(item?.customTags || []), ...(Array.isArray(d.tags) ? d.tags : [])];
+                return Array.from(new Set(arr.filter(t => t && String(t).trim() !== '')));
+            },
+            quickTag: (item) => {
+                ctx.openFromLibrary(item);
+                setTimeout(() => ctx.addSingleTag(), 60);
+            },
             changePage: ctx.changePage,
             currentPage: ctx.currentPage,
             totalPages: ctx.totalPages,
