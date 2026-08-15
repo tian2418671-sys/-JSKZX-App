@@ -899,6 +899,19 @@ export default {
             saveApiConfig();
         };
 
+        // ✅ [补丁] 引擎协议切换时强制清洗不兼容的模型名，防止把 local-model/gpt-* 发给 Claude 触发 400
+        watch(apiType, (newType) => {
+            const currentModel = (apiModel.value || '').trim();
+            // 切到 Claude：本地/OpenAI 系模型名与 Anthropic 不兼容，强制清空触发默认回退（claude-3-haiku）
+            if (newType === 'anthropic' && (currentModel === 'local-model' || currentModel.startsWith('gpt-'))) {
+                apiModel.value = '';
+            }
+            // 切回 OpenAI 兼容：清除 Claude 系模型名
+            else if (newType !== 'anthropic' && currentModel.startsWith('claude-')) {
+                apiModel.value = 'local-model';
+            }
+        });
+
         // 兼容 OpenAI（choices[0].message.content）与 Anthropic（content[0].text）的回复提取
         const extractReplyContent = (result) => {
             if (!result || !result.data) return '';
@@ -1015,25 +1028,28 @@ export default {
         });
 
         // ================= 世界书折叠展开控制 =================
-        // 存储每个世界书条目是否展开的映射表，key 为索引，value 为 boolean
+        // 存储每个世界书条目是否展开的映射表，key 为条目的稳定唯一标识（getEntryUid），value 为 boolean
+        // ✅ [补丁] 改用 uid 而非数组 index：删除/排序条目后 index 会错位继承旧折叠状态（打开的突然闭合）
         const worldbookExpanded = ref({});
 
-        // 切换单个条目的折叠状态
-        const toggleWorldbookEntry = (index) => {
-            worldbookExpanded.value[index] = !worldbookExpanded.value[index];
+        // 切换单个条目的折叠状态（按条目的稳定唯一标识追踪）
+        const toggleWorldbookEntry = (entry) => {
+            if (!entry) return;
+            const key = getEntryUid(entry);
+            worldbookExpanded.value[key] = !worldbookExpanded.value[key];
         };
 
         // 全部展开
         const expandAllWorldbook = () => {
-            worldbookEntries.value.forEach((_, idx) => {
-                worldbookExpanded.value[idx] = true;
+            worldbookEntries.value.forEach((entry) => {
+                if (entry) worldbookExpanded.value[getEntryUid(entry)] = true;
             });
         };
 
         // 全部折叠
         const collapseAllWorldbook = () => {
-            worldbookEntries.value.forEach((_, idx) => {
-                worldbookExpanded.value[idx] = false;
+            worldbookEntries.value.forEach((entry) => {
+                if (entry) worldbookExpanded.value[getEntryUid(entry)] = false;
             });
         };
 
@@ -1663,8 +1679,9 @@ export default {
 
         // 正则作用域（placement）可读化
         const getRegexPlacement = (arr) => {
-            if (!arr) return '默认';
-            const map = { 1: '用户输入', 2: 'AI回复', 3: '全文本' };
+            // ✅ [补丁] 严格判定：区分 0 与 null/undefined（旧版 `!arr` 会把 placement:0 误判为默认）
+            if (arr === undefined || arr === null) return '默认';
+            const map = { 0: '全局/未定义', 1: '用户输入', 2: 'AI回复', 3: '全文本' };
             return Array.isArray(arr) ? arr.map(i => map[i] || i).join(', ') : map[arr] || arr;
         };
 

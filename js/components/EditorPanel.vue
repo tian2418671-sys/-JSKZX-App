@@ -210,9 +210,9 @@
                         <div class="space-y-2">
                             <div v-for="(entry, index) in worldbookEntries" :key="getEntryUid(entry)" class="bg-zinc-900 border border-zinc-800 rounded shadow-sm overflow-hidden transition-all">
 
-                                <div @click="toggleWorldbookEntry(index)" class="px-3 py-2.5 bg-zinc-800/60 hover:bg-zinc-800 cursor-pointer flex justify-between items-center select-none">
+                                <div @click="toggleWorldbookEntry(entry)" class="px-3 py-2.5 bg-zinc-800/60 hover:bg-zinc-800 cursor-pointer flex justify-between items-center select-none">
                                     <div class="flex items-center gap-2 overflow-hidden">
-                                        <span class="text-zinc-500 text-xs transition-transform inline-block" :class="worldbookExpanded[index] ? 'rotate-90' : ''">▶</span>
+                                        <span class="text-zinc-500 text-xs transition-transform inline-block" :class="worldbookExpanded[getEntryUid(entry)] ? 'rotate-90' : ''">▶</span>
                                         <span class="font-bold text-xs text-zinc-200 truncate">{{ entry.name || entry.comment || '未命名条目' }}</span>
                                         <span class="text-[10px] text-green-400 bg-green-500/10 px-1.5 py-0.2 rounded border border-green-500/30 truncate max-w-xs" v-if="entry.keys && entry.keys.length">
                                             🔑 {{ entry.keys.join(', ') }}
@@ -223,7 +223,7 @@
                                     </div>
                                 </div>
 
-                                <div v-if="worldbookExpanded[index]" class="p-3 border-t border-zinc-800 bg-zinc-950/60 space-y-3 text-xs">
+                                <div v-if="worldbookExpanded[getEntryUid(entry)]" class="p-3 border-t border-zinc-800 bg-zinc-950/60 space-y-3 text-xs">
 
                                     <div class="grid grid-cols-3 gap-2">
                                         <div class="col-span-2 flex flex-col gap-1">

@@ -120,6 +120,13 @@ function writeTavernPNGChunk(buffer, updatedJson) {
 
   if (!found) return null; // 未找到角色卡数据块，无法写入
 
+  // ✅ [补丁] IEND 兜底：确保重建产物以标准 IEND 块收尾。
+  // 源文件异常/尾部截断时（while 越界 break 丢 IEND），强制补一个空 IEND，
+  // 杜绝 Windows 高频原位覆盖后产出无 IEND 的残缺 PNG（部分看图器会拒绝打开）
+  if (chunks.length === 0 || chunks[chunks.length - 1].type !== 'IEND') {
+    chunks.push({ type: 'IEND', data: Buffer.alloc(0) });
+  }
+
   // 重建 PNG 文件（重新计算每个块的 CRC）
   const parts = [sig];
   for (const chunk of chunks) {
