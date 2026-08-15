@@ -410,29 +410,35 @@
                     </div>
                 </div>
 
-                <!-- 词条列表编辑区 -->
-                <div class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 pb-32">
+                <!-- 词条列表编辑区（紧凑化：更小间距/卡片） -->
+                <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 pb-32">
                     <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
                          :id="'wb-entry-' + getEntryUid(entry)"
-                         class="theme-surface border rounded-xl p-3 shadow-md transition-all"
+                         class="theme-surface border rounded-lg p-2 shadow-sm transition-all"
                          :class="{ 'opacity-50 border-dashed': !entry.enabled }">
 
-                        <!-- 词条头部 -->
-                        <div class="flex items-center justify-between cursor-pointer select-none"
+                        <!-- 词条头部（紧凑：启用圆点 + 触发词 + 折叠信息徽章） -->
+                        <div class="flex items-center justify-between cursor-pointer select-none gap-2"
                              @click="entry._collapsed = !entry._collapsed">
 
                             <div class="flex items-center gap-2 min-w-0 flex-1">
+                                <!-- ✅ 启用状态圆点（紧凑可视化） -->
+                                <span class="shrink-0 w-2 h-2 rounded-full transition-colors"
+                                      :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></span>
                                 <span class="text-xs text-amber-500 transition-transform font-mono shrink-0" :class="{ '-rotate-90': entry._collapsed }">▼</span>
-                                <span class="text-xs font-mono opacity-50 shrink-0">#{{ index + 1 }}</span>
+                                <span class="text-[11px] font-mono opacity-50 shrink-0">#{{ index + 1 }}</span>
 
                                 <span class="text-xs font-bold truncate">
                                     {{ entry.comment || (Array.isArray(entry.key) && entry.key.length ? entry.key.join(', ') : '未命名词条') }}
                                 </span>
 
-                                <div v-if="entry._collapsed" class="flex gap-1 overflow-hidden shrink-0 ml-2">
+                                <!-- 折叠态：触发词标签 + 字数 + 插入位置徽章 -->
+                                <div v-if="entry._collapsed" class="flex items-center gap-1 overflow-hidden shrink-0 ml-1">
                                     <span v-for="k in (entry.key || []).slice(0, 3)" :key="k" class="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded font-mono">{{ k }}</span>
                                     <span v-if="(entry.key || []).length > 3" class="text-[9px] opacity-40">+{{ (entry.key || []).length - 3 }}</span>
                                     <span v-if="!entry.enabled" class="text-[9px] bg-rose-500/10 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded">停用</span>
+                                    <span class="text-[9px] text-zinc-500 shrink-0 whitespace-nowrap">{{ entry.content ? entry.content.length : 0 }}字</span>
+                                    <span class="text-[9px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded shrink-0 whitespace-nowrap">{{ getEntryPositionText(entry.position) }}</span>
                                 </div>
                             </div>
 
@@ -600,6 +606,8 @@ export default {
             collapseAllWorldbook: ctx.collapseAllWorldbook,
             getKeysString: ctx.getKeysString,
             updateEntryKeys: ctx.updateEntryKeys,
+            // ✅ [紧凑化] 世界书词条插入位置可读化（position: 0顶部/1底部/2聊天前）
+            getEntryPositionText: (p) => ({ 0: '顶部', 1: '底部', 2: '聊天前' })[p] || '默认',
             regexScripts: ctx.regexScripts,
             addRegexScript: ctx.addRegexScript,
             getRegexUid: ctx.getRegexUid,
