@@ -434,7 +434,7 @@
                                 <button @click="addWorldbookEntry" title="新建词条" class="h-7 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs shrink-0 transition flex items-center justify-center">➕</button>
                             </div>
 
-                            <div class="flex-1 overflow-y-auto p-1 custom-scrollbar">
+                            <div class="flex-1 overflow-y-auto pt-1 px-1 custom-scrollbar" :class="showEditorLogs ? 'pb-40' : 'pb-8'">
                                 <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
                                      :id="'wb-entry-' + getEntryUid(entry)"
                                      @click="selectEntry(entry)"
@@ -466,7 +466,7 @@
                     </div>
 
                     <!-- 右：详情编辑（点击左侧词条后显示） -->
-                    <div v-if="currentEntry" class="flex-1 p-4 overflow-y-auto custom-scrollbar">
+                    <div v-if="currentEntry" class="flex-1 pt-4 px-4 overflow-y-auto custom-scrollbar" :class="showEditorLogs ? 'pb-40' : 'pb-8'">
                         <div class="grid grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label class="block text-xs font-bold text-zinc-300 mb-1">🔑 主触发词 (Key)</label>
