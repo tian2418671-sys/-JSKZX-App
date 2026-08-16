@@ -207,8 +207,13 @@
             <option value="qwen2.5-7b-instruct">本地 Qwen 7B</option>
         </datalist>
 
-        <!-- ================= [ 弹窗：磁盘扫描进度（子组件 DiskScanModal） ] ================= -->
-        <disk-scan-modal :is-scanning="isScanningDisk" :status="diskScanProgress.status" />
+        <!-- ================= [ 🛰️ 全盘深度检索引擎弹窗（子组件 DiskScanModal） ] ================= -->
+        <disk-scan-modal
+            :show="showDiskScanModal"
+            :current-library-path="currentFolderPath"
+            @close="showDiskScanModal = false"
+            @imported="handleScanImported"
+        />
 
         <!-- ================= [ 🔍 智能查重与版本清洗弹窗（子组件 DedupeModal） ] ================= -->
         <dedupe-modal
@@ -2177,6 +2182,8 @@ export default {
         const isScanningDisk = ref(false);
         const diskScanProgress = ref({ status: '准备就绪', count: 0 });
         const useSizeFilter = ref(true); // 默认开启体积过滤（跳过 <40KB 的贴图/图标）
+        // 🛰️ 全盘深度检索引擎弹窗开关（新的独立 UI，替代旧 runDiskScan 进度蒙版）
+        const showDiskScanModal = ref(false);
 
         // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库）
         const importScanPaths = async (paths) => {
@@ -2245,6 +2252,18 @@ export default {
                 nativeAlert('扫描过程中发生异常，详情请查看控制台。', 'error');
             } finally {
                 isScanningDisk.value = false;
+            }
+        };
+
+        // 🛰️ 全盘检索收编回调：把复制到当前库的卡片精准追加入库（不清空现有库），并 Toast 反馈
+        const handleScanImported = async (copiedFiles) => {
+            if (!copiedFiles || copiedFiles.length === 0) return;
+            try {
+                const added = await importScanPaths(copiedFiles);
+                showToast(`🛰️ 已收编 ${added} 张卡片到当前库！`, 'success', 4000);
+            } catch (err) {
+                console.error('收编入库失败:', err);
+                nativeAlert('收编入库失败: ' + (err && err.message || err), 'error');
             }
         };
 
@@ -5405,7 +5424,8 @@ export default {
             showExperimentalMenu, pushToTavern,
             viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
-            isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan,
+            isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan, showDiskScanModal,
+            currentFolderPath, handleScanImported,
             isDragging, dragCounter, handleDragEnter, handleDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,

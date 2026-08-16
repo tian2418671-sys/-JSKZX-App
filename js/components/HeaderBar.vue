@@ -124,14 +124,7 @@
                     <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-amber-400 transition font-bold">🧪 实验与工具</button>
                     <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[210px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                         <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">本地资产检索 (I/O)</div>
-                        <div class="px-3 py-1.5 text-zinc-300 flex items-center justify-between cursor-pointer hover:bg-zinc-700/50 transition" @click.stop="useSizeFilter = !useSizeFilter" title="开启后自动跳过小于 40KB 的贴图和图标">
-                            <span class="flex items-center gap-2"><span class="text-emerald-400">⚖️</span> 屏蔽非卡片小图 (&lt; 40KB)</span>
-                            <div class="w-8 h-4 bg-zinc-600 rounded-full relative transition-colors shadow-inner" :class="{'bg-emerald-500': useSizeFilter}">
-                                <div class="w-4 h-4 bg-white rounded-full absolute top-0 shadow transition-transform" :class="useSizeFilter ? 'translate-x-4' : 'translate-x-0'"></div>
-                            </div>
-                        </div>
-                        <button @click="runDiskScan('specific')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 指定文件夹/盘符扫描</button>
-                        <button @click="runDiskScan('all')" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">💽 全盘暴力检索卡片</button>
+                        <button @click="showDiskScanModal = true" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🛰️ 全盘打捞卡片</button>
                         <div class="h-px bg-zinc-700 my-1"></div>
                         <button @click="openGraph" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">🌌 星系关系图 (ECharts)</button>
                         <button @click="openChatTab" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">💬 本地 AI 对话测卡</button>
@@ -205,8 +198,7 @@ export default {
             resetPersonalizationSettings: ctx.resetPersonalizationSettings,
             resetApiSettings: ctx.resetApiSettings,
             checkForUpdatesManual: ctx.checkForUpdatesManual,
-            useSizeFilter: ctx.useSizeFilter,
-            runDiskScan: ctx.runDiskScan,
+            showDiskScanModal: ctx.showDiskScanModal,
             openGraph: ctx.openGraph,
             openChatTab: ctx.openChatTab,
             pushToTavern: ctx.pushToTavern,
