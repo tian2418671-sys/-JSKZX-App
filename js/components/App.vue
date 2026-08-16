@@ -1111,15 +1111,15 @@ export default {
             return DOMPurify.sanitize(text, {
                 ALLOWED_TAGS: [
                     'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span',
-                    'ul', 'ol', 'li', 'blockquote', 'code', 'pre',
+                    'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'img', 'hr',
                     'h1', 'h2', 'h3', 'h4', 'table', 'thead', 'tbody', 'tr', 'td', 'th'
                 ],
-                ALLOWED_ATTR: ['class', 'style', 'title'],
+                ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title'],
                 ALLOW_DATA_ATTR: false,
                 FORBID_ATTR: [/^on/i],
-                // 【额外加固】禁止外联图片（追踪像素/内网探测）与 data: 之外的危险协议
-                // 需要显示卡片渲染外部图时可在白名单放开 img + http(s)
-                ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp):\/\/|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i
+                // 【安全平衡】允许内嵌 base64 图(data:image/)与相对路径，禁止 http(s) 外联
+                // （防追踪像素/内网探测；外联图需求可再评估放开）
+                ALLOWED_URI_REGEXP: /^(?:data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
             });
         };
 
