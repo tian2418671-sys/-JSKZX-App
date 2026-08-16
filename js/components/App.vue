@@ -2264,8 +2264,9 @@ export default {
             // 🚫 绝对拦截①：聊天记录（酒馆聊天导出常为数组，或含 messages / chat_metadata 字段）
             if (data.messages || data.chat_metadata) return false;
 
-            // 🚫 绝对拦截②：独立世界书（纯 entries 数组且外层无角色 name/data 标识）
-            if (data.entries && Array.isArray(data.entries) && !data.name && !data.data) return false;
+            // 🚫 绝对拦截②：独立世界书（顶层 entries 数组即世界书特征，无论是否带 name/data）
+            // 角色卡的世界书永远在 data.character_book / data.data.character_book 内，顶层 entries 只属于世界书文件
+            if (data.entries && Array.isArray(data.entries)) return false;
 
             // 🚫 绝对拦截③：酒馆 UI 主题 / 界面配置 JSON
             if (data.colors || data.user_settings) return false;
@@ -2495,7 +2496,11 @@ export default {
                 return nativeAlert("该功能需要 Electron 桌面环境，请使用 npm start 启动应用。", 'warning');
             }
             const result = await window.electronAPI.selectFolder();
-            if (result) await processElectronFiles(result);
+            if (result) {
+                // 【修复】打开角色库目录后自动切换到角色卡模式，界面立即显示角色卡列表
+                appMode.value = 'characters';
+                await processElectronFiles(result);
+            }
         };
 
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
@@ -4152,6 +4157,9 @@ export default {
             const dirPath = await window.electronAPI.selectGenericFolder();
             if (!dirPath) return;
             await scanWorldbookDir(dirPath);
+            // 【修复】打开世界书目录后自动切换到世界书模式，界面立即显示世界书列表
+            // （此前 appMode 不切换，用户打开世界书目录后界面仍停留在角色卡，误以为"没分开"）
+            appMode.value = 'worldbooks';
         };
 
         // 扫描指定世界书目录（供手动选择与启动自动恢复共用；自动持久化记忆路径）
