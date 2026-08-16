@@ -2066,10 +2066,20 @@ export default {
         // ================= [ Electron 专属逻辑 ] =================
 
         // 读取并解析单张卡片文件，成功则加入库中（供文件夹加载 / 磁盘扫描共用）
-        // 判断 JSON 数据是否为真正的角色卡（V2/V3 或 V1 格式），
-        // 过滤掉 config.json 等非卡片文件，防止污染卡片库
+        // 🕵️ 角色卡血统严格鉴定：过滤伪装成卡片的聊天记录、独立世界书、UI 主题配置、
+        //     config.json 等系统配置与无内容字段的杂物，防止污染卡片库
         const isCharacterCardData = (data) => {
             if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+
+            // 🚫 绝对拦截①：聊天记录（酒馆聊天导出常为数组，或含 messages / chat_metadata 字段）
+            if (data.messages || data.chat_metadata) return false;
+
+            // 🚫 绝对拦截②：独立世界书（纯 entries 数组且外层无角色 name/data 标识）
+            if (data.entries && Array.isArray(data.entries) && !data.name && !data.data) return false;
+
+            // 🚫 绝对拦截③：酒馆 UI 主题 / 界面配置 JSON
+            if (data.colors || data.user_settings) return false;
+
             // V2/V3：spec 标记（chara_card_v2/v3）且带 data 对象
             if (typeof data.spec === 'string' && /^chara_card_v[23]$/i.test(data.spec.trim())) {
                 return !!(data.data && typeof data.data === 'object');
