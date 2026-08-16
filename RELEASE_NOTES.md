@@ -1,8 +1,8 @@
-## SillyTavern 角色卡管理器 v1.6.2.1
+## SillyTavern 角色卡管理器 v1.6.3
 
 本地优先、完全离线可用的角色卡管理与解析工具（Electron + Vue3 + Tailwind + ECharts）。
 
-### ✨ v1.6.2.1 更新 —— 修复安装版分组/语言/分类重启丢失
+### ✨ v1.6.3 更新 —— 修复安装版分组/语言/分类重启丢失
 
 - 🔧 **根因修复：生产模式 localStorage 不持久**——Electron 的 `app://` custom scheme 的 localStorage 不落盘，安装版每次重启所有设置（分组/语言/卡片分类等）全部回退默认；已将关键 UI 状态迁移到**主进程配置文件**（`tavern_manager_config.json` 的 `uiSettings`），实测完全退出→重启→全部恢复
 - 📁 **分组删除/重命名持久化**：预设分组可删除/重命名（排除「全部」「未分类」），重启不再重新生成或「改名新分组 + 原预设」重复并存
