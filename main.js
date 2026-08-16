@@ -384,28 +384,26 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
 app.whenReady().then(() => {
   registerAppProtocol();
 
-  // 【安全加固】生产模式 (app://) 注入 CSP 响应头（纵深防御兜底：
-  // 限制内联脚本/外部连接，即使未来出现新的不安全 v-html 渲染也有兜底）
-  // 开发模式 (Vite Dev Server) 不注入，避免破坏 HMR 的 ws:// 与内联脚本需求
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    if (String(details.url || '').startsWith('app://')) {
+  // 【安全加固】仅生产模式注入 CSP（纵深防御兜底）：开发模式走 Vite Dev Server
+  // (http://localhost:5173)，HMR 依赖 ws:// 连接，无条件注入 connect-src 'self'
+  // 会挡掉 ws:// 导致热更新失效，故仅在 !isDev 下注册该拦截器。
+  if (!isDev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
           'Content-Security-Policy': [
             "default-src 'self' app: local-file:; " +
-            "img-src 'self' app: local-file: data: blob:; " +
-            "style-src 'self' app: 'unsafe-inline'; " +   // Vue/Tailwind 运行时内联样式所需
+            "img-src 'self' app: local-file: data: blob:; " +   // 不放行 http(s) 外联图(防追踪像素/内网探测)
+            "style-src 'self' app: 'unsafe-inline'; " +          // Vue/Tailwind 运行时内联样式所需
             "script-src 'self' app:; " +
             "font-src 'self' app: data:; " +
-            "connect-src 'self' http: https: ws: wss:"   // 聊天测卡需连用户自定义 LLM 地址
+            "connect-src 'self' http: https: ws: wss:"           // 聊天测卡需连用户自定义 API 地址，无法进一步收紧
           ]
         }
       });
-    } else {
-      callback({ responseHeaders: details.responseHeaders });
-    }
-  });
+    });
+  }
 
   createWindow();
 
