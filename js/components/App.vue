@@ -922,12 +922,17 @@ export default {
         // 配置文件（userData/tavern_manager_config.json 的 uiSettings）才是跨重启权威载体。
         const saveUiSettingsToDisk = () => {
             if (!window.electronAPI || typeof window.electronAPI.saveUiSettings !== 'function') return;
-            window.electronAPI.saveUiSettings({
-                customCategories: Array.isArray(customCategories.value) ? customCategories.value : [],
-                removedDefaultKeys: Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [],
+            // ⚠️【关键修复】IPC 前必须剥离 Vue 响应式 Proxy！
+            // ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
+            // "An object could not be cloned"（structured clone 失败）→ 保存永远静默失败。
+            // 统一用 JSON 序列化剥离（与 getPlainCardData 同款做法）。
+            const payload = {
+                customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
+                removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
                 tagLangMode: tagLangMode.value,
-                localCategoryMap: localCategoryMap.value || {}
-            }).catch(() => { });
+                localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {}))
+            };
+            window.electronAPI.saveUiSettings(payload).catch(() => { });
         };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
 
