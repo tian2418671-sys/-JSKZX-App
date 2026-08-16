@@ -76,7 +76,8 @@
                 <span class="text-[10px] text-zinc-500 font-medium shrink-0">📁 分组:</span>
                 <button @click="addNewCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="新增分组">➕</button>
                 <button @click="renameCurrentCategory" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-zinc-700 text-xs text-zinc-300 shrink-0" title="重命名分组">✏️</button>
-                <button v-if="customCategories.includes(currentCategoryKey)" @click="deleteCustomCategory(currentCategoryKey)" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-red-600 hover:text-white text-xs text-zinc-300 shrink-0" title="删除当前自定义分组">🗑️</button>
+                <!-- 【修复】预设分组也可删除（仅系统必需的全部分组不可删），无需先改名才出删除按钮 -->
+                <button v-if="currentCategoryDeletable" @click="deleteCustomCategory(currentCategoryKey)" class="px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded hover:bg-red-600 hover:text-white text-xs text-zinc-300 shrink-0" title="删除当前分组">🗑️</button>
             </div>
 
             <!-- 行2.5：快捷标签搜索（点击直接填入搜索框并立即过滤） -->
@@ -441,6 +442,7 @@ export default {
             addNewCategory: ctx.addNewCategory,
             renameCurrentCategory: ctx.renameCurrentCategory,
             deleteCustomCategory: ctx.deleteCustomCategory,
+            currentCategoryDeletable: ctx.currentCategoryDeletable,
             searchQueryInput: ctx.searchQueryInput,
             searchQuery: ctx.searchQuery,
             appendTagToSearch: ctx.appendTagToSearch,

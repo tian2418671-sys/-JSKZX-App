@@ -667,15 +667,29 @@ export default {
         const currentTab = ref('basic');
         const library = ref([]); // 存放扫描到的角色卡集合
         // ================= 动态分类/分组与多语言系统 =================
-        // 默认的系统预设分组（中英文对照，ref 以便支持动态重命名）
-        const defaultCategories = ref([
+        // 全量系统预设分组（中英文对照）
+        const allDefaultCategories = [
             { key: 'all', cn: '全部', en: 'All' },
             { key: 'uncategorized', cn: '未分类', en: 'Uncategorized' },
             { key: 'fantasy', cn: '奇幻', en: 'Fantasy' },
             { key: 'scifi', cn: '科幻', en: 'Sci-Fi' },
             { key: 'romance', cn: '恋爱', en: 'Romance' },
             { key: 'nsfw', cn: '限制级', en: 'NSFW' }
-        ]);
+        ];
+        // 【修复】被用户删除/重命名的预设分组 key（localStorage 持久化，重启不再重新生成）
+        const removedDefaultKeys = ref((() => {
+            try {
+                const saved = JSON.parse(localStorage.getItem('jsTavern_removedDefaultCategories'));
+                if (Array.isArray(saved)) return saved.filter(k => typeof k === 'string');
+            } catch (e) { /* 忽略 */ }
+            return [];
+        })());
+        // 生效的系统预设分组（排除已被删除/重命名的，重启保持用户的选择）
+        const defaultCategories = ref(allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key)));
+        // 持久化删除/重命名记录
+        watch(removedDefaultKeys, (v) => {
+            try { localStorage.setItem('jsTavern_removedDefaultCategories', JSON.stringify(v)); } catch (e) { /* 忽略 */ }
+        }, { deep: true });
 
         // 用户自定义添加的额外分组列表（存字符串；localStorage 持久化，重启不丢失）
         const customCategories = ref((() => {
@@ -724,17 +738,43 @@ export default {
             }
         };
 
-        // 删除自定义分组（预设/视图模式不可删；卡片自动归入未分类）
+        // 【修复】当前分组是否可删除（自定义分组 或 非系统必需的预设分组均可删）
+        const currentCategoryDeletable = computed(() => {
+            const key = currentCategoryKey.value;
+            if (key === 'all' || key === 'has_lorebook' || key === 'has_regex') return false; // 视图/过滤模式
+            if (key === 'uncategorized') return false; // 系统兜底分组不可删
+            if (customCategories.value.includes(key)) return true;
+            if (defaultCategories.value.some(c => c.key === key)) return true;
+            return false;
+        });
+
+        // 删除分组（自定义 或 预设分组均可；【修复】预设删除持久化，重启不再重新生成；卡片自动归入未分类）
         const deleteCustomCategory = async (categoryName) => {
-            if (!categoryName || !customCategories.value.includes(categoryName)) {
-                return nativeAlert('只能删除自定义分组！', 'warning');
+            const preset = defaultCategories.value.find(c => c.key === categoryName || c.cn === categoryName || c.en === categoryName);
+            const isCustom = customCategories.value.includes(categoryName);
+            if (!preset && !isCustom) {
+                return nativeAlert('该分组不存在或不可删除！', 'warning');
+            }
+            if (preset && (preset.key === 'all' || preset.key === 'uncategorized')) {
+                return nativeAlert('「全部」与「未分类」为系统必需视图，不可删除！', 'warning');
             }
             const ok = await confirmDialog(`确定要删除分组【${categoryName}】吗？\n（不会删除卡片，卡片将归入未分类）`);
             if (!ok) return;
-            customCategories.value = customCategories.value.filter(c => c !== categoryName);
-            // 原属于该分组的卡片重置为未分类
-            library.value.forEach(card => { if (card.category === categoryName) card.category = '未分类'; });
-            if (currentCategoryKey.value === categoryName) currentCategoryKey.value = 'all';
+            if (preset) {
+                // 预设分组：记录已删除 + 从当前预设移除（持久化，重启不再恢复）
+                if (!removedDefaultKeys.value.includes(preset.key)) removedDefaultKeys.value.push(preset.key);
+                defaultCategories.value = defaultCategories.value.filter(c => c.key !== preset.key);
+                // 卡片匹配中/英/key 三种存储形态归入未分类
+                library.value.forEach(card => {
+                    if (card.category === preset.cn || card.category === preset.en || card.category === preset.key) card.category = '未分类';
+                });
+            } else {
+                customCategories.value = customCategories.value.filter(c => c !== categoryName);
+                // 原属于该分组的卡片重置为未分类
+                library.value.forEach(card => { if (card.category === categoryName) card.category = '未分类'; });
+            }
+            const removedKey = preset ? preset.key : categoryName;
+            if (currentCategoryKey.value === removedKey) currentCategoryKey.value = 'all';
             addLog(`🗑️ 已删除分组: ${categoryName}`, 'warning');
             nativeAlert(`已删除分组「${categoryName}」。`, 'info');
         };
@@ -744,8 +784,8 @@ export default {
             const currentKey = currentCategoryKey.value;
             
             // 特殊视图/过滤模式（非真实分组），不允许重命名
-            if (currentKey === 'all' || currentKey === 'has_lorebook' || currentKey === 'has_regex') {
-                nativeAlert('该选项为视图/过滤模式，无需重命名！', 'warning');
+            if (currentKey === 'all' || currentKey === 'has_lorebook' || currentKey === 'has_regex' || currentKey === 'uncategorized') {
+                nativeAlert('该选项为视图/过滤模式或系统兜底分组，无需重命名！', 'warning');
                 return;
             }
             
@@ -765,6 +805,8 @@ export default {
             // 1. 移除旧分组定义（预设重命名后转为自定义分组）
             if (oldPreset) {
                 defaultCategories.value = defaultCategories.value.filter(c => c.key !== currentKey);
+                // 【修复】记录旧预设 key 已移除，重启后不再重新生成原预设
+                if (!removedDefaultKeys.value.includes(currentKey)) removedDefaultKeys.value.push(currentKey);
             } else {
                 const idx = customCategories.value.indexOf(currentKey);
                 if (idx !== -1) customCategories.value.splice(idx, 1);
@@ -2809,7 +2851,17 @@ export default {
 
         // ================= 标签中英文切换系统 =================
         // 标签语言模式: 'cn' (纯中文), 'en' (纯英文), 'both' (中英双语)
-        const tagLangMode = ref('both');
+        // 【修复】localStorage 持久化，重启保持上次选择
+        const tagLangMode = ref((() => {
+            try {
+                const saved = localStorage.getItem('jsTavern_tagLangMode');
+                if (saved === 'cn' || saved === 'en' || saved === 'both') return saved;
+            } catch (e) { /* 忽略 */ }
+            return 'both';
+        })());
+        watch(tagLangMode, (v) => {
+            try { localStorage.setItem('jsTavern_tagLangMode', v); } catch (e) { /* 忽略 */ }
+        });
 
         const toggleTagLangMode = () => {
             if (tagLangMode.value === 'both') tagLangMode.value = 'cn';
@@ -5236,7 +5288,7 @@ export default {
             library, openFromLibrary,
             allCategories, customCategories, currentCategoryKey,
             getCategoryDisplayName, addNewCategory,
-            renameCurrentCategory, deleteCustomCategory,
+            renameCurrentCategory, deleteCustomCategory, currentCategoryDeletable,
             currentCardCategory, handleCardCategoryChange,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
