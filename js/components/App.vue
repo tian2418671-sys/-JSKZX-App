@@ -268,6 +268,7 @@
     <update-modal
         :show="showUpdateModal"
         :info="updateInfo"
+        :error-msg="updateErrorMsg"
         @close="showUpdateModal = false"
     />
 
@@ -2352,7 +2353,11 @@ export default {
             };
             window.addEventListener('keydown', handleExtendedKeys);
 
-            if (!window.electronAPI) return; // 浏览器环境直接跳过
+            if (!window.electronAPI) {
+                // 【健壮性】纯浏览器环境（无 preload）也应放行加载蒙版，避免永久卡在加载画面
+                isAppLoading.value = false;
+                return;
+            }
             try {
                 const lastData = await window.electronAPI.loadConfig();
                 if (lastData && lastData.folderPath) {
@@ -5312,20 +5317,33 @@ export default {
             releaseNotes: '',
             downloadUrl: ''
         });
+        // 更新错误信号（统一在 App 层收口，转发给 UpdateModal 重置状态，避免与子组件监听冲突）
+        const updateErrorMsg = ref('');
         let isManualCheck = false; // 区分手动/静默检测（静默检测到已最新时不打扰）
+        let manualCheckTimer = null; // 手动检测超时保护，防止事件未到达时 isManualCheck 卡死
 
         // 手动检测更新（用于设置菜单里的按钮）：触发检查，结果通过事件驱动
         const checkForUpdatesManual = async () => {
             addLog('🔄 正在检查更新...', 'info');
             isManualCheck = true;
+            // 60 秒超时保护：若事件始终未到达（网络异常/升级器静默失败），重置手动检测标志
+            clearTimeout(manualCheckTimer);
+            manualCheckTimer = setTimeout(() => { isManualCheck = false; }, 60000);
             try {
                 const res = await window.electronAPI.checkUpdate();
                 if (!res || !res.success) {
+                    clearTimeout(manualCheckTimer);
                     isManualCheck = false;
-                    nativeAlert(`更新检测失败: ${res?.error || '网络错误'}`, 'error');
+                    // 开发模式是预期跳过，用 info 提示而非"失败"
+                    if (res && /开发模式/.test(res.error || '')) {
+                        nativeAlert(res.error, 'info');
+                    } else {
+                        nativeAlert(`更新检测失败: ${res?.error || '网络错误'}`, 'error');
+                    }
                 }
                 // 成功：结果通过 update-available / update-not-available 事件到达
             } catch (err) {
+                clearTimeout(manualCheckTimer);
                 isManualCheck = false;
                 nativeAlert(`更新检测失败: ${err.message || '网络错误'}`, 'error');
             }
@@ -5348,6 +5366,7 @@ export default {
             if (typeof window.electronAPI.onUpdateAvailable === 'function') {
                 window.electronAPI.onUpdateAvailable((info) => {
                     updateInfo.value = { ...(info || {}) };
+                    updateErrorMsg.value = ''; // 新版本信息到达，清空上一次的错误信号
                     showUpdateModal.value = true;
                     addLog(`🎉 发现新版本: v${(info && info.latestVersion) || ''}`, 'success');
                 });
@@ -5362,9 +5381,12 @@ export default {
             }
             if (typeof window.electronAPI.onUpdateError === 'function') {
                 window.electronAPI.onUpdateError((err) => {
-                    if (isManualCheck) {
-                        isManualCheck = false;
-                        nativeAlert(`更新检测失败: ${err}`, 'error');
+                    // 统一错误收口：清除手动检测标志、转发给弹窗重置状态
+                    clearTimeout(manualCheckTimer);
+                    isManualCheck = false;
+                    updateErrorMsg.value = String(err || '未知错误');
+                    if (showUpdateModal.value) {
+                        nativeAlert(`更新失败: ${String(err || '')}`, 'error');
                     }
                 });
             }
@@ -5471,7 +5493,7 @@ export default {
             showWbImportModal, importSourceBook, importCandidates, selectedImportEntries, importableSourceBooks,
             openWbImportModal, pickImportSource, confirmImportEntries,
             // 🚀 系统版本更新检测
-            showUpdateModal, updateInfo, checkForUpdatesManual, openExternalUrl
+            showUpdateModal, updateInfo, updateErrorMsg, checkForUpdatesManual, openExternalUrl
         };
         provide('appCtx', ctx);
         return ctx;

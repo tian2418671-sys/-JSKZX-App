@@ -1118,9 +1118,8 @@ app.whenReady().then(() => {
     }
   });
 
-  // 2. 检测 GitHub 最新 Release 版本（轻量探测，无需 electron-updater）
   // ==========================================
-  // 🚀 全新自动更新系统 (OTA Auto-Updater)
+  // 🚀 OTA 自动更新系统 (electron-updater: 检测/下载/进度/安装)
   // ==========================================
   // 禁用自动下载，改为由用户确认后再下载；退出应用时自动安装
   autoUpdater.autoDownload = false;

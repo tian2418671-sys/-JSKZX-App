@@ -70,7 +70,9 @@ export default {
     name: 'UpdateModal',
     props: {
         show: { type: Boolean, default: false },
-        info: { type: Object, default: () => ({}) }
+        info: { type: Object, default: () => ({}) },
+        // 更新错误信号（由 App 层统一收口转发；非空时若正在下载则回退到可重试状态）
+        errorMsg: { type: String, default: '' }
     },
     emits: ['close'],
     data() {
@@ -79,8 +81,14 @@ export default {
             progress: { percent: 0, bytesPerSecond: 0, transferred: 0, total: 0 }
         };
     },
+    watch: {
+        // 错误信号到达：下载中失败则回退到可重试状态（错误提示由 App 层 nativeAlert 统一展示）
+        errorMsg(val) {
+            if (val) this.status = 'available';
+        }
+    },
     mounted() {
-        // 绑定预加载脚本传来的 OTA 事件
+        // 绑定预加载脚本传来的 OTA 事件（进度/下载完成；错误事件由 App 层统一收口，避免监听器互相清除）
         if (window.electronAPI && typeof window.electronAPI.onUpdateProgress === 'function') {
             window.electronAPI.onUpdateProgress((progressObj) => {
                 this.status = 'downloading';
@@ -92,30 +100,14 @@ export default {
                 this.status = 'ready';
             });
         }
-        if (window.electronAPI && typeof window.electronAPI.onUpdateError === 'function') {
-            window.electronAPI.onUpdateError((err) => {
-                this.status = 'available';
-                // 用原生提示避免重复弹窗
-                if (window.electronAPI.showMessage) {
-                    window.electronAPI.showMessage({
-                        type: 'error',
-                        title: '更新下载失败',
-                        message: String(err || '未知错误'),
-                        buttons: ['确定']
-                    });
-                } else {
-                    alert('更新下载失败: ' + String(err || ''));
-                }
-            });
-        }
     },
     methods: {
         startDownload() {
             this.status = 'downloading';
-            if (window.electronAPI.downloadUpdate) window.electronAPI.downloadUpdate();
+            window.electronAPI?.downloadUpdate?.();
         },
         installNow() {
-            if (window.electronAPI.installUpdate) window.electronAPI.installUpdate();
+            window.electronAPI?.installUpdate?.();
         },
         formatMB(bytes) {
             const mb = (Number(bytes) || 0) / 1024 / 1024;
