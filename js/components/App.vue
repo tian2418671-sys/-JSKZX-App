@@ -561,11 +561,14 @@ export default {
             const files = Array.from(e.target.files || []);
             e.target.value = ''; // 允许重复选择同一文件
             let added = 0;
+            let skippedExisting = 0;
             for (const f of files) {
                 try {
                     // Electron 33 起 File.path 已移除，经 preload 获取真实绝对路径
                     const realPath = window.electronAPI ? window.electronAPI.getPathForFile(f) : null;
-                    const isImage = /\.(png|webp)$/i.test(f.name);
+                    // ⚠️ 注意：isImage 必须覆盖全部图片格式（png/webp/jpg/jpeg），
+                    // 否则 jpg 卡片不读取 rawBuffer → 掉进 readBuffer IPC 白名单拦截 → 导入失败
+                    const isImage = /\.(png|webp|jpe?g)$/i.test(f.name);
                     const isJson = /\.json$/i.test(f.name);
                     const file = {
                         name: f.name,
@@ -582,12 +585,21 @@ export default {
                         console.warn(`读取文件内容失败 ${f.name}:`, readErr);
                     }
                     if (await parseAndAddCard(file)) added++;
+                    else if (file._skippedExisting) skippedExisting++;
+                    else console.warn(`未能解析为角色卡: ${f.name}（rawBuffer=${file.rawBuffer ? '有' : '无'}, path=${file.path}）`);
                 } catch (err) {
                     console.warn(`导入失败 ${f.name}`, err);
                 }
             }
-            if (added > 0) nativeAlert(`成功导入 ${added} 张角色卡！`, 'info');
-            else nativeAlert('未识别到有效的角色卡文件。', 'warning');
+            if (added > 0) {
+                let msg = `成功导入 ${added} 张角色卡！`;
+                if (skippedExisting > 0) msg += `\n${skippedExisting} 张已在库中，已跳过。`;
+                nativeAlert(msg, 'info');
+            } else if (skippedExisting > 0) {
+                nativeAlert(`所选文件已在库中（${skippedExisting} 张），未重复添加。\n若需导入新卡，请选择库中不存在的卡片文件。`, 'warning');
+            } else {
+                nativeAlert('未识别到有效的角色卡文件。', 'warning');
+            }
         };
         const importCards = () => { if (importFileInput.value) importFileInput.value.click(); };
 
@@ -2233,7 +2245,9 @@ export default {
         const parseAndAddCard = async (file) => {
             try {
                 // 去重拦截：同一路径的卡片已在库中则跳过（防止重复扫描/重复导入产生“影分身”）
+                // 标记 _skippedExisting 供上层区分"已在库中"与"无法解析"，给出准确提示
                 if (library.value.some(c => c.path === file.path)) {
+                    file._skippedExisting = true;
                     return false;
                 }
 
