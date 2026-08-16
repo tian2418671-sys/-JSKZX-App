@@ -686,9 +686,10 @@ export default {
         })());
         // 生效的系统预设分组（排除已被删除/重命名的，重启保持用户的选择）
         const defaultCategories = ref(allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key)));
-        // 持久化删除/重命名记录
+        // 持久化删除/重命名记录（localStorage + 主进程配置文件）
         watch(removedDefaultKeys, (v) => {
             try { localStorage.setItem('jsTavern_removedDefaultCategories', JSON.stringify(v)); } catch (e) { /* 忽略 */ }
+            saveUiSettingsToDisk();
         }, { deep: true });
 
         // 用户自定义添加的额外分组列表（存字符串；localStorage 持久化，重启不丢失）
@@ -700,9 +701,10 @@ export default {
             return [];
         })());
 
-        // 监听分类列表变化，实时写入 localStorage（新建/重命名/删除自动持久化）
+        // 监听分类列表变化，实时写入 localStorage + 主进程配置文件（新建/重命名/删除自动持久化）
         watch(customCategories, (newVal) => {
             try { localStorage.setItem('jsTavern_customCategories', JSON.stringify(newVal)); } catch (e) { /* 忽略 */ }
+            saveUiSettingsToDisk();
         }, { deep: true });
 
         // 合并系统预设与自定义分组
@@ -903,10 +905,24 @@ export default {
         })());
         watch(localCategoryMap, (v) => {
             try { localStorage.setItem('jsTavern_cardsCategory', JSON.stringify(v)); } catch (e) { /* 忽略 */ }
+            saveUiSettingsToDisk();
         }, { deep: true });
         // 单卡分类持久化辅助
         const persistCardCategory = (item) => {
             if (item && item.name) localCategoryMap.value[item.name] = item.category || '未分类';
+        };
+
+        // 【修复】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
+        // 生产模式 app:// 的 localStorage 不持久（Chromium 对 custom scheme 不落盘，实测重启丢失），
+        // 配置文件（userData/tavern_manager_config.json 的 uiSettings）才是跨重启权威载体。
+        const saveUiSettingsToDisk = () => {
+            if (!window.electronAPI || typeof window.electronAPI.saveUiSettings !== 'function') return;
+            window.electronAPI.saveUiSettings({
+                customCategories: Array.isArray(customCategories.value) ? customCategories.value : [],
+                removedDefaultKeys: Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [],
+                tagLangMode: tagLangMode.value,
+                localCategoryMap: localCategoryMap.value || {}
+            }).catch(() => { });
         };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
 
@@ -2243,6 +2259,31 @@ export default {
 
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
         onMounted(async () => {
+            // 【修复】从主进程配置文件加载持久化的 UI 状态（分组/语言/卡片分类）
+            // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，配置文件才是权威
+            try {
+                if (window.electronAPI && typeof window.electronAPI.getUiSettings === 'function') {
+                    const ui = await window.electronAPI.getUiSettings();
+                    if (ui) {
+                        if (Array.isArray(ui.customCategories)) {
+                            const clean = ui.customCategories.filter(c => typeof c === 'string' && c.trim() !== '');
+                            if (clean.length) customCategories.value = clean;
+                        }
+                        if (Array.isArray(ui.removedDefaultKeys)) {
+                            removedDefaultKeys.value = ui.removedDefaultKeys;
+                            // 按最新删除/重命名记录重新过滤生效预设
+                            defaultCategories.value = allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key));
+                        }
+                        if (ui.tagLangMode === 'cn' || ui.tagLangMode === 'en' || ui.tagLangMode === 'both') {
+                            tagLangMode.value = ui.tagLangMode;
+                        }
+                        if (ui.localCategoryMap && typeof ui.localCategoryMap === 'object') {
+                            localCategoryMap.value = ui.localCategoryMap;
+                        }
+                    }
+                }
+            } catch (e) { /* 忽略 */ }
+
             window.addEventListener('click', handleGlobalClick); // 点击任意处关闭右键菜单
             applyTheme(theme.value); // 应用已保存的主题
 
@@ -2903,6 +2944,7 @@ export default {
         })());
         watch(tagLangMode, (v) => {
             try { localStorage.setItem('jsTavern_tagLangMode', v); } catch (e) { /* 忽略 */ }
+            saveUiSettingsToDisk();
         });
 
         const toggleTagLangMode = () => {

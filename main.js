@@ -463,6 +463,36 @@ app.whenReady().then(() => {
     }
   });
 
+  // ==========================================
+  // 🎛️ 通用 UI 状态持久化（分组/语言/卡片分类等）
+  // 【修复】生产模式 app:// 的 localStorage 不持久（Chromium 对 custom scheme
+  // 的 localStorage 不落盘，实测重启后丢失），故关键 UI 状态改存主进程配置文件。
+  // ==========================================
+  ipcMain.handle('config:getUiSettings', () => {
+    try {
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        return config.uiSettings || {};
+      }
+    } catch (e) { console.error('读取 UI 设置失败', e); }
+    return {};
+  });
+
+  // 合并保存通用 UI 状态（增量合并，避免覆盖其他字段）
+  ipcMain.handle('config:saveUiSettings', (event, settings) => {
+    try {
+      let config = {};
+      if (fs.existsSync(configPath)) {
+        try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { config = {}; }
+      }
+      config.uiSettings = { ...(config.uiSettings || {}), ...(settings || {}) };
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：读取单个文件内容（返回二进制 Buffer；异步化防大图卡主进程消息循环）
   ipcMain.handle('file:readBuffer', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();

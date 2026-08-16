@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
     // 保存全局标签库到主进程配置文件
     saveGlobalTags: (tags) => ipcRenderer.invoke('config:saveGlobalTags', tags),
+    // 读取通用 UI 状态（分组/语言/卡片分类等；主进程配置文件，跨 dev/生产统一持久化）
+    getUiSettings: () => ipcRenderer.invoke('config:getUiSettings'),
+    // 合并保存通用 UI 状态到主进程配置文件
+    saveUiSettings: (settings) => ipcRenderer.invoke('config:saveUiSettings', settings),
     // 读取图片二进制数据（用于解析内置 JSON）
     readBuffer: (filePath) => ipcRenderer.invoke('file:readBuffer', filePath),
     // 读取文本（用于 JSON 卡片）
