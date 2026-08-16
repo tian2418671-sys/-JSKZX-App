@@ -1,3 +1,17 @@
+## SillyTavern 角色卡管理器 v1.6.5
+
+本地优先、完全离线可用的角色卡管理与解析工具（Electron + Vue3 + Tailwind + ECharts）。
+
+### ✨ v1.6.5 更新 —— 统一持久化中枢 + 导入功能修复 + 全盘强行收编
+
+- 🛡️ **统一持久化中枢（app_config.json 最高权威）**：全软件全局状态（分组/语言/全局标签池/API Key）统一收口到 `app_config.json` 物理文件（原子写入：临时文件 + rename，绝不丢数据）——生产模式下即便 localStorage 不持久也不丢配置
+- 🎴 **卡片覆盖层防冲刷（核心）**：手动改过的卡片分组/标签写入物理覆盖层（key=卡片路径），重新扫描/重启后**绝不**被自动分类覆盖（实测重扫后"恋活"分组完整保留）
+- 💾 **卡片变更三保险落盘**：新增 `persistCardUpdate` 统一入口（内存 + 覆盖层 + 物理重写 PNG），8 个标签/分类操作全部接入——即使 PNG 重写失败，配置库也能记住数据
+- 🔑 **API 配置物理持久化**：Endpoint / Key / Model 此前只存 localStorage（生产模式重启丢失），现已写入 app_config.json，重启自动恢复
+- 📥 **导入功能修复（Win10 等导入不了卡片）**：文件菜单导入改用浏览器 File API 直接读取内存内容，彻底绕过 IPC 路径白名单——从桌面/下载等任意位置导入卡片不再被拒（修复"未识别到有效的角色卡文件"）
+- 🚀 **全盘扫描强行收编通道**：新增 `sys:importExternalCards` 专属接口——全盘检索出的卡片可绕过源路径白名单强行复制入库（只校验目标库；同名跳过绝不覆盖；兼容字符串/对象两种格式）
+- 🔄 **旧配置自动迁移**：首次启动自动把旧 `tavern_manager_config.json` 的 globalTags/uiSettings 合并迁移到 app_config.json，历史数据零丢失
+
 ## SillyTavern 角色卡管理器 v1.6.4
 
 本地优先、完全离线可用的角色卡管理与解析工具（Electron + Vue3 + Tailwind + ECharts）。
