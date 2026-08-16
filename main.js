@@ -144,6 +144,17 @@ function writeTavernPNGChunk(buffer, updatedJson) {
 // 系统级应用数据目录（用于保存配置，不会随项目丢失）
 const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.json');
 
+// 【统一持久化中枢】app_config.json 作为全软件 UI/全局状态的唯一权威物理文件。
+// 原子写入：先写临时文件再 rename，防止写入中途崩溃导致配置损坏/丢失。
+const APP_CONFIG_PATH = path.join(app.getPath('userData'), 'app_config.json');
+
+// 原子写 JSON 配置文件（写临时文件 + rename 原子替换，绝不在原文件上直接覆盖）
+function atomicWriteJson(filePath, data) {
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+}
+
 // ================= 路径安全白名单 =================
 // 所有涉及任意 filePath 的 IPC handler 必须先过 isPathAllowed 校验，
 // 防止渲染层被注入脚本后越权读写/删除白名单外的任意本地文件。
@@ -490,6 +501,52 @@ app.whenReady().then(() => {
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
       return { success: true };
     } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // ==========================================
+  // 🛡️ 统一持久化中枢（app_config.json 最高权威）
+  // 全软件所有全局状态（语言/分组/全局标签池/卡片覆盖层/API Key 等）
+  // 统一经 sys:saveConfig 原子写入 app_config.json；sys:loadConfig 全量读取。
+  // ⚠️ 历史兼容：旧版 tavern_manager_config.json 的 globalTags / uiSettings
+  //    会在首次读取时自动合并迁移，绝不丢数据。
+  // ==========================================
+  ipcMain.handle('sys:loadConfig', () => {
+    try {
+      if (fs.existsSync(APP_CONFIG_PATH)) {
+        const raw = fs.readFileSync(APP_CONFIG_PATH, 'utf-8');
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+      }
+    } catch (e) {
+      console.error('读取全局物理配置失败:', e);
+    }
+    // 首次使用：合并迁移旧版配置文件中的 globalTags / uiSettings，保证历史数据不丢
+    try {
+      const legacy = {};
+      if (fs.existsSync(configPath)) {
+        const old = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (Array.isArray(old.globalTags)) legacy.globalTags = old.globalTags;
+        if (old.uiSettings && typeof old.uiSettings === 'object') legacy.uiSettings = old.uiSettings;
+        if (legacy.globalTags || legacy.uiSettings) {
+          atomicWriteJson(APP_CONFIG_PATH, legacy); // 一次性迁移落盘
+        }
+      }
+      return legacy;
+    } catch (e) {
+      console.error('迁移旧配置失败:', e);
+    }
+    return {};
+  });
+
+  // 安全写入配置（全量原子替换；渲染层必须传入完整对象）
+  ipcMain.handle('sys:saveConfig', (event, configData) => {
+    try {
+      atomicWriteJson(APP_CONFIG_PATH, (configData && typeof configData === 'object') ? configData : {});
+      return { success: true };
+    } catch (e) {
+      console.error('写入全局物理配置失败:', e);
       return { success: false, error: e.message };
     }
   });

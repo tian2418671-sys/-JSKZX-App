@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getUiSettings: () => ipcRenderer.invoke('config:getUiSettings'),
     // 合并保存通用 UI 状态到主进程配置文件
     saveUiSettings: (settings) => ipcRenderer.invoke('config:saveUiSettings', settings),
+    // 🛡️ 统一持久化中枢：读取 app_config.json 全量配置（语言/分组/全局标签池/卡片覆盖层/API Key）
+    loadAppConfig: () => ipcRenderer.invoke('sys:loadConfig'),
+    // 🛡️ 统一持久化中枢：原子写入 app_config.json（全量替换，必须传完整配置对象）
+    saveAppConfig: (configData) => ipcRenderer.invoke('sys:saveConfig', configData),
     // 读取图片二进制数据（用于解析内置 JSON）
     readBuffer: (filePath) => ipcRenderer.invoke('file:readBuffer', filePath),
     // 读取文本（用于 JSON 卡片）

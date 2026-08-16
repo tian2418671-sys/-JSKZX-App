@@ -613,8 +613,9 @@ export default {
             let saved = 0;
             for (const item of modifiedItems) {
                 try {
-                    const res = await window.electronAPI.saveCard(item.path, JSON.parse(JSON.stringify(item.data)));
-                    if (res && res.success) saved++;
+                    // 统一持久化中枢：写覆盖层 + 物理落盘
+                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
+                    saved++;
                 } catch (err) { console.error(`清理无效标签保存失败 [${item.name}]`, err); }
             }
             nativeAlert(`已清理 ${modifiedItems.length} 张卡片中的无效标签，并物理保存 ${saved} 张。`, 'info');
@@ -912,27 +913,115 @@ export default {
             try { localStorage.setItem('jsTavern_cardsCategory', JSON.stringify(v)); } catch (e) { /* 忽略 */ }
             saveUiSettingsToDisk();
         }, { deep: true });
-        // 单卡分类持久化辅助
+        // 单卡分类持久化辅助：写 localStorage 映射 + 统一配置覆盖层（双保险，防重扫冲刷）
         const persistCardCategory = (item) => {
-            if (item && item.name) localCategoryMap.value[item.name] = item.category || '未分类';
+            if (item && item.name) {
+                localCategoryMap.value[item.name] = item.category || '未分类';
+                // 🛡️ 同步写入统一配置覆盖层（key=path，重名卡片不再互相覆盖）
+                const key = (item.path || item.name || '').toString();
+                if (!appConfig.value.cardOverlays[key]) appConfig.value.cardOverlays[key] = {};
+                appConfig.value.cardOverlays[key].category = item.category || '未分类';
+                if (Array.isArray(item.customTags)) {
+                    appConfig.value.cardOverlays[key].tags = [...item.customTags];
+                }
+                syncConfigToDisk();
+            }
         };
 
-        // 【修复】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
-        // 生产模式 app:// 的 localStorage 不持久（Chromium 对 custom scheme 不落盘，实测重启丢失），
-        // 配置文件（userData/tavern_manager_config.json 的 uiSettings）才是跨重启权威载体。
-        const saveUiSettingsToDisk = () => {
-            if (!window.electronAPI || typeof window.electronAPI.saveUiSettings !== 'function') return;
-            // ⚠️【关键修复】IPC 前必须剥离 Vue 响应式 Proxy！
-            // ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
-            // "An object could not be cloned"（structured clone 失败）→ 保存永远静默失败。
-            // 统一用 JSON 序列化剥离（与 getPlainCardData 同款做法）。
+        // =========================================================
+        // 🛡️ 统一持久化中枢（app_config.json 最高权威）
+        // 全软件全局状态（语言/分组/全局标签池/卡片覆盖层/API Key）统一收口于此：
+        //   - syncConfigToDisk()   全局配置原子落盘（从各 ref 收集 → 剥离 Proxy → 写盘）
+        //   - persistCardUpdate()  卡片变更中枢（更新内存 + 写覆盖层 + 物理重写 PNG）
+        // ⚠️ 生产模式 app:// 的 localStorage 不持久，app_config.json 才是跨重启权威载体。
+        // =========================================================
+        const appConfig = ref({
+            language: 'zh-CN',
+            tagLangMode: 'both',
+            customCategories: [],
+            removedDefaultKeys: [],
+            globalTags: [],       // 全局/常用标签池
+            cardOverlays: {},     // 卡片属性物理覆盖表 { "卡片路径|名称": { category, tags } }
+            api: {                // API 配置（生产 app:// 下 localStorage 不持久，统一走物理文件）
+                endpoint: '',
+                key: '',
+                model: '',
+                type: 'openai'
+            }
+        });
+
+        // 统一写入磁盘：从各响应式源收集完整配置 → JSON 剥离 Vue 响应式 Proxy → 原子落盘
+        // ⚠️ 关键：ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
+        //    "An object could not be cloned"（structured clone 失败）→ 必须统一 JSON 序列化剥离。
+        const syncConfigToDisk = () => {
+            if (!window.electronAPI || typeof window.electronAPI.saveAppConfig !== 'function') return;
             const payload = {
+                language: 'zh-CN',
+                tagLangMode: tagLangMode.value,
                 customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
                 removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
-                tagLangMode: tagLangMode.value,
-                localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {}))
+                globalTags: JSON.parse(JSON.stringify(Array.isArray(systemCommonTags.value) ? systemCommonTags.value : [])),
+                cardOverlays: JSON.parse(JSON.stringify(appConfig.value.cardOverlays || {})),
+                api: {
+                    endpoint: apiEndpoint ? apiEndpoint.value : (appConfig.value.api && appConfig.value.api.endpoint) || '',
+                    key: apiKey ? apiKey.value : (appConfig.value.api && appConfig.value.api.key) || '',
+                    model: apiModel ? apiModel.value : (appConfig.value.api && appConfig.value.api.model) || '',
+                    type: apiType ? apiType.value : (appConfig.value.api && appConfig.value.api.type) || 'openai'
+                }
             };
-            window.electronAPI.saveUiSettings(payload).catch(() => { });
+            window.electronAPI.saveAppConfig(payload).catch(() => { });
+        };
+
+        // 卡片变更持久化中枢：只要卡片数据发生变化（标签/分类/名字等），统一经过此函数
+        // 三保险：① 更新内存状态 ② 写入 AppData 物理覆盖层（即使 PNG 重写失败也能记住）③ 物理重写文件
+        const persistCardUpdate = async (cardItem, updatePayload = {}) => {
+            if (!cardItem) return;
+
+            // 1. 更新内存状态
+            if (updatePayload.category !== undefined) cardItem.category = updatePayload.category;
+            if (updatePayload.tags !== undefined) {
+                cardItem.customTags = Array.isArray(updatePayload.tags) ? [...updatePayload.tags] : [];
+                // 同步到酒馆原生 data.tags 层（兼容 V1/V2）：合并去重，保留卡片原生自带标签
+                const dataLayer = cardItem.data?.data || cardItem.data || {};
+                if (!dataLayer.tags || typeof dataLayer.tags === 'string') dataLayer.tags = [];
+                dataLayer.tags = Array.from(new Set([...(dataLayer.tags || []), ...cardItem.customTags]));
+            }
+
+            // 2. 写入 AppData 物理覆盖层（双重保险：即使 PNG 重写失败，配置库也能记住数据）
+            const cardKey = cardItem.path || cardItem.name;
+            appConfig.value.cardOverlays[cardKey] = {
+                category: cardItem.category || '未分类',
+                tags: Array.isArray(cardItem.customTags) ? [...cardItem.customTags] : []
+            };
+            syncConfigToDisk();
+
+            // 3. 物理重写文件（PNG 的 tEXt 元数据块 / JSON 覆写），剥离 Proxy 后经 IPC
+            if (window.electronAPI && typeof window.electronAPI.saveCard === 'function' && cardItem.path && cardItem.data) {
+                try {
+                    await window.electronAPI.saveCard(cardItem.path, JSON.parse(JSON.stringify(cardItem.data)));
+                } catch (err) {
+                    console.error('卡片文件物理覆盖失败，已用物理配置文件兜底:', err);
+                }
+            }
+        };
+
+        // 【兼容保留】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
+        // 现在内部直接走统一中枢 syncConfigToDisk（app_config.json 权威），
+        // 同时保留旧 IPC config:saveUiSettings 写入（向后兼容旧版 tavern_manager_config.json）。
+        const saveUiSettingsToDisk = () => {
+            if (!window.electronAPI) return;
+            // 旧路径：写入 tavern_manager_config.json 的 uiSettings（兼容历史读取）
+            if (typeof window.electronAPI.saveUiSettings === 'function') {
+                const legacyPayload = {
+                    customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
+                    removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
+                    tagLangMode: tagLangMode.value,
+                    localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {}))
+                };
+                window.electronAPI.saveUiSettings(legacyPayload).catch(() => { });
+            }
+            // 新路径：统一写入 app_config.json（最高权威）
+            syncConfigToDisk();
         };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
 
@@ -968,15 +1057,18 @@ export default {
             return apiType.value === 'anthropic' ? 'claude-3-haiku-20240307' : 'local-model';
         };
 
-        // API 三件套（Endpoint / Key / Model）变化时自动持久化，重启软件后自动恢复
+        // API 三件套（Endpoint / Key / Model）变化时自动持久化：localStorage 兜底 + 统一配置中枢（app_config.json）
         watch(apiEndpoint, (v) => {
             try { localStorage.setItem('stc-api-endpoint', v || ''); } catch (e) { /* 忽略 */ }
+            syncConfigToDisk();
         });
         watch(apiKey, (v) => {
             try { localStorage.setItem('stc-api-key', v || ''); } catch (e) { /* 忽略 */ }
+            syncConfigToDisk();
         });
         watch(apiModel, (v) => {
             try { localStorage.setItem('stc-api-model', v || ''); } catch (e) { /* 忽略 */ }
+            syncConfigToDisk();
         });
 
         // API 协议类型：'openai'（OpenAI 兼容，默认）或 'anthropic'（Claude 原生）
@@ -985,6 +1077,7 @@ export default {
         const apiType = ref(savedApiType === 'anthropic' ? 'anthropic' : 'openai');
         watch(apiType, (v) => {
             try { localStorage.setItem('stc-api-type', v || 'openai'); } catch (e) { /* 忽略 */ }
+            syncConfigToDisk();
         });
 
         // 手动保存 API 配置（按钮触发，立即落盘 + 提示）
@@ -994,6 +1087,7 @@ export default {
                 localStorage.setItem('stc-api-key', apiKey.value);
                 localStorage.setItem('stc-api-model', apiModel.value);
                 localStorage.setItem('stc-api-type', apiType.value);
+                syncConfigToDisk(); // 🛡️ 统一中枢立即落盘（生产 app:// 下 localStorage 不持久，物理文件才是权威）
                 nativeAlert('API 设置已成功保存！', 'info');
             } catch (e) {
                 // 【修复】存储失败（配额超限/权限禁用）时必须如实告知，杜绝假成功
@@ -2028,6 +2122,28 @@ export default {
 
         // 自动分类与贴标签的核心逻辑
         const processAutoTagsAndCategory = (cardInfo) => {
+            // ---- 【🛡️ 最高优先级】物理配置库覆盖层恢复（用户手动改过的分类/标签，防重扫冲刷） ----
+            // 覆盖层 key = 卡片路径（path），兼容旧数据回退卡片名（name）
+            const overlayKey = (cardInfo.path || cardInfo.name || '').toString();
+            const overlay = appConfig.value.cardOverlays && appConfig.value.cardOverlays[overlayKey];
+            if (overlay) {
+                let overlayApplied = false;
+                if (overlay.category && overlay.category.trim() !== '') {
+                    cardInfo.category = overlay.category;
+                    overlayApplied = true;
+                }
+                // tags 存在即恢复（含空数组 = 用户清空过标签，同样要记住，禁止回退自动分类）
+                if (Array.isArray(overlay.tags)) {
+                    cardInfo.customTags = [...overlay.tags];
+                    // 同步回酒馆原生 data.tags（保证后续保存一致）
+                    const dataLayer = cardInfo.data?.data || cardInfo.data || {};
+                    if (dataLayer && Array.isArray(dataLayer.tags)) {
+                        dataLayer.tags = Array.from(new Set([...dataLayer.tags, ...overlay.tags]));
+                    }
+                    overlayApplied = true;
+                }
+                if (overlayApplied) return; // 覆盖层命中即视为用户配置，跳过自动分类，绝不冲刷
+            }
             // ---- 【优先应用导入的历史配置】 ----
             const savedConfig = importedConfig.value[cardInfo.name];
             if (savedConfig) {
@@ -2293,10 +2409,48 @@ export default {
 
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
         onMounted(async () => {
-            // 【修复】从主进程配置文件加载持久化的 UI 状态（分组/语言/卡片分类）
-            // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，配置文件才是权威
+            // =========================================================
+            // 🛡️ 统一持久化中枢装载：从 app_config.json（最高权威）恢复全部全局状态
+            // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，物理文件才是权威。
+            // ⚠️ 关键：IPC 返回的是纯 JSON 对象（无 Proxy），可直接赋给 ref。
+            // =========================================================
             try {
-                if (window.electronAPI && typeof window.electronAPI.getUiSettings === 'function') {
+                if (window.electronAPI && typeof window.electronAPI.loadAppConfig === 'function') {
+                    const cfg = await window.electronAPI.loadAppConfig();
+                    if (cfg && typeof cfg === 'object') {
+                        // 全局标签池（globalTags）
+                        if (Array.isArray(cfg.globalTags) && cfg.globalTags.length > 0) {
+                            const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
+                            if (cleanTags.length) systemCommonTags.value = Array.from(new Set([...systemCommonTags.value, ...cleanTags]));
+                        }
+                        // 自定义分组
+                        if (Array.isArray(cfg.customCategories)) {
+                            const clean = cfg.customCategories.filter(c => typeof c === 'string' && c.trim() !== '');
+                            if (clean.length) customCategories.value = clean;
+                        }
+                        // 删除/重命名的预设分组记录
+                        if (Array.isArray(cfg.removedDefaultKeys)) {
+                            removedDefaultKeys.value = cfg.removedDefaultKeys;
+                            defaultCategories.value = allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key));
+                        }
+                        // 标签语言模式
+                        if (cfg.tagLangMode === 'cn' || cfg.tagLangMode === 'en' || cfg.tagLangMode === 'both') {
+                            tagLangMode.value = cfg.tagLangMode;
+                        }
+                        // 卡片属性物理覆盖表（防重扫冲刷的核心数据）
+                        if (cfg.cardOverlays && typeof cfg.cardOverlays === 'object') {
+                            appConfig.value.cardOverlays = cfg.cardOverlays;
+                        }
+                        // API 配置（生产 app:// 下 localStorage 不持久，物理文件恢复）
+                        if (cfg.api && typeof cfg.api === 'object') {
+                            if (typeof cfg.api.endpoint === 'string' && cfg.api.endpoint) apiEndpoint.value = cfg.api.endpoint;
+                            if (typeof cfg.api.key === 'string') apiKey.value = cfg.api.key;
+                            if (typeof cfg.api.model === 'string' && cfg.api.model) apiModel.value = cfg.api.model;
+                            if (cfg.api.type === 'anthropic' || cfg.api.type === 'openai') apiType.value = cfg.api.type;
+                        }
+                    }
+                } else if (window.electronAPI && typeof window.electronAPI.getUiSettings === 'function') {
+                    // 旧版兼容回退：从 tavern_manager_config.json 的 uiSettings 读取（无 app_config.json 的旧环境）
                     const ui = await window.electronAPI.getUiSettings();
                     if (ui) {
                         if (Array.isArray(ui.customCategories)) {
@@ -2441,14 +2595,9 @@ export default {
                     isModified = true;
                 }
 
-                // 3. 物理落盘
-                if (isModified && window.electronAPI) {
-                    try {
-                        const plainData = JSON.parse(JSON.stringify(item.data));
-                        await window.electronAPI.saveCard(item.path, plainData);
-                    } catch (e) {
-                        console.error('手动贴标签物理保存失败:', e);
-                    }
+                // 3. 统一持久化中枢：写覆盖层 + 物理落盘（防止内存/PNG 单点失败丢数据）
+                if (isModified) {
+                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
                 }
             }
         };
@@ -2876,15 +3025,10 @@ export default {
                         isModified = true;
                     }
 
-                    // 3. 物理落盘
-                    if (isModified && window.electronAPI) {
-                        try {
-                            const plainData = JSON.parse(JSON.stringify(item.data));
-                            const res = await window.electronAPI.saveCard(item.path, plainData);
-                            if (res && res.success) savedCount++;
-                        } catch (e) {
-                            console.error(`批量添加标签物理保存失败 [${item.name}]:`, e);
-                        }
+                    // 3. 统一持久化中枢：写覆盖层 + 物理落盘
+                    if (isModified) {
+                        await persistCardUpdate(item, { tags: item.customTags, category: item.category });
+                        savedCount++;
                     }
                 }
 
@@ -2945,11 +3089,13 @@ export default {
             return defaults;
         })());
 
-        // 系统/常用标签库变化时自动持久化：主进程配置文件（跨 dev localhost / 生产 app:// 统一）+ localStorage 兜底（浏览器环境）
+        // 系统/常用标签库变化时自动持久化：统一配置中枢（app_config.json）+ 旧配置兼容 + localStorage 兜底（浏览器环境）
         watch(systemCommonTags, (val) => {
             try {
+                // 统一中枢：写入 app_config.json 的 globalTags（权威）
+                syncConfigToDisk();
+                // 兼容：旧 tavern_manager_config.json 的 globalTags 字段
                 if (window.electronAPI && window.electronAPI.saveGlobalTags) {
-                    // ⚠️ 关键：IPC 前必须深拷贝剥离 Vue 响应式 Proxy，否则 Electron 报 "An object could not be cloned"
                     window.electronAPI.saveGlobalTags(JSON.parse(JSON.stringify(val)));
                 }
             } catch (e) { /* 忽略 */ }
@@ -2982,13 +3128,15 @@ export default {
         })());
         watch(tagLangMode, (v) => {
             try { localStorage.setItem('jsTavern_tagLangMode', v); } catch (e) { /* 忽略 */ }
-            saveUiSettingsToDisk();
+            saveUiSettingsToDisk(); // 内部已走统一中枢 syncConfigToDisk
         });
 
         const toggleTagLangMode = () => {
             if (tagLangMode.value === 'both') tagLangMode.value = 'cn';
             else if (tagLangMode.value === 'cn') tagLangMode.value = 'en';
             else tagLangMode.value = 'both';
+            // 统一中枢物理落盘（watch 也会触发，这里显式调用一次确保立即保存）
+            syncConfigToDisk();
         };
 
         // 系统自带的酒馆标签预设库（结构化中英文）
@@ -3141,15 +3289,13 @@ export default {
                 if (isModified) modifiedItems.push(item);
             });
 
-            // 将受影响的卡片物理保存到本地（防止重启/重新扫描后脏标签复活）
+            // 将受影响的卡片物理保存到本地（防止重启/重新扫描后脏标签复活），并同步覆盖层
             let savedCount = 0;
             for (const item of modifiedItems) {
                 try {
-                    // 剥离 Vue 响应式 Proxy，经 IPC 写回物理文件
-                    const plainData = JSON.parse(JSON.stringify(item.data));
-                    const res = await window.electronAPI.saveCard(item.path, plainData);
-                    if (res && res.success) savedCount++;
-                    else console.warn(`清洗标签后保存失败 [${item.name}]:`, res && res.error);
+                    // 统一持久化中枢：写覆盖层 + 物理落盘
+                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
+                    savedCount++;
                 } catch (e) {
                     console.error(`清洗标签后物理保存失败 [${item.name}]:`, e);
                 }
@@ -3191,14 +3337,9 @@ export default {
                 isModified = true;
             }
 
-            // 3. 物理落盘（剥离 Proxy 后经 IPC 覆写原文件）
-            if (isModified && window.electronAPI) {
-                try {
-                    const plainData = JSON.parse(JSON.stringify(libItem.data));
-                    await window.electronAPI.saveCard(libItem.path, plainData);
-                } catch (e) {
-                    console.error('全局标签快捷添加物理保存失败:', e);
-                }
+            // 3. 统一持久化中枢：写覆盖层 + 物理落盘
+            if (isModified) {
+                await persistCardUpdate(libItem, { tags: libItem.customTags, category: libItem.category });
             }
         };
 
@@ -3241,15 +3382,10 @@ export default {
                     }
                 }
 
-                // 3. 物理落盘
-                if (isModified && window.electronAPI) {
-                    try {
-                        const plainData = JSON.parse(JSON.stringify(item.data));
-                        const res = await window.electronAPI.saveCard(item.path, plainData);
-                        if (res && res.success) savedCount++;
-                    } catch (e) {
-                        console.error(`批量打标物理保存失败 [${item.name}]:`, e);
-                    }
+                // 3. 统一持久化中枢：写覆盖层 + 物理落盘
+                if (isModified) {
+                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
+                    savedCount++;
                 }
             }
 
@@ -3471,11 +3607,9 @@ export default {
                             if (!dataLayer.tags.includes(cleanTag)) { dataLayer.tags.push(cleanTag); addedAny = true; }
                         });
 
-                        // 7. 物理覆写本地 PNG 文件（剥离 Proxy 转纯对象）
+                        // 7. 统一持久化中枢：写覆盖层 + 物理覆写本地 PNG 文件（剥离 Proxy 转纯对象）
                         if (addedAny) {
-                            const plainData = JSON.parse(JSON.stringify(card.data));
-                            const saveRes = await window.electronAPI.saveCard(card.path, plainData);
-                            if (!saveRes || !saveRes.success) throw new Error((saveRes && saveRes.error) || '物理保存失败');
+                            await persistCardUpdate(card, { tags: card.customTags, category: card.category });
                         }
                         successCount++;
                     }
@@ -3772,14 +3906,9 @@ export default {
                     isModified = true;
                 }
 
-                // 3. 物理落盘保存（剥离 Proxy 后经 IPC 覆写原文件）
-                if (isModified && window.electronAPI) {
-                    try {
-                        const plainData = JSON.parse(JSON.stringify(libItem.data));
-                        await window.electronAPI.saveCard(libItem.path, plainData);
-                    } catch (e) {
-                        console.error('标签物理保存失败:', e);
-                    }
+                // 3. 统一持久化中枢：写覆盖层 + 物理落盘（防止内存/PNG 单点失败丢数据）
+                if (isModified) {
+                    await persistCardUpdate(libItem, { tags: libItem.customTags, category: libItem.category });
                 }
             }
             tagModalVisible.value = false;
@@ -3846,14 +3975,9 @@ export default {
                 isModified = true;
             }
 
-            // 3. 物理落盘保存
-            if (isModified && window.electronAPI) {
-                try {
-                    const plainData = JSON.parse(JSON.stringify(libItem.data));
-                    await window.electronAPI.saveCard(libItem.path, plainData);
-                } catch (e) {
-                    console.error('删除标签物理保存失败:', e);
-                }
+            // 3. 统一持久化中枢：写覆盖层 + 物理落盘
+            if (isModified) {
+                await persistCardUpdate(libItem, { tags: libItem.customTags, category: libItem.category });
             }
         };
 
@@ -3871,7 +3995,17 @@ export default {
             if (!libItem) return nativeAlert("未找到原文件路径。");
             try {
                 const res = await window.electronAPI.saveCard(libItem.path, getPlainCardData());
-                if (res.success) showToast('角色卡保存成功！', 'success');
+                if (res.success) {
+                    // 🛡️ 覆盖保存后同步覆盖层，防止重扫冲刷本次改动
+                    const key = (libItem.path || libItem.name || '').toString();
+                    if (!appConfig.value.cardOverlays[key]) appConfig.value.cardOverlays[key] = {};
+                    appConfig.value.cardOverlays[key].category = libItem.category || '未分类';
+                    if (Array.isArray(libItem.customTags)) {
+                        appConfig.value.cardOverlays[key].tags = [...libItem.customTags];
+                    }
+                    syncConfigToDisk();
+                    showToast('角色卡保存成功！', 'success');
+                }
                 else nativeAlert(`保存失败: ${res.error}`, 'error');
             } catch (e) { nativeAlert(`发生错误: ${e.message}`, 'error'); }
         };
@@ -5528,7 +5662,9 @@ export default {
             showWbImportModal, importSourceBook, importCandidates, selectedImportEntries, importableSourceBooks,
             openWbImportModal, pickImportSource, confirmImportEntries,
             // 🚀 系统版本更新检测
-            showUpdateModal, updateInfo, updateErrorMsg, checkForUpdatesManual, openExternalUrl
+            showUpdateModal, updateInfo, updateErrorMsg, checkForUpdatesManual, openExternalUrl,
+            // 🛡️ 统一持久化中枢（app_config.json 最高权威）
+            appConfig, syncConfigToDisk, persistCardUpdate
         };
         provide('appCtx', ctx);
         return ctx;
