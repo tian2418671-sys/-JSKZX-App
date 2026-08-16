@@ -1303,10 +1303,6 @@ app.whenReady().then(() => {
       if (!filePaths || filePaths.length === 0) {
         return { success: false, error: "未选择任何卡片" };
       }
-      // 【安全加固】源卡片均须在白名单内
-      for (const fp of filePaths) {
-        if (!isPathAllowed(fp)) return forbidden();
-      }
       
       const { canceled, filePaths: targetDirs } = await dialog.showOpenDialog({
         properties: ['openDirectory'],
@@ -1322,7 +1318,8 @@ app.whenReady().then(() => {
       
       let successCount = 0;
       for (const srcPath of filePaths) {
-        if (fs.existsSync(srcPath)) {
+        // 【安全加固】跳过越界路径，不中断整批操作，只丢弃非法项
+        if (srcPath && isPathAllowed(srcPath) && fs.existsSync(srcPath)) {
           const fileName = path.basename(srcPath);
           const destPath = path.join(exportRoot, fileName);
           fs.copyFileSync(srcPath, destPath);
