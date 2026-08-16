@@ -566,24 +566,71 @@ export default {
                 try {
                     // Electron 33 起 File.path 已移除，经 preload 获取真实绝对路径
                     const realPath = window.electronAPI ? window.electronAPI.getPathForFile(f) : null;
-                    // ⚠️ 注意：isImage 必须覆盖全部图片格式（png/webp/jpg/jpeg），
-                    // 否则 jpg 卡片不读取 rawBuffer → 掉进 readBuffer IPC 白名单拦截 → 导入失败
                     const isImage = /\.(png|webp|jpe?g)$/i.test(f.name);
                     const isJson = /\.json$/i.test(f.name);
+
+                    // 🛡️ 破碎图标修复：文件菜单导入的卡片若用 blob URL 做图片地址，
+                    // 应用重启/刷新后 blob URL 立即失效 → 缩略图全变破碎图标。
+                    // 正确做法：先把文件物理复制到当前库目录（与拖拽导入一致），
+                    // 再用 local-file:// 永久路径做图片地址 → 重启后图片依然正常显示。
+                    let finalPath = realPath || f.name;
+                    let finalUrl = null;
+                    let rawBuffer = null;
+                    let rawText = null;
+
+                    if (window.electronAPI && realPath && currentFolderPath.value) {
+                        // Electron 环境 + 已设置库目录：复制文件到库，用永久路径
+                        try {
+                            const copied = await window.electronAPI.copyToLibrary([realPath], currentFolderPath.value);
+                            if (copied && copied.length > 0) {
+                                finalPath = copied[0];
+                                finalUrl = isImage ? 'local-file://img/?path=' + encodeURIComponent(copied[0]) : null;
+                            }
+                        } catch (copyErr) {
+                            console.warn(`复制到库目录失败，回退原始路径: ${f.name}`, copyErr);
+                        }
+                    }
+
                     const file = {
                         name: f.name,
-                        path: realPath || f.name,
-                        url: isImage ? URL.createObjectURL(f) : null
+                        path: finalPath,
+                        url: finalUrl
                     };
-                    // 🛡️ 根因修复：文件菜单导入的卡片可能位于白名单之外（桌面/下载/任意目录），
-                    // 此时 readBuffer/readText IPC 会被 isPathAllowed 拒绝 → 报"未识别到有效的角色卡文件"。
-                    // 直接用浏览器 File API 读取内存内容，parseAndAddCard 优先使用，彻底绕过 IPC 白名单。
-                    try {
-                        if (isImage) file.rawBuffer = await f.arrayBuffer();
-                        else if (isJson) file.rawText = await f.text();
-                    } catch (readErr) {
-                        console.warn(`读取文件内容失败 ${f.name}:`, readErr);
+
+                    // 读取文件内容：优先从复制后的库内文件读取（白名单内，IPC 可靠）；
+                    // 复制失败/无库目录时回退浏览器 File API（绕过白名单，保证能导入）
+                    if (isImage) {
+                        try {
+                            if (window.electronAPI && finalPath !== (realPath || f.name)) {
+                                const res = await window.electronAPI.readBuffer(finalPath);
+                                if (res && typeof res === 'object' && res.buffer) {
+                                    rawBuffer = res.buffer;
+                                }
+                            }
+                        } catch (err) { /* 忽略 */ }
+                        if (!rawBuffer) {
+                            try { rawBuffer = await f.arrayBuffer(); } catch (readErr) { console.warn(`读取图片内容失败 ${f.name}:`, readErr); }
+                        }
+                        file.rawBuffer = rawBuffer;
+                    } else if (isJson) {
+                        try {
+                            if (window.electronAPI && finalPath !== (realPath || f.name)) {
+                                const res = await window.electronAPI.readText(finalPath);
+                                if (typeof res === 'string') rawText = res;
+                            }
+                        } catch (err) { /* 忽略 */ }
+                        if (rawText === null || rawText === undefined) {
+                            try { rawText = await f.text(); } catch (readErr) { console.warn(`读取 JSON 内容失败 ${f.name}:`, readErr); }
+                        }
+                        file.rawText = rawText;
                     }
+
+                    // 🛡️ 兜底：若 Electron 环境无法用 local-file 协议展示（无库目录时），
+                    // 用 blob URL 保证本次会话内能看到图（重启后由用户重新导入解决）
+                    if (!file.url && isImage) {
+                        file.url = URL.createObjectURL(f);
+                    }
+
                     if (await parseAndAddCard(file)) added++;
                     else if (file._skippedExisting) skippedExisting++;
                     else console.warn(`未能解析为角色卡: ${f.name}（rawBuffer=${file.rawBuffer ? '有' : '无'}, path=${file.path}）`);
