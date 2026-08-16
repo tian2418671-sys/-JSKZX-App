@@ -50,7 +50,8 @@
         "nsis"
       ],
       "signAndEditExecutable": false,
-      "icon": "icon.ico"
+      "icon": "icon.ico",
+      "artifactName": "${name}-setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
