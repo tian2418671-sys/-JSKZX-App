@@ -4,6 +4,7 @@ node_modules/
 # 构建产物
 dist/
 dist_new/
+dist2/
 out/
 web/
 css/tailwind.out.css
