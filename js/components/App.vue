@@ -566,11 +566,21 @@ export default {
                     // Electron 33 起 File.path 已移除，经 preload 获取真实绝对路径
                     const realPath = window.electronAPI ? window.electronAPI.getPathForFile(f) : null;
                     const isImage = /\.(png|webp)$/i.test(f.name);
+                    const isJson = /\.json$/i.test(f.name);
                     const file = {
                         name: f.name,
                         path: realPath || f.name,
                         url: isImage ? URL.createObjectURL(f) : null
                     };
+                    // 🛡️ 根因修复：文件菜单导入的卡片可能位于白名单之外（桌面/下载/任意目录），
+                    // 此时 readBuffer/readText IPC 会被 isPathAllowed 拒绝 → 报"未识别到有效的角色卡文件"。
+                    // 直接用浏览器 File API 读取内存内容，parseAndAddCard 优先使用，彻底绕过 IPC 白名单。
+                    try {
+                        if (isImage) file.rawBuffer = await f.arrayBuffer();
+                        else if (isJson) file.rawText = await f.text();
+                    } catch (readErr) {
+                        console.warn(`读取文件内容失败 ${f.name}:`, readErr);
+                    }
                     if (await parseAndAddCard(file)) added++;
                 } catch (err) {
                     console.warn(`导入失败 ${f.name}`, err);
@@ -2230,8 +2240,17 @@ export default {
                 let parsedData = null;
 
                 if (file.name.toLowerCase().endsWith('.json')) {
-                    // 读取本地 JSON 文本
-                    const text = await window.electronAPI.readText(file.path);
+                    // 🛡️ 优先使用内存内容（文件菜单导入已用 File API 读取，绕过 IPC 白名单）
+                    let text = null;
+                    if (typeof file.rawText === 'string') {
+                        text = file.rawText;
+                    } else if (window.electronAPI && typeof window.electronAPI.readText === 'function') {
+                        const res = await window.electronAPI.readText(file.path);
+                        // readText 返回 forbidden() 对象（{success:false}）时不能当文本解析
+                        if (typeof res === 'string') text = res;
+                        else console.warn(`读取 JSON 失败（可能路径不在白名单）: ${file.name}`, res && res.error);
+                    }
+                    if (text === null) return false;
                     const parsed = JSON.parse(text);
                     // 内容校验：非角色卡的 JSON（如 config.json）直接跳过，不进入解析与入库
                     if (!isCharacterCardData(parsed)) {
@@ -2240,10 +2259,21 @@ export default {
                     }
                     parsedData = parsed;
                 } else {
-                    // 读取本地图片 Buffer
-                    const buffer = await window.electronAPI.readBuffer(file.path);
+                    // 🛡️ 优先使用内存内容（文件菜单导入已用 File API 读取，绕过 IPC 白名单）
+                    let buffer = null;
+                    if (file.rawBuffer instanceof ArrayBuffer) {
+                        buffer = file.rawBuffer;
+                    } else if (file.rawBuffer instanceof Uint8Array) {
+                        buffer = file.rawBuffer.buffer;
+                    } else if (window.electronAPI && typeof window.electronAPI.readBuffer === 'function') {
+                        const res = await window.electronAPI.readBuffer(file.path);
+                        // readBuffer 返回 forbidden() 对象（{success:false}）时不能取 .buffer 解析
+                        if (res && typeof res === 'object' && res.buffer) buffer = res.buffer;
+                        else console.warn(`读取图片失败（可能路径不在白名单）: ${file.name}`, res && res.error);
+                    }
+                    if (!buffer) return false;
                     // 复用解析函数（Buffer 经 IPC 传递后为 Uint8Array，取 .buffer 为 ArrayBuffer）
-                    parsedData = parsePNGChunk(buffer.buffer) || deepScanForJSON(buffer.buffer);
+                    parsedData = parsePNGChunk(buffer) || deepScanForJSON(buffer);
                 }
 
                 if (parsedData) {

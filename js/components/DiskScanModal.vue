@@ -174,26 +174,38 @@ export default {
                 this.scanFinished = true;
             }
         },
-        // 收编入库：把扫出的卡片物理复制到当前库目录（同名跳过），并通知父级追加入库
+        // 收编入库：把扫出的卡片强行物理复制到当前库目录（同名跳过），并通知父级追加入库
+        // 🚀 走 sys:importExternalCards 专属收编通道——源路径为全盘检索结果不校验白名单，
+        //    解决"外部磁盘角落的卡片因路径越界被 readBuffer 拒绝导致无法导入"的问题。
         async importCards() {
             if (!this.currentLibraryPath) {
                 this.alertMsg('当前未加载任何卡片库目录，无法导入。请先打开一个卡片存放的文件夹！', 'warning');
                 return;
             }
             if (this.foundFiles.length === 0) return;
-            if (!window.electronAPI || typeof window.electronAPI.copyToLibrary !== 'function') {
-                this.alertMsg('该功能需要 Electron 桌面环境。', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.importExternalCards !== 'function') {
+                this.alertMsg('该功能需要 Electron 桌面环境（请升级到含收编通道的新版本）。', 'warning');
                 return;
             }
 
             this.isImporting = true;
-            this.currentStatusText = '正在执行物理文件收编...';
+            this.currentStatusText = '正在执行物理文件收编 (突破路径限制)...';
             try {
-                const copiedFiles = await window.electronAPI.copyToLibrary(this.foundFiles, this.currentLibraryPath);
-                this.alertMsg(`成功将 ${copiedFiles.length} 张卡片收编到当前库！`, 'info');
-                // 携带复制结果（目标路径数组）通知 App.vue 精准追加入库，无需全库重扫
-                this.$emit('imported', copiedFiles);
-                this.$emit('close');
+                // 调用专属收编通道（目标必须是当前卡片库；源为扫描结果不校验）
+                const result = await window.electronAPI.importExternalCards(this.foundFiles, this.currentLibraryPath);
+
+                if (result && result.success) {
+                    const copiedCount = (result.copied || []).length;
+                    const skippedCount = (result.skipped || []).length;
+                    let msg = `🎉 成功将 ${copiedCount} 张迷失的卡片强行收编到当前库！`;
+                    if (skippedCount > 0) msg += `\n${skippedCount} 张因同名已跳过（未覆盖）。`;
+                    this.alertMsg(msg, 'info');
+                    // 携带复制结果（目标路径数组）通知 App.vue 精准追加入库，无需全库重扫
+                    this.$emit('imported', result.copied || []);
+                    this.$emit('close');
+                } else {
+                    throw new Error((result && result.error) || '收编失败');
+                }
             } catch (err) {
                 console.error('导入失败:', err);
                 this.alertMsg('导入失败: ' + ((err && err.message) || err), 'error');

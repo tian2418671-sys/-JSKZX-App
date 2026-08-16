@@ -796,6 +796,58 @@ app.whenReady().then(() => {
     return copiedFiles; // 返回成功复制的文件路径数组
   });
 
+  // ==========================================
+  // 🚀 全盘检索专属：外部卡片强行收编引擎
+  // 全盘扫描找到的卡片可能散布在白名单之外的任意磁盘角落，
+  // 该通道只校验【目标】必须是白名单内的卡片库，源路径为检索结果不校验。
+  // ⚠️ 安全增强：同名文件跳过（绝不覆盖已有卡片）；格式白名单 + 目标白名单双重拦截。
+  // ==========================================
+  ipcMain.handle('sys:importExternalCards', async (event, sourceFiles, destFolder) => {
+    try {
+      // 1. 严格校验目标文件夹（必须是白名单内的卡片库）
+      if (!isPathAllowed(destFolder)) {
+        throw new Error('安全拦截：目标导入路径不在合法的卡片库范围内！');
+      }
+      // 2. 确保目标文件夹存在
+      if (!fs.existsSync(destFolder) || !fs.statSync(destFolder).isDirectory()) {
+        throw new Error('目标导入文件夹不存在或不是目录！');
+      }
+
+      const copiedList = [];
+      const skippedList = [];
+
+      for (const file of sourceFiles) {
+        // 兼容全盘扫描返回的对象 { path: '...' } 或纯字符串
+        const srcPath = (typeof file === 'string' ? file : (file && file.path)) || '';
+        if (!srcPath) continue;
+        // 源路径存在性检查（不存在/被占用则跳过，不中断整体）
+        try {
+          if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) continue;
+        } catch (e) { continue; }
+
+        const fileName = path.basename(srcPath);
+        // 格式白名单（与全盘扫描/拖拽一致）
+        if (!/\.(png|webp|json)$/i.test(fileName)) continue;
+
+        const destPath = path.join(destFolder, fileName);
+        // 同名文件跳过（绝不覆盖用户已有卡片），记录到 skippedList 便于前端提示
+        if (fs.existsSync(destPath)) {
+          skippedList.push(fileName);
+          continue;
+        }
+
+        // 3. 执行物理拷贝（源路径为全盘检索结果，属用户主动授权，不做白名单限制）
+        fs.copyFileSync(srcPath, destPath);
+        copiedList.push(destPath);
+      }
+
+      return { success: true, copied: copiedList, skipped: skippedList };
+    } catch (err) {
+      console.error('收编外部卡片失败:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {

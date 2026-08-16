@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showMessage: (options) => ipcRenderer.invoke('dialog:showMessage', options),
     // 系统级拖拽复制文件到卡片库
     copyToLibrary: (sourcePaths, targetFolder) => ipcRenderer.invoke('file:copyToLibrary', sourcePaths, targetFolder),
+    // 🚀 全盘检索专属：外部卡片强行收编（只校验目标库，源为检索结果不校验；同名跳过）
+    importExternalCards: (sourceFiles, destFolder) => ipcRenderer.invoke('sys:importExternalCards', sourceFiles, destFolder),
     // 获取拖拽文件的真实路径（Electron 33 起 File.path 已废弃，改用 webUtils）
     getPathForFile: (file) => webUtils.getPathForFile(file),
     // 聊天测试接口（OpenAI 兼容 / Anthropic 双协议，经主进程转发以绕过 CORS；apiType: 'openai' | 'anthropic'）
