@@ -32,6 +32,13 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tian2418671-sys",
+        "repo": "JSKZX"
+      }
+    ],
     "files": [
       "web/**/*",
       "main.js",
@@ -51,6 +58,7 @@
     }
   },
   "dependencies": {
-    "dompurify": "^3.4.13"
+    "dompurify": "^3.4.13",
+    "electron-updater": "^6.8.9"
   }
 }

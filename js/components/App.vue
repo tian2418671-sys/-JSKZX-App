@@ -269,7 +269,6 @@
         :show="showUpdateModal"
         :info="updateInfo"
         @close="showUpdateModal = false"
-        @download="openExternalUrl(updateInfo.downloadUrl)"
     />
 
         <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
@@ -5303,7 +5302,7 @@ export default {
         };
 
         // =========================================================
-        // �🚀 系统版本更新检测系统（GitHub API 轻量探测 + 浏览器跳转下载）
+        // 🚀 OTA 自动更新系统（electron-updater：检测/下载/进度/安装）
         // =========================================================
         const showUpdateModal = ref(false);
         const updateInfo = ref({
@@ -5313,44 +5312,66 @@ export default {
             releaseNotes: '',
             downloadUrl: ''
         });
+        let isManualCheck = false; // 区分手动/静默检测（静默检测到已最新时不打扰）
 
-        // 手动检测更新（用于设置菜单里的按钮）
+        // 手动检测更新（用于设置菜单里的按钮）：触发检查，结果通过事件驱动
         const checkForUpdatesManual = async () => {
-            addLog('🔄 正在向 GitHub 请求最新版本信息...', 'info');
+            addLog('🔄 正在检查更新...', 'info');
+            isManualCheck = true;
             try {
                 const res = await window.electronAPI.checkUpdate();
-                if (res && res.success) {
-                    if (res.hasUpdate) {
-                        updateInfo.value = res;
-                        showUpdateModal.value = true;
-                        addLog(`🎉 发现新版本: v${res.latestVersion}`, 'success');
-                    } else {
-                        nativeAlert(`当前已是最新版本 (v${res.currentVersion})，无需更新！`, 'info');
-                    }
-                } else {
+                if (!res || !res.success) {
+                    isManualCheck = false;
                     nativeAlert(`更新检测失败: ${res?.error || '网络错误'}`, 'error');
                 }
+                // 成功：结果通过 update-available / update-not-available 事件到达
             } catch (err) {
+                isManualCheck = false;
                 nativeAlert(`更新检测失败: ${err.message || '网络错误'}`, 'error');
             }
         };
 
-        // 后台静默检测（开机时自动调用，有更新才弹窗，没更新不打扰）
+        // 后台静默检测（开机时自动调用）：有更新才弹窗，没更新不打扰
         const silentCheckForUpdates = async () => {
             if (!window.electronAPI || typeof window.electronAPI.checkUpdate !== 'function') return;
             try {
-                const res = await window.electronAPI.checkUpdate();
-                if (res && res.success && res.hasUpdate) {
-                    updateInfo.value = res;
-                    showUpdateModal.value = true;
-                    addLog(`🎉 开机检测到新版本: v${res.latestVersion}`, 'success');
-                }
+                await window.electronAPI.checkUpdate();
+                // 有更新时 update-available 事件会弹窗；无更新时 update-not-available 静默忽略
             } catch (err) {
-                console.warn('静默检测更新失败', err); // 网络异常时静默忽略，不打扰用户
+                console.warn('静默检测更新失败', err);
             }
         };
 
-        // 打开外部链接（跳转系统浏览器前往 GitHub 下载）
+        // 绑定 OTA 更新事件（弹窗驱动）
+        const setupUpdateListeners = () => {
+            if (!window.electronAPI) return;
+            if (typeof window.electronAPI.onUpdateAvailable === 'function') {
+                window.electronAPI.onUpdateAvailable((info) => {
+                    updateInfo.value = { ...(info || {}) };
+                    showUpdateModal.value = true;
+                    addLog(`🎉 发现新版本: v${(info && info.latestVersion) || ''}`, 'success');
+                });
+            }
+            if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
+                window.electronAPI.onUpdateNotAvailable((info) => {
+                    if (isManualCheck) {
+                        isManualCheck = false;
+                        nativeAlert(`当前已是最新版本 (v${(info && info.currentVersion) || ''})！`, 'info');
+                    }
+                });
+            }
+            if (typeof window.electronAPI.onUpdateError === 'function') {
+                window.electronAPI.onUpdateError((err) => {
+                    if (isManualCheck) {
+                        isManualCheck = false;
+                        nativeAlert(`更新检测失败: ${err}`, 'error');
+                    }
+                });
+            }
+        };
+        setupUpdateListeners();
+
+        // 打开外部链接（跳转系统浏览器）
         const openExternalUrl = (url) => {
             if (!url) return;
             window.electronAPI.openExternal(url);

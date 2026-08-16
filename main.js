@@ -8,6 +8,7 @@
  * - 文件夹选择通过原生 dialog 弹出，选中的路径静默保存到系统 userData 目录。
  */
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
+const { autoUpdater } = require('electron-updater'); // 【新增】OTA 自动更新模块（发布需上传 latest.yml）
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1118,39 +1119,77 @@ app.whenReady().then(() => {
   });
 
   // 2. 检测 GitHub 最新 Release 版本（轻量探测，无需 electron-updater）
+  // ==========================================
+  // 🚀 全新自动更新系统 (OTA Auto-Updater)
+  // ==========================================
+  // 禁用自动下载，改为由用户确认后再下载；退出应用时自动安装
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  // 1. 触发检查更新（结果通过事件广播给渲染进程）
   ipcMain.handle('sys:checkUpdate', async () => {
     try {
-      const currentVersion = app.getVersion(); // 自动读取 package.json 中的 version
-
-      // ⚠️ 本项目 GitHub 仓库路径（Release 发布时同步 tag 为 vX.Y.Z）
-      const repoPath = 'tian2418671-sys/JSKZX';
-
-      const response = await fetch(`https://api.github.com/repos/${repoPath}/releases/latest`, {
-        headers: { 'User-Agent': 'SillyTavern-Manager-App' } // GitHub API 要求带 UA
-      });
-
-      if (!response.ok) {
-        return { success: false, error: `GitHub API 请求失败: ${response.status}` };
-      }
-
-      const data = await response.json();
-      // 剥离版本号前面的 'v'，例如 'v1.0.1' -> '1.0.1'
-      const latestVersion = (data.tag_name || '').replace(/^v/i, '');
-
-      // 简单的语义化版本号比较 (例如: 1.0.1 > 1.0.0)
-      const isNewer = latestVersion.localeCompare(currentVersion, undefined, { numeric: true, sensitivity: 'base' }) > 0;
-
-      return {
-        success: true,
-        hasUpdate: isNewer,
-        currentVersion: currentVersion,
-        latestVersion: latestVersion,
-        releaseNotes: data.body, // GitHub 上的 Release 描述
-        downloadUrl: data.html_url
-      };
+      if (isDev) return { success: false, error: '开发模式跳过更新检测' };
+      await autoUpdater.checkForUpdates();
+      return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
     }
+  });
+
+  // 2. 触发开始下载
+  ipcMain.handle('sys:downloadUpdate', () => {
+    autoUpdater.downloadUpdate();
+    return { success: true };
+  });
+
+  // 3. 触发退出并安装
+  ipcMain.handle('sys:installUpdate', () => {
+    autoUpdater.quitAndInstall();
+    return { success: true };
+  });
+
+  // 4. 将更新状态广播给渲染进程
+  const broadcastUpdate = (channel, payload) => {
+    BrowserWindow.getAllWindows().forEach(w => w.webContents.send(channel, payload));
+  };
+
+  autoUpdater.on('update-available', (info) => {
+    // releaseNotes 兼容字符串或 GitHub 提供的数组形态
+    const notes = Array.isArray(info.releaseNotes)
+      ? info.releaseNotes.map(n => (n && n.note) || '').join('\n')
+      : (info.releaseNotes || '');
+    broadcastUpdate('update-available', {
+      success: true,
+      hasUpdate: true,
+      currentVersion: app.getVersion(),
+      latestVersion: info.version,
+      releaseNotes: notes,
+      downloadUrl: `https://github.com/tian2418671-sys/JSKZX/releases/tag/v${info.version}`
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    broadcastUpdate('update-not-available', {
+      success: true,
+      hasUpdate: false,
+      currentVersion: app.getVersion(),
+      latestVersion: (info && info.version) || '',
+      releaseNotes: '',
+      downloadUrl: ''
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    broadcastUpdate('update-error', (err && err.message) || String(err));
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    broadcastUpdate('update-progress', progressObj);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    broadcastUpdate('update-downloaded', info);
   });
 
   // 智能规范化 OpenAI 兼容聊天端点：兼容只填 /v1、误填 /v1/models、或完整 /chat/completions 三种情况

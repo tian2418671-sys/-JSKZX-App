@@ -80,6 +80,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
     duplicateFile: (filePath) => ipcRenderer.invoke('sys:duplicateFile', filePath),
     // 🚀 版本更新检测：用系统默认浏览器打开外部链接
     openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
-    // 🚀 版本更新检测：探测 GitHub 最新 Release 版本
-    checkUpdate: () => ipcRenderer.invoke('sys:checkUpdate')
+    // 🚀 OTA 自动更新：检查更新（触发后结果通过事件回调）
+    checkUpdate: () => ipcRenderer.invoke('sys:checkUpdate'),
+    // 🚀 OTA 自动更新：开始下载更新包
+    downloadUpdate: () => ipcRenderer.invoke('sys:downloadUpdate'),
+    // 🚀 OTA 自动更新：退出并安装更新
+    installUpdate: () => ipcRenderer.invoke('sys:installUpdate'),
+    // 🚀 OTA 自动更新：监听发现新版本
+    onUpdateAvailable: (cb) => {
+        ipcRenderer.removeAllListeners('update-available');
+        ipcRenderer.on('update-available', (event, info) => cb(info));
+    },
+    // 🚀 OTA 自动更新：监听无新版本
+    onUpdateNotAvailable: (cb) => {
+        ipcRenderer.removeAllListeners('update-not-available');
+        ipcRenderer.on('update-not-available', (event, info) => cb(info));
+    },
+    // 🚀 OTA 自动更新：监听下载进度
+    onUpdateProgress: (cb) => {
+        ipcRenderer.removeAllListeners('update-progress');
+        ipcRenderer.on('update-progress', (event, progressObj) => cb(progressObj));
+    },
+    // 🚀 OTA 自动更新：监听下载完成
+    onUpdateDownloaded: (cb) => {
+        ipcRenderer.removeAllListeners('update-downloaded');
+        ipcRenderer.on('update-downloaded', (event, info) => cb(info));
+    },
+    // 🚀 OTA 自动更新：监听更新错误
+    onUpdateError: (cb) => {
+        ipcRenderer.removeAllListeners('update-error');
+        ipcRenderer.on('update-error', (event, err) => cb(err));
+    }
 });
