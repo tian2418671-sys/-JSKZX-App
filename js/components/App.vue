@@ -1116,7 +1116,9 @@ export default {
                 ],
                 ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title'],
                 ALLOW_DATA_ATTR: false,
-                FORBID_ATTR: [/^on/i],
+                // 【安全修复】FORBID_ATTR 只接受属性名字符串（内部哈希查找，不支持正则），
+                // 显式列出常见事件属性（真正生效的兜底写法）；ALLOWED_ATTR 白名单仍是主防线
+                FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'oninput', 'onanimationstart', 'onanimationend', 'onpointerdown', 'onpointerup', 'onpointermove', 'ondragstart', 'ondrop'],
                 // 【安全平衡】允许内嵌 base64 图(data:image/)与相对路径，禁止 http(s) 外联
                 // （防追踪像素/内网探测；外联图需求可再评估放开）
                 ALLOWED_URI_REGEXP: /^(?:data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i

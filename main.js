@@ -491,8 +491,9 @@ app.whenReady().then(() => {
   // IPC：指定文件夹/盘符扫描（未传路径时弹出原生文件夹选择器；useSizeFilter 控制体积过滤开关）
   ipcMain.handle('scan-target-folder', async (event, targetPath, useSizeFilter) => {
     let folderToScan = targetPath;
+    let trustedByDialog = false;
 
-    // 如果没有传入路径，则弹出原生文件夹选择器让用户选
+    // 没有传入路径 → 弹出原生文件夹选择器（系统对话框需真实用户点击，天然可信）
     if (!folderToScan) {
       const result = await dialog.showOpenDialog({
         properties: ['openDirectory'],
@@ -500,10 +501,19 @@ app.whenReady().then(() => {
       });
       if (result.canceled || result.filePaths.length === 0) return [];
       folderToScan = result.filePaths[0];
+      trustedByDialog = true;
+    } else {
+      // 【安全修复】直接传入路径的唯一合法场景是「点击盘符按钮扫描整个磁盘」：
+      // 严格限定为纯盘符格式（如 C: 或 C:\），拒绝任意子目录字符串，
+      // 防止脚本借 scan-target-folder 传任意路径实现白名单自扩权
+      if (!/^[A-Za-z]:\\?$/.test(folderToScan)) {
+        return { path: null, files: [], error: '非法路径参数' };
+      }
+      trustedByDialog = true; // 盘符格式已收紧，视为可信授权
     }
 
-    // 【安全加固】用户显式选择的扫描根目录加入白名单（扫描结果可正常读写/展示）
-    addAllowedRoot(folderToScan);
+    // 【安全修复】仅可信来源（真实对话框 或 合法纯盘符）才加入白名单
+    if (trustedByDialog) addAllowedRoot(folderToScan);
 
     event.sender.send('scan-progress', { status: `正在急速遍历: ${folderToScan}`, count: 0 });
     // 将 useSizeFilter 传递给扫描引擎
@@ -628,8 +638,16 @@ app.whenReady().then(() => {
   // IPC：物理跨目录拷贝卡片到酒馆 characters 目录（本地直推，无需 API / 无 CORS / 无 403）
   ipcMain.handle('tavern:pushDir', async (event, sourcePaths, stRootPath) => {
     try {
-      // 【安全加固】源卡片须在白名单内；酒馆根目录加入白名单
-      addAllowedRoot(stRootPath);
+      // 【安全修复】不再无条件 addAllowedRoot(stRootPath)：
+      // ① 已在白名单（本次会话经 dialog:selectGenericFolder / autoDetectPath 真实来源加入）→ 直接通过
+      // ② 未在白名单（如重启后从持久化设置读取的酒馆路径）→ 必须通过酒馆指纹验证
+      //    （server.js + public 目录同时存在）才信任并加入白名单，堵死任意路径自扩权后门
+      if (!isPathAllowed(stRootPath)) {
+        const hasServerJs = fs.existsSync(path.join(stRootPath, 'server.js'));
+        const hasPublicDir = fs.existsSync(path.join(stRootPath, 'public'));
+        if (!hasServerJs || !hasPublicDir) return forbidden();
+        addAllowedRoot(stRootPath);
+      }
       for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
         if (!isPathAllowed(src)) return forbidden();
       }
