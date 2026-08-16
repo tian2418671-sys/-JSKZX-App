@@ -747,6 +747,14 @@ export default {
             if (defaultCategories.value.some(c => c.key === key)) return true;
             return false;
         });
+        // 【修复】当前分组是否可重命名（预设/自定义均可；全部/未分类/过滤视图不可）
+        const currentCategoryRenamable = computed(() => {
+            const key = currentCategoryKey.value;
+            if (key === 'all' || key === 'has_lorebook' || key === 'has_regex' || key === 'uncategorized') return false;
+            if (customCategories.value.includes(key)) return true;
+            if (defaultCategories.value.some(c => c.key === key)) return true;
+            return false;
+        });
 
         // 删除分组（自定义 或 预设分组均可；【修复】预设删除持久化，重启不再重新生成；卡片自动归入未分类）
         const deleteCustomCategory = async (categoryName) => {
@@ -764,14 +772,17 @@ export default {
                 // 预设分组：记录已删除 + 从当前预设移除（持久化，重启不再恢复）
                 if (!removedDefaultKeys.value.includes(preset.key)) removedDefaultKeys.value.push(preset.key);
                 defaultCategories.value = defaultCategories.value.filter(c => c.key !== preset.key);
-                // 卡片匹配中/英/key 三种存储形态归入未分类
+                // 卡片匹配中/英/key 三种存储形态归入未分类，并同步持久化
                 library.value.forEach(card => {
-                    if (card.category === preset.cn || card.category === preset.en || card.category === preset.key) card.category = '未分类';
+                    if (card.category === preset.cn || card.category === preset.en || card.category === preset.key) {
+                        card.category = '未分类';
+                        persistCardCategory(card);
+                    }
                 });
             } else {
                 customCategories.value = customCategories.value.filter(c => c !== categoryName);
-                // 原属于该分组的卡片重置为未分类
-                library.value.forEach(card => { if (card.category === categoryName) card.category = '未分类'; });
+                // 原属于该分组的卡片重置为未分类，并同步持久化
+                library.value.forEach(card => { if (card.category === categoryName) { card.category = '未分类'; persistCardCategory(card); } });
             }
             const removedKey = preset ? preset.key : categoryName;
             if (currentCategoryKey.value === removedKey) currentCategoryKey.value = 'all';
@@ -815,14 +826,16 @@ export default {
             // 2. 将新名称加入自定义分组列表
             customCategories.value.push(cleanNewName);
             
-            // 3. 批量同步更新库中所有属于该旧分组的卡片归属（预设需匹配中/英/key 三种存储形态）
+            // 3. 批量同步更新库中所有属于该旧分组的卡片归属（预设需匹配中/英/key 三种存储形态），并同步持久化分类
             library.value.forEach(item => {
                 if (oldPreset) {
                     if (item.category === oldPreset.cn || item.category === oldPreset.en || item.category === oldPreset.key) {
                         item.category = cleanNewName;
+                        persistCardCategory(item);
                     }
                 } else if (item.category === currentKey) {
                     item.category = cleanNewName;
+                    persistCardCategory(item);
                 }
             });
             
@@ -846,6 +859,7 @@ export default {
                 if (!libItem) return;
                 const preset = defaultCategories.value.find(c => c.key === val);
                 libItem.category = preset ? preset.cn : val;
+                persistCardCategory(libItem); // 【修复】单卡改分类持久化
             }
         });
 
@@ -856,6 +870,7 @@ export default {
             if (libItem) {
                 const preset = defaultCategories.value.find(c => c.key === currentCardCategory.value);
                 libItem.category = preset ? preset.cn : currentCardCategory.value;
+                persistCardCategory(libItem); // 【修复】单卡改分类持久化
             }
         };
 
@@ -874,6 +889,25 @@ export default {
 
         // 记录从外部导入的配置，格式: { '卡片原名': { category: 'xx', customTags: ['A', 'B'] } }
         const importedConfig = ref({});
+
+        // 【修复】卡片分类实时持久化（localStorage，跨重启保留）
+        // 分组重命名/删除/移动后同步写入；重扫/启动时优先于自动分类恢复。
+        // 说明：category 是前端库字段（不在卡片文件 JSON 内），无法用 saveCard 落盘，
+        // 因此用 localStorage 作为其持久化载体，与「导出/导入库配置」双保险。
+        const localCategoryMap = ref((() => {
+            try {
+                const saved = JSON.parse(localStorage.getItem('jsTavern_cardsCategory'));
+                if (saved && typeof saved === 'object' && !Array.isArray(saved)) return saved;
+            } catch (e) { /* 忽略 */ }
+            return {};
+        })());
+        watch(localCategoryMap, (v) => {
+            try { localStorage.setItem('jsTavern_cardsCategory', JSON.stringify(v)); } catch (e) { /* 忽略 */ }
+        }, { deep: true });
+        // 单卡分类持久化辅助
+        const persistCardCategory = (item) => {
+            if (item && item.name) localCategoryMap.value[item.name] = item.category || '未分类';
+        };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
 
         // ================= [ 多选与批量操作状态 ] =================
@@ -1975,6 +2009,11 @@ export default {
                 cardInfo.customTags = savedConfig.customTags || [];
                 return; // 如果有历史配置，就跳过自动分类，直接使用用户的历史数据
             }
+            // ---- 【修复】localStorage 持久化的手动分类（优先级高于自动分类，重启/重扫后保留） ----
+            if (localCategoryMap.value[cardInfo.name]) {
+                cardInfo.category = localCategoryMap.value[cardInfo.name];
+                return;
+            }
             // ---- 【以下为原有的自动规则代码】 ----
             const data = cardInfo.data?.data || cardInfo.data;
             if (!data) return;
@@ -2539,6 +2578,7 @@ export default {
             if (newCat && newCat.trim() !== '') {
                 const cleanCat = newCat.trim();
                 item.category = cleanCat;
+                persistCardCategory(item); // 【修复】右键单卡移动分类持久化
                 if (!isCategoryKnown(cleanCat)) {
                     customCategories.value.push(cleanCat);
                 }
@@ -2670,6 +2710,7 @@ export default {
                 library.value.forEach(item => {
                     if (selectedIds.value.includes(item.id)) {
                         item.category = cleanCat;
+                        persistCardCategory(item); // 【修复】批量改分类持久化
                     }
                 });
 
@@ -2695,6 +2736,7 @@ export default {
                 library.value.forEach(item => {
                     if (selectedIds.value.includes(item.id)) {
                         item.category = cleanCat;
+                        persistCardCategory(item); // 【修复】批量移分组持久化
                     }
                 });
                 if (!isCategoryKnown(cleanCat)) {
@@ -5288,7 +5330,7 @@ export default {
             library, openFromLibrary,
             allCategories, customCategories, currentCategoryKey,
             getCategoryDisplayName, addNewCategory,
-            renameCurrentCategory, deleteCustomCategory, currentCategoryDeletable,
+            renameCurrentCategory, deleteCustomCategory, currentCategoryDeletable, currentCategoryRenamable,
             currentCardCategory, handleCardCategoryChange,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
