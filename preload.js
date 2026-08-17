@@ -9,6 +9,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     selectFolder: () => ipcRenderer.invoke('dialog:openFolder'),
     // 加载上次的配置（返回扫描结果）
     loadConfig: () => ipcRenderer.invoke('config:load'),
+    // 重新扫描当前角色卡库目录（刷新按钮用，无需重新弹目录选择框）
+    rescanLibrary: (folderPath) => ipcRenderer.invoke('library:rescan', folderPath),
+    // 📁 物理文件夹分组：在库目录下新建分组文件夹
+    createGroupFolder: (data) => ipcRenderer.invoke('fs:createGroupFolder', data),
+    // 📁 物理文件夹分组：重命名分组文件夹（同步迁移子文件夹内卡片路径）
+    renameGroupFolder: (data) => ipcRenderer.invoke('fs:renameGroupFolder', data),
+    // 📁 物理文件夹分组：移动卡片文件到目标分组文件夹
+    moveCardToGroup: (data) => ipcRenderer.invoke('fs:moveCardToGroup', data),
+    // 📸 历史快照：更新快照配置（开关/冷却间隔/最大保留数）
+    updateSnapshotConfig: (config) => ipcRenderer.invoke('settings:updateSnapshotConfig', config),
+    // 📸 历史快照：手动为指定卡片创建快照（绕过冷却）
+    createManualSnapshot: (filePath) => ipcRenderer.invoke('card:createManualSnapshot', filePath),
     // 读取全局标签库（主进程配置文件，跨 dev/生产统一持久化）
     getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
     // 保存全局标签库到主进程配置文件

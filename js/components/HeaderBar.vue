@@ -98,6 +98,52 @@
                             </div>
                         </div>
                         <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-300">🧹 导入时忽略卡片自带标签</span>
+                                <button @click="sanitizeImportedTags = !sanitizeImportedTags"
+                                        :class="sanitizeImportedTags ? 'bg-indigo-600' : 'bg-zinc-700'"
+                                        class="w-9 h-5 rounded-full relative transition-colors shrink-0">
+                                    <span :class="sanitizeImportedTags ? 'translate-x-4' : 'translate-x-0'"
+                                          class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"></span>
+                                </button>
+                            </div>
+                            <span class="block text-[10px] text-zinc-500 mt-1">开启后，新导入的卡片不采用其自带的杂乱标签，防止污染全局标签池</span>
+                        </div>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-zinc-300">📸 历史快照自动备份</span>
+                                <button @click="snapshotConfig.enabled = !snapshotConfig.enabled"
+                                        :class="snapshotConfig.enabled ? 'bg-emerald-600' : 'bg-zinc-700'"
+                                        class="w-9 h-5 rounded-full relative transition-colors shrink-0">
+                                    <span :class="snapshotConfig.enabled ? 'translate-x-4' : 'translate-x-0'"
+                                          class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"></span>
+                                </button>
+                            </div>
+                            <div v-if="snapshotConfig.enabled" class="flex gap-2 mt-1">
+                                <div class="flex-1 min-w-0">
+                                    <label class="block text-[10px] text-zinc-400 mb-0.5">冷却间隔</label>
+                                    <select v-model.number="snapshotConfig.intervalMinutes" class="w-full h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1 text-[10px] text-zinc-200 focus:outline-none focus:border-emerald-500">
+                                        <option :value="1">1 分钟</option>
+                                        <option :value="5">5 分钟</option>
+                                        <option :value="15">15 分钟</option>
+                                        <option :value="30">30 分钟</option>
+                                        <option :value="60">1 小时</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <label class="block text-[10px] text-zinc-400 mb-0.5">最大保留</label>
+                                    <select v-model.number="snapshotConfig.maxSnapshots" class="w-full h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1 text-[10px] text-zinc-200 focus:outline-none focus:border-emerald-500">
+                                        <option :value="3">3 份</option>
+                                        <option :value="5">5 份</option>
+                                        <option :value="10">10 份</option>
+                                        <option :value="20">20 份</option>
+                                        <option :value="50">50 份</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <span v-else class="block text-[10px] text-amber-500/80 mt-1">自动快照已关闭，可在卡片工具栏手动创建快照</span>
+                        </div>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between text-zinc-300 mb-1">
                                 <span>🖼️ 界面 UI 字号</span>
                                 <span class="text-indigo-400 font-mono font-bold">{{ appSettings.uiFontSize }}px</span>
@@ -191,6 +237,8 @@ export default {
             cleanGlobalTagsPrompt: ctx.cleanGlobalTagsPrompt,
             startDedupeScan: ctx.startDedupeScan,
             viewOptions: ctx.viewOptions,
+            sanitizeImportedTags: ctx.sanitizeImportedTags,
+            snapshotConfig: ctx.snapshotConfig,
             showApiModal: ctx.showApiModal,
             setTheme: ctx.setTheme,
             theme: ctx.theme,

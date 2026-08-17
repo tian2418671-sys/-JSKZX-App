@@ -53,6 +53,98 @@ process.on('unhandledRejection', (reason) => {
   console.error('未处理的 Promise 拒绝:', reason);
 });
 
+// ================= [ 📸 历史快照配置与节流阀（可在设置面板动态更新） ] =================
+// snapshotConfig 默认值；前端通过 settings:updateSnapshotConfig IPC 实时同步
+let snapshotConfig = {
+  enabled: true,         // 是否开启自动快照
+  intervalMinutes: 5,    // 自动快照冷却间隔（分钟）
+  maxSnapshots: 10       // 单张卡片最多保留的快照数量
+};
+// 记录卡片上一次生成快照的时间 { [filePath]: timestamp }
+const cardLastBackupMap = new Map();
+
+/**
+ * 清理指定卡片超量的历史快照（按修改时间排序，保留最新的 N 份）
+ * @param {string} historyDir .bak_history 目录
+ * @param {string} baseFileName 卡片文件名（不含扩展名）
+ * @param {string} ext 卡片扩展名
+ * @param {number} maxCount 最大保留数（<=0 不清理）
+ */
+async function cleanupOldSnapshots(historyDir, baseFileName, ext, maxCount) {
+  try {
+    if (!maxCount || maxCount <= 0) return;
+    const allFiles = await fs.promises.readdir(historyDir);
+    // 精确前缀匹配（base + '_'），避免 "卡A" 误配到 "卡A2" 的快照
+    const cardBackups = allFiles.filter(f => f.startsWith(baseFileName + '_') && f.endsWith(ext));
+    if (cardBackups.length <= maxCount) return;
+    const fileStats = await Promise.all(
+      cardBackups.map(async (f) => {
+        const p = path.join(historyDir, f);
+        const stat = await fs.promises.stat(p);
+        return { fileName: f, path: p, mtimeMs: stat.mtimeMs };
+      })
+    );
+    fileStats.sort((a, b) => a.mtimeMs - b.mtimeMs); // 旧 → 新
+    const deleteCount = fileStats.length - maxCount;
+    for (let i = 0; i < deleteCount; i++) {
+      await fs.promises.unlink(fileStats[i].path).catch(() => { });
+    }
+  } catch (err) {
+    // 清理失败不影响保存
+  }
+}
+
+/**
+ * 核心快照生成与清理函数（保存前调用 = 备份旧版本；手动触发绕过冷却）
+ * @param {string} filePath 原始角色卡物理路径
+ * @param {boolean} isManual 是否为手动触发（绕过冷却节流阀）
+ */
+async function processCardSnapshot(filePath, isManual = false) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { success: false, error: '文件不存在' };
+
+    // 1. 关闭了自动快照且非手动触发，直接跳过
+    if (!snapshotConfig.enabled && !isManual) {
+      return { success: true, skipped: true, reason: '自动快照已关闭' };
+    }
+
+    const now = Date.now();
+    const lastBackupTime = cardLastBackupMap.get(filePath) || 0;
+    const cooldownMs = Math.max(0, snapshotConfig.intervalMinutes || 0) * 60 * 1000;
+
+    // 2. 自动快照冷却节流（手动触发无视冷却）
+    if (!isManual && cooldownMs > 0 && (now - lastBackupTime < cooldownMs)) {
+      return { success: true, skipped: true, reason: '处于快照冷却时间内' };
+    }
+
+    // 3. 构建备份目录 .bak_history（与卡片同目录）
+    const fileDir = path.dirname(filePath);
+    const baseName = path.basename(filePath, path.extname(filePath));
+    const ext = path.extname(filePath);
+    const historyDir = path.join(fileDir, '.bak_history');
+    if (!fs.existsSync(historyDir)) {
+      await fs.promises.mkdir(historyDir, { recursive: true });
+    }
+
+    // 4. 生成带精准时间戳的备份文件名（手动快照带 _manual 标记）
+    const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFileName = `${baseName}_${timestampStr}${isManual ? '_manual' : ''}${ext}`;
+    const backupFilePath = path.join(historyDir, backupFileName);
+
+    // 复制当前文件进行备份（保存前调用 = 备份的是旧版本）
+    await fs.promises.copyFile(filePath, backupFilePath);
+    cardLastBackupMap.set(filePath, now);
+
+    // 5. 自动清理超出最大保留数量的旧快照
+    await cleanupOldSnapshots(historyDir, baseName, ext, snapshotConfig.maxSnapshots);
+
+    return { success: true, backupFilePath, isManual };
+  } catch (error) {
+    console.error('📸 生成快照失败:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // ================= [ PNG 角色卡写入工具 ] =================
 // CRC32 校验（PNG 块标准算法）
 function crc32(buf) {
@@ -443,6 +535,98 @@ app.whenReady().then(() => {
       console.error('读取配置失败', e);
     }
     return null;
+  });
+
+  // IPC：重新扫描当前角色卡库目录（刷新按钮用，无需重新弹出目录选择框）
+  // 安全契约：folderPath 必须已在白名单内（即用户此前通过选择目录/启动加载确认过的库），
+  // 否则拒绝，避免被注入脚本利用来枚举任意磁盘目录。
+  ipcMain.handle('library:rescan', async (event, folderPath) => {
+    try {
+      if (!folderPath || typeof folderPath !== 'string') {
+        return { folderPath: null, files: [], error: '未指定库目录' };
+      }
+      if (!isPathAllowed(folderPath)) return forbidden();
+      if (!fs.existsSync(folderPath)) {
+        return { folderPath: null, files: [], error: '库目录不存在，请重新打开角色库目录。' };
+      }
+      return scanAndSaveFolder(folderPath);
+    } catch (e) {
+      return { folderPath: null, files: [], error: e.message };
+    }
+  });
+
+  // 📁 物理新建分组文件夹（在库目录下创建子文件夹，白名单校验）
+  ipcMain.handle('fs:createGroupFolder', async (event, { libraryPath, groupName } = {}) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      const safeGroupName = String(groupName || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+      if (!safeGroupName) return { success: false, error: '分组名无效' };
+      const targetPath = path.join(libraryPath, safeGroupName);
+      if (!isPathAllowed(targetPath)) return forbidden();
+      if (!fs.existsSync(targetPath)) {
+        await fs.promises.mkdir(targetPath, { recursive: true });
+      }
+      return { success: true, folderName: safeGroupName, path: targetPath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 📁 物理重命名分组文件夹（同步迁移子文件夹内所有卡片的物理路径）
+  ipcMain.handle('fs:renameGroupFolder', async (event, { libraryPath, oldName, newName } = {}) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      const oldPath = path.join(libraryPath, String(oldName || ''));
+      const safeNewName = String(newName || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+      if (!safeNewName) return { success: false, error: '新分组名无效' };
+      const newPath = path.join(libraryPath, safeNewName);
+      if (!isPathAllowed(oldPath) || !isPathAllowed(newPath)) return forbidden();
+      if (fs.existsSync(oldPath)) {
+        await fs.promises.rename(oldPath, newPath);
+      } else {
+        await fs.promises.mkdir(newPath, { recursive: true });
+      }
+      return { success: true, newName: safeNewName };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 📁 物理移动卡片文件到目标分组文件夹（目标为根/未分类时移回库根）
+  ipcMain.handle('fs:moveCardToGroup', async (event, { libraryPath, cardPath, targetGroup } = {}) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      if (!cardPath || typeof cardPath !== 'string' || !isPathAllowed(cardPath)) return forbidden();
+      // 只处理库目录内的卡片（外部全盘扫描/收编的卡先收编入库，避免跨盘 EXDEV 移动失败）
+      const libRoot = path.resolve(libraryPath);
+      if (!path.resolve(cardPath).startsWith(libRoot + path.sep)) {
+        return { success: false, error: '该卡片不在当前库目录内，请先将其收编到库目录再移动分组。' };
+      }
+      const isRootTarget = !targetGroup || targetGroup === '未分类' || targetGroup === '全部' || targetGroup === 'all';
+      const targetGroupDir = isRootTarget
+        ? libraryPath
+        : path.join(libraryPath, String(targetGroup).replace(/[\\/:*?"<>|]/g, '_').trim());
+      if (!isPathAllowed(targetGroupDir)) return forbidden();
+      if (!fs.existsSync(targetGroupDir)) {
+        await fs.promises.mkdir(targetGroupDir, { recursive: true });
+      }
+      const fileName = path.basename(cardPath);
+      const destPath = path.join(targetGroupDir, fileName);
+      if (path.resolve(cardPath) !== path.resolve(destPath)) {
+        if (fs.existsSync(destPath)) {
+          // 目标同名已存在：追加时间戳后缀，绝不覆盖原文件
+          const ext = path.extname(fileName);
+          const base = path.basename(fileName, ext);
+          const destPath2 = path.join(targetGroupDir, `${base}_移动_${Date.now()}${ext}`);
+          await fs.promises.rename(cardPath, destPath2);
+          return { success: true, newFilePath: destPath2, newSubFolder: isRootTarget ? '' : String(targetGroup) };
+        }
+        await fs.promises.rename(cardPath, destPath);
+      }
+      return { success: true, newFilePath: destPath, newSubFolder: isRootTarget ? '' : String(targetGroup) };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   });
 
   // IPC：读取全局标签库（userData/tavern_manager_config.json 的 globalTags 字段）
@@ -848,6 +1032,24 @@ app.whenReady().then(() => {
     }
   });
 
+  // 📸 快照配置更新（设置面板动态更新开关/冷却/最大保留数）
+  ipcMain.handle('settings:updateSnapshotConfig', (event, config) => {
+    if (config && typeof config === 'object') {
+      if (typeof config.enabled === 'boolean') snapshotConfig.enabled = config.enabled;
+      const interval = Number(config.intervalMinutes);
+      if (!Number.isNaN(interval) && interval >= 0) snapshotConfig.intervalMinutes = interval;
+      const max = Number(config.maxSnapshots);
+      if (!Number.isNaN(max) && max >= 0) snapshotConfig.maxSnapshots = max;
+    }
+    return { success: true, config: snapshotConfig };
+  });
+
+  // 📸 手动创建快照（绕过冷却节流阀，立即为指定卡片备份当前状态）
+  ipcMain.handle('card:createManualSnapshot', async (event, filePath) => {
+    if (!filePath || typeof filePath !== 'string' || !isPathAllowed(filePath)) return forbidden();
+    return await processCardSnapshot(filePath, true);
+  });
+
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {
@@ -856,33 +1058,9 @@ app.whenReady().then(() => {
         return { success: false, error: "原文件不存在，无法保存。" };
       }
 
-      // --- 【新增】版本控制：创建 .bak_history 隐藏备份 ---
-      const dir = path.dirname(filePath);
-      const bakDir = path.join(dir, '.bak_history');
-      if (!fs.existsSync(bakDir)) {
-        await fs.promises.mkdir(bakDir, { recursive: true });
-      }
-
-      const fileName = path.basename(filePath);
-      const timeStr = new Date().toISOString().replace(/[:.]/g, '-');
-      const bakPath = path.join(bakDir, `${timeStr}_${fileName}`);
-
-      // 复制当前老文件到备份目录
-      await fs.promises.copyFile(filePath, bakPath);
-
-      // --- 【新增】备份数量上限：每张卡只保留最近 5 份快照，防止 .bak_history 磁盘膨胀 ---
-      try {
-        const baks = await fs.promises.readdir(bakDir);
-        const mine = baks.filter(f => f.includes(fileName));
-        if (mine.length > 5) {
-          // 文件名以 ISO 时间戳开头，字典序即时间序；删除最旧的超出部分
-          const toDelete = mine.sort().slice(0, mine.length - 5);
-          for (const oldBak of toDelete) {
-            await fs.promises.unlink(path.join(bakDir, oldBak)).catch(() => { });
-          }
-        }
-      } catch (cleanupErr) { /* 清理失败不影响本次保存 */ }
-      // --------------------------------------------------
+      // 📸 版本控制：保存前自动备份旧文件到 .bak_history
+      // （可配置：开关/冷却间隔/最大保留数；手动触发走 card:createManualSnapshot 绕过冷却）
+      await processCardSnapshot(filePath, false);
 
       const ext = path.extname(filePath).toLowerCase();
       if (ext === '.json') {
@@ -1541,6 +1719,42 @@ app.on('window-all-closed', () => {
  * @param {string} folderPath 用户选择的文件夹
  * @returns {{folderPath: string|null, files: Array, error?: string}}
  */
+// 📁 递归遍历库目录：一级子文件夹名 = 物理分组；跳过隐藏文件夹与系统黑名单
+// relPath 为相对库根的路径（'' 表示根目录），一级文件夹名作为 category 识别
+function walkLibraryDir(dirPath, relPath, files, categories) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch (e) {
+    return; // 权限不足 / 系统锁定文件夹静默跳过
+  }
+  for (const f of entries) {
+    if (f.name.startsWith('.')) continue; // .bak_history / .trash 等隐藏文件夹
+    const absPath = path.join(dirPath, f.name);
+    if (f.isDirectory()) {
+      const lowerName = f.name.toLowerCase();
+      if (skipFolders.includes(lowerName)) continue; // node_modules 等海量垃圾目录黑名单
+      if (!relPath) categories.add(f.name); // 一级文件夹名 = 物理分组
+      const subRel = relPath ? path.join(relPath, f.name) : f.name;
+      walkLibraryDir(absPath, subRel, files, categories);
+    } else if (f.isFile()) {
+      const ext = path.extname(f.name).toLowerCase();
+      if (ext !== '.png' && ext !== '.webp' && ext !== '.json') continue;
+      const isImage = ext === '.png' || ext === '.webp';
+      let mtime = 0;
+      try { mtime = fs.statSync(absPath).mtimeMs || 0; } catch (e) { /* 文件被占用/删除时忽略 */ }
+      files.push({
+        name: f.name,
+        path: absPath,
+        url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null,
+        mtime,
+        subFolder: relPath || '', // 相对库根的文件夹路径（'' = 根目录）
+        category: relPath ? relPath.split(path.sep)[0] : '未分类' // 一级文件夹名 = 物理分组
+      });
+    }
+  }
+}
+
 function scanAndSaveFolder(folderPath) {
   try {
     // 【新增】记录当前库根目录，供白名单校验使用
@@ -1554,23 +1768,12 @@ function scanAndSaveFolder(folderPath) {
     config.lastFolder = folderPath;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-    // 读取目录下所有文件，过滤出支持的格式
-    const files = fs.readdirSync(folderPath);
-    const validFiles = files
-      .filter(f => f.match(/\.(png|webp|json)$/i))
-      .map(f => {
-        const absPath = path.join(folderPath, f);
-        // 仅图片文件生成立绘展示链接（JSON 无立绘，避免无谓请求）
-        // 路径经查询参数传递，规避 URL 规范化对盘符冒号的影响
-        const isImage = /\.(png|webp)$/i.test(f);
-        return {
-          name: f,
-          path: absPath,
-          url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
-        };
-      });
+    // 📁 递归扫描库目录：子文件夹名自动识别为物理分组
+    const files = [];
+    const categories = new Set();
+    walkLibraryDir(folderPath, '', files, categories);
 
-    return { folderPath, files: validFiles };
+    return { folderPath, files, categories: Array.from(categories) };
   } catch (e) {
     return { folderPath: null, files: [], error: e.message };
   }

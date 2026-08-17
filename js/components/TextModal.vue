@@ -56,6 +56,11 @@ export default {
         modelValue: { type: String, default: '' },
         fontSize: { type: Number, default: 14 }
     },
-    emits: ['update:modelValue', 'update:fontSize', 'save', 'close']
+    emits: ['update:modelValue', 'update:fontSize', 'save', 'close'],
+    methods: {
+        // Options API 下 import 的模块函数不会自动暴露到模板作用域，需挂到 methods
+        // （否则模板中 {{ estimateTokens(modelValue) }} 渲染时报 "_ctx.estimateTokens is not a function"，弹窗无法打开）
+        estimateTokens
+    }
 };
 </script>

@@ -446,6 +446,40 @@ export default {
             try { localStorage.setItem('appSettings', JSON.stringify(newVal)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
 
+        // ================= [ 导入数据清洗开关 ] =================
+        // 开启后，导入/扫描卡片时将忽略卡片自带的原生 tags（防止他人卡片的杂乱标签混入全局标签池），
+        // 仅保留自动分类结果；分类统一由自动规则或用户手动指定。
+        const sanitizeImportedTags = ref((() => {
+            try { return localStorage.getItem('jsTavern_sanitizeImportedTags') === '1'; } catch (e) { return false; }
+        })());
+        watch(sanitizeImportedTags, (v) => {
+            try { localStorage.setItem('jsTavern_sanitizeImportedTags', v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        });
+
+        // ================= [ 📸 历史快照配置（设置面板可调，自动同步主进程） ] =================
+        const snapshotConfig = ref((() => {
+            const defaults = { enabled: true, intervalMinutes: 5, maxSnapshots: 10 };
+            try {
+                return {
+                    enabled: localStorage.getItem('snapshot_enabled') !== 'false',
+                    intervalMinutes: Number(localStorage.getItem('snapshot_interval')) || defaults.intervalMinutes,
+                    maxSnapshots: Number(localStorage.getItem('snapshot_max_count')) || defaults.maxSnapshots
+                };
+            } catch (e) { return { ...defaults }; }
+        })());
+        // 持久化到 localStorage + 同步主进程（开关/冷却/最大保留数变化即时生效）
+        const saveSnapshotSettings = async () => {
+            try {
+                localStorage.setItem('snapshot_enabled', JSON.stringify(snapshotConfig.value.enabled));
+                localStorage.setItem('snapshot_interval', String(snapshotConfig.value.intervalMinutes));
+                localStorage.setItem('snapshot_max_count', String(snapshotConfig.value.maxSnapshots));
+            } catch (e) { /* 忽略 */ }
+            if (window.electronAPI && typeof window.electronAPI.updateSnapshotConfig === 'function') {
+                try { await window.electronAPI.updateSnapshotConfig(snapshotConfig.value); } catch (e) { /* 忽略 */ }
+            }
+        };
+        watch(snapshotConfig, saveSnapshotSettings, { deep: true });
+
         // 字体设置应用：fontFamily/fontWeight 全局生效于 body；
         // 双轨字号：--ui-fs 接管外围界面（导航/侧边栏/菜单/弹窗），--workspace-fs 接管右侧工作区
         // （Vue 不会编译挂载容器 #app 自身的 :style 绑定，故此处以 documentElement 兜底保证变量生效）
@@ -801,17 +835,36 @@ export default {
         // 当前选中的分类 key
         const currentCategoryKey = ref('all');
 
-        // 新增自定义分组（用自建弹窗替代 Electron 不支持的 prompt）
+        // 新增自定义分组（用自建弹窗替代 Electron 不支持的 prompt；Electron 环境创建物理子文件夹）
         const addNewCategory = async () => {
             const newName = await appPrompt('请输入新分组的名称：');
-            if (newName && newName.trim() !== '') {
-                const cleanName = newName.trim();
-                if (!isCategoryKnown(cleanName)) {
-                    customCategories.value.push(cleanName);
-                    currentCategoryKey.value = cleanName; // 自动切换过去
-                } else {
-                    nativeAlert('该分组已存在！', 'warning');
+            if (!newName || newName.trim() === '') return;
+            const cleanName = newName.trim();
+            if (isCategoryKnown(cleanName)) {
+                nativeAlert('该分组已存在！', 'warning');
+                return;
+            }
+
+            // 📁 物理分组：在库目录下创建子文件夹（浏览器/旧版回退纯内存分组）
+            if (window.electronAPI && typeof window.electronAPI.createGroupFolder === 'function') {
+                if (!currentFolderPath.value) {
+                    return nativeAlert('尚未打开角色库目录，请先点击「📂 打开本地库」。', 'warning');
                 }
+                const res = await window.electronAPI.createGroupFolder({
+                    libraryPath: currentFolderPath.value,
+                    groupName: cleanName
+                });
+                if (!res || !res.success) {
+                    return nativeAlert(`创建分组文件夹失败: ${(res && res.error) || '未知错误'}`, 'error');
+                }
+                if (!customCategories.value.includes(res.folderName)) {
+                    customCategories.value.push(res.folderName);
+                }
+                currentCategoryKey.value = res.folderName;
+                nativeAlert(`已创建物理分组文件夹：${res.folderName}`, 'info');
+            } else {
+                customCategories.value.push(cleanName);
+                currentCategoryKey.value = cleanName; // 自动切换过去
             }
         };
 
@@ -889,6 +942,23 @@ export default {
                 nativeAlert('该分组名称已存在！', 'warning');
                 return;
             }
+
+            // 📁 物理重命名文件夹（仅当存在对应物理文件夹时；纯内存分组自动跳过）
+            let physicalRenamed = false;
+            if (window.electronAPI && typeof window.electronAPI.renameGroupFolder === 'function' && currentFolderPath.value) {
+                const res = await window.electronAPI.renameGroupFolder({
+                    libraryPath: currentFolderPath.value,
+                    oldName: oldName,
+                    newName: cleanNewName
+                });
+                if (res && res.success) {
+                    physicalRenamed = true;
+                } else if (res && res.error && !String(res.error).includes('不存在')) {
+                    // 其他错误（权限/越界等）中止重命名，避免内存与磁盘不一致
+                    return nativeAlert(`重命名分组文件夹失败: ${res.error}`, 'error');
+                }
+                // "原文件夹不存在" = 纯内存分组，静默继续内存重命名
+            }
             
             // 1. 移除旧分组定义（预设重命名后转为自定义分组）
             if (oldPreset) {
@@ -918,7 +988,13 @@ export default {
             
             // 4. 自动将当前选中的分组切换为新名字
             currentCategoryKey.value = cleanNewName;
-            nativeAlert(`分组已成功重命名为：「${cleanNewName}」`, 'info');
+
+            // 📁 物理重命名成功：刷新整个库，让所有卡片的物理路径/子文件夹自动同步（文件位置是事实依据）
+            if (physicalRenamed) {
+                await refreshLibrary();
+            } else {
+                nativeAlert(`分组已成功重命名为：「${cleanNewName}」`, 'info');
+            }
         };
 
         // 当前编辑卡片的分类（映射到库项目 libItem.category，避免污染卡片原始文件数据）
@@ -940,14 +1016,84 @@ export default {
             }
         });
 
-        // 当在右侧面板更改卡片分组时触发（同步左侧列表里的卡片归属）
-        const handleCardCategoryChange = () => {
+        // 当在右侧面板更改卡片分组时触发（同步左侧列表里的卡片归属 + 物理移动文件）
+        const handleCardCategoryChange = async () => {
             if (!cardData.value) return;
             const libItem = library.value.find(item => item.data === cardData.value);
-            if (libItem) {
-                const preset = defaultCategories.value.find(c => c.key === currentCardCategory.value);
-                libItem.category = preset ? preset.cn : currentCardCategory.value;
-                persistCardCategory(libItem); // 【修复】单卡改分类持久化
+            if (!libItem) return;
+            const targetKey = currentCardCategory.value;
+            const preset = defaultCategories.value.find(c => c.key === targetKey);
+            const targetName = preset ? preset.cn : targetKey;
+            const oldCat = libItem.category;
+            libItem.category = targetName; // 先回写内存（保持下拉响应）
+            const ok = await moveCardToGroup(libItem, targetName); // 📁 物理移动 + 覆盖层迁移
+            if (!ok) {
+                libItem.category = oldCat; // 移动失败回滚，保持与文件系统一致
+                persistCardCategory(libItem);
+            }
+        };
+
+        // 📁 覆盖层 key 迁移：物理移动后卡片路径变化，卡片属性覆盖层跟随新路径
+        const migrateOverlayKey = (oldPath, newPath) => {
+            if (!oldPath || !newPath || oldPath === newPath) return;
+            const overlays = appConfig.value.cardOverlays || {};
+            if (overlays[oldPath]) {
+                overlays[newPath] = overlays[oldPath];
+                delete overlays[oldPath];
+                syncConfigToDisk();
+            }
+        };
+
+        // 📁 物理移动卡片到目标分组（移动文件 + 同步内存 path/subFolder/category/avatar + 覆盖层迁移）
+        // 返回 true=成功（内存已与文件系统一致）；false=失败（内存状态不变，避免"幽灵归类"）
+        const moveCardToGroup = async (item, targetGroup) => {
+            if (!item || !targetGroup) return false;
+            const cleanTarget = (targetGroup === '全部' || targetGroup === 'all') ? '未分类' : targetGroup;
+
+            // 浏览器/旧版环境：electronAPI 不支持物理移动时回退纯内存分组（不移动文件）
+            if (!window.electronAPI || typeof window.electronAPI.moveCardToGroup !== 'function') {
+                item.category = cleanTarget;
+                persistCardCategory(item);
+                return true;
+            }
+            if (!currentFolderPath.value) {
+                nativeAlert('尚未打开角色库目录，无法物理移动卡片。', 'warning');
+                return false;
+            }
+            const res = await window.electronAPI.moveCardToGroup({
+                libraryPath: currentFolderPath.value,
+                cardPath: item.path,
+                targetGroup: cleanTarget
+            });
+            if (res && res.success) {
+                const oldPath = item.path;
+                item.path = res.newFilePath;
+                item.subFolder = res.newSubFolder || '';
+                item.category = cleanTarget;
+                const isImage = /\.(png|webp)$/i.test(res.newFilePath);
+                item.avatar = isImage ? 'local-file://img/?path=' + encodeURIComponent(res.newFilePath) : null;
+                migrateOverlayKey(oldPath, res.newFilePath);
+                persistCardCategory(item);
+                return true;
+            }
+            nativeAlert(`物理移动失败: ${(res && res.error) || '未知错误'}`, 'error');
+            return false;
+        };
+
+        // 📸 手动创建当前卡片快照（绕过冷却，立即备份当前状态到 .bak_history）
+        const triggerManualSnapshot = async () => {
+            if (!cardData.value) return nativeAlert('请先打开一张卡片。', 'warning');
+            const libItem = library.value.find(item => item.data === cardData.value);
+            const cardPath = libItem ? libItem.path : null;
+            if (!cardPath) return nativeAlert('无法创建快照：当前卡片未找到物理文件路径', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.createManualSnapshot !== 'function') {
+                return nativeAlert('当前版本不支持手动创建快照，请更新应用。', 'warning');
+            }
+            const res = await window.electronAPI.createManualSnapshot(cardPath);
+            if (res && res.success) {
+                nativeAlert(`🎉 已为 [${libItem.name}] 创建物理备份快照！`, 'info');
+            } else {
+                nativeAlert(`快照创建失败: ${(res && res.error) || '未知错误'}`, 'error');
             }
         };
 
@@ -1303,10 +1449,10 @@ export default {
 
             // 【关键】直接返回原始条目的响应式代理（不做拷贝展开），
             // 这样 v-model 编辑能写回原数据（保存时落盘），同时保持响应式（cardData 是 shallowRef）
-            return entries.map(entry => {
-                if (!entry || typeof entry !== 'object') return entry;
-                return reactive(entry);
-            });
+            // 【脏数据防护】先过滤 null / 非对象条目，防止 EditorPanel v-for 渲染时读 entry.name 空引用崩溃
+            return entries
+                .filter(entry => entry && typeof entry === 'object')
+                .map(entry => reactive(entry));
         });
 
         // ================= 世界书折叠展开控制 =================
@@ -1774,6 +1920,7 @@ export default {
             const book = d.character_book || cardData.value?.character_book || {};
             const entries = book.entries || (Array.isArray(book) ? book : []);
             entries.forEach(e => {
+                if (!e || typeof e !== 'object') return; // 脏数据条目（null/非对象）防护
                 bookTokens += estimateTokens(e.content) + estimateTokens((e.keys || []).join(', '));
             });
 
@@ -1829,6 +1976,7 @@ export default {
                 const book = d.character_book || item.data?.character_book || {};
                 const entries = book.entries || (Array.isArray(book) ? book : []);
                 entries.forEach(e => {
+                    if (!e || typeof e !== 'object') return; // 脏数据条目（null/非对象）防护
                     list.push({
                         ...e,
                         displayName: e.name || e.comment || '未命名条目',
@@ -1938,7 +2086,7 @@ export default {
                 safeCollectTags(card.tags);
                 safeCollectTags(card.customTags);
                 safeCollectTags(d.tags);
-                const tagsMatch = tagsList.some(t => (t || '').toLowerCase().includes(query));
+                const tagsMatch = tagsList.some(t => String(t || '').toLowerCase().includes(query));
 
                 const desc = (d.description || card.description || '').toLowerCase();
                 const personality = (d.personality || card.personality || '').toLowerCase();
@@ -1950,6 +2098,7 @@ export default {
                 const wbEntries = book.entries || (Array.isArray(book) ? book : []);
                 if (Array.isArray(wbEntries)) {
                     wbMatch = wbEntries.some(entry => {
+                        if (!entry || typeof entry !== 'object') return false; // 防止脏数据条目（null/非对象）引发空引用崩溃
                         const eName = (entry.name || entry.comment || '').toLowerCase();
                         const eKeys = Array.isArray(entry.keys) ? entry.keys.join(' ') : String(entry.keys || '').toLowerCase();
                         const eContent = (entry.content || '').toLowerCase();
@@ -1966,8 +2115,10 @@ export default {
                     return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
                 }
                 if (sortBy.value === 'time') {
-                    const ta = Date.parse((a.data?.data || a.data || {}).create_date) || 0;
-                    const tb = Date.parse((b.data?.data || b.data || {}).create_date) || 0;
+                    // 优先卡片内建 create_date；缺失时回退文件修改时间 mtime（复制/移动文件不会改变 create_date，
+                    // mtime 才是文件最近的真实变更时间，解决"最新排序混乱"）
+                    const ta = Date.parse((a.data?.data || a.data || {}).create_date) || (a._mtime || 0);
+                    const tb = Date.parse((b.data?.data || b.data || {}).create_date) || (b._mtime || 0);
                     return tb - ta; // 最新优先
                 }
                 if (sortBy.value === 'tokens') {
@@ -2191,6 +2342,12 @@ export default {
 
         // 自动分类与贴标签的核心逻辑
         const processAutoTagsAndCategory = (cardInfo) => {
+            // 📁 物理文件夹分组优先：卡片位于库目录的子文件夹时，其一级文件夹名即为分组
+            // （文件系统位置是事实依据，重扫/重命名/移动后保持一致）
+            if (cardInfo.subFolder) {
+                cardInfo.category = cardInfo.subFolder.split(/[\\/]/)[0] || '未分类';
+                return;
+            }
             // ---- 【🛡️ 最高优先级】物理配置库覆盖层恢复（用户手动改过的分类/标签，防重扫冲刷） ----
             // 覆盖层 key = 卡片路径（path），兼容旧数据回退卡片名（name）
             const overlayKey = (cardInfo.path || cardInfo.name || '').toString();
@@ -2231,7 +2388,8 @@ export default {
 
             // 提取所有文本用于分析
             const fullText = [data.description, data.personality, data.scenario, data.first_mes].join('\n');
-            let generatedTags = [...(data.tags || [])]; // 保留自带标签
+            // 🧹 导入数据清洗开关：开启时忽略卡片自带的原生 tags（防止他人卡片的杂乱标签混入全局标签池）
+            let generatedTags = sanitizeImportedTags.value ? [] : [...(data.tags || [])];
             let assignedCategory = '未分类';
 
             // 匹配自动标签
@@ -2350,7 +2508,9 @@ export default {
                         avatar: file.url, // 通过 local-file:// 协议展示本地图片
                         data: normalized,
                         category: '未分类',
-                        customTags: []
+                        customTags: [],
+                        _mtime: file.mtime || 0, // 文件修改时间（排序 fallback 用，避免 create_date 缺失时排序混乱）
+                        subFolder: file.subFolder || '' // 相对库根的文件夹路径（'' = 根目录；物理分组用）
                     };
 
                     // 【唯一性洗礼】防御性兜底：确保 id 永不缺失、也永不与 name 相同
@@ -2387,16 +2547,30 @@ export default {
             return false;
         };
 
-        // 统一处理主进程传来的文件列表
+        // 统一处理主进程传来的文件列表（并发受限批处理：每批最多 8 张并行解析，
+        // 大幅加速启动加载，同时避免一次性并发读取几百张 PNG 导致磁盘 I/O 尖峰）
         const processElectronFiles = async (folderData) => {
             if (!folderData || !folderData.files) return;
 
             currentFolderPath.value = folderData.folderPath;
-            library.value = []; // 清空当前库
+            library.value = [];
+
+            // 📁 物理子文件夹 = 分组：自动并入自定义分组列表（去重），刷新后立即可见
+            if (Array.isArray(folderData.categories)) {
+                folderData.categories.forEach(cat => {
+                    if (cat && cat.trim() !== '' && !customCategories.value.includes(cat) && !isCategoryKnown(cat)) {
+                        customCategories.value.push(cat);
+                    }
+                });
+            } // 清空当前库
             let addedCount = 0;
 
-            for (const file of folderData.files) {
-                if (await parseAndAddCard(file)) addedCount++;
+            const CONCURRENCY = 8;
+            const files = folderData.files;
+            for (let i = 0; i < files.length; i += CONCURRENCY) {
+                const batch = files.slice(i, i + CONCURRENCY);
+                const results = await Promise.all(batch.map(file => parseAndAddCard(file)));
+                addedCount += results.filter(Boolean).length;
             }
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
         };
@@ -2408,18 +2582,23 @@ export default {
         // 🛰️ 全盘深度检索引擎弹窗开关（新的独立 UI，替代旧 runDiskScan 进度蒙版）
         const showDiskScanModal = ref(false);
 
-        // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库）
+        // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库；并发受限批处理）
         const importScanPaths = async (paths) => {
             let added = 0;
-            for (const absPath of paths) {
-                const name = absPath.split(/[\\/]/).pop() || absPath;
-                const isImage = /\.(png|webp)$/i.test(name);
-                const file = {
-                    name,
-                    path: absPath,
-                    url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
-                };
-                if (await parseAndAddCard(file)) added++;
+            const CONCURRENCY = 8;
+            for (let i = 0; i < paths.length; i += CONCURRENCY) {
+                const batch = paths.slice(i, i + CONCURRENCY);
+                const results = await Promise.all(batch.map(async (absPath) => {
+                    const name = absPath.split(/[\\/]/).pop() || absPath;
+                    const isImage = /\.(png|webp)$/i.test(name);
+                    const file = {
+                        name,
+                        path: absPath,
+                        url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
+                    };
+                    return await parseAndAddCard(file);
+                }));
+                added += results.filter(Boolean).length;
             }
             return added;
         };
@@ -2503,8 +2682,37 @@ export default {
             }
         };
 
+        // 🔄 重新扫描当前库目录（不弹目录选择框），解决"手动放入文件夹里的新卡不读取"问题
+        const refreshLibrary = async () => {
+            if (!window.electronAPI) {
+                return nativeAlert("该功能需要 Electron 桌面环境，请使用 npm start 启动应用。", 'warning');
+            }
+            if (!currentFolderPath.value) {
+                return nativeAlert("尚未打开角色库目录，请先点击「📂 打开本地库」。", 'warning');
+            }
+            if (typeof window.electronAPI.rescanLibrary !== 'function') {
+                return nativeAlert("当前版本不支持一键刷新目录，请更新到最新版。", 'warning');
+            }
+            const prevCardPath = cardData.value ? (library.value.find(i => i.data === cardData.value)?.path || null) : null;
+            const result = await window.electronAPI.rescanLibrary(currentFolderPath.value);
+            if (result && result.files) {
+                appMode.value = 'characters';
+                await processElectronFiles(result);
+                // 刷新后尽量保持当前打开卡片的编辑状态（按路径重新绑定新解析出的对象）
+                if (prevCardPath && cardData.value) {
+                    const reopen = library.value.find(i => i.path === prevCardPath);
+                    if (reopen) openFromLibrary(reopen);
+                }
+                showToast(`目录已刷新，共加载 ${library.value.length} 张卡片。`, 'success');
+            } else if (result && result.error) {
+                nativeAlert(result.error, 'error');
+            }
+        };
+
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
         onMounted(async () => {
+            // 📸 启动时把本地快照配置同步到主进程（跨重启保持设置一致）
+            await saveSnapshotSettings();
             // =========================================================
             // 🛡️ 统一持久化中枢装载：从 app_config.json（最高权威）恢复全部全局状态
             // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，物理文件才是权威。
@@ -2901,12 +3109,14 @@ export default {
             const newCat = await appPrompt(`将卡片 [${item.name}] 移动到分组:`, item.category || '未分类');
             if (newCat && newCat.trim() !== '') {
                 const cleanCat = newCat.trim();
-                item.category = cleanCat;
-                persistCardCategory(item); // 【修复】右键单卡移动分类持久化
-                if (!isCategoryKnown(cleanCat)) {
-                    customCategories.value.push(cleanCat);
+                // 📁 物理移动（目标分组文件夹不存在时主进程自动创建）
+                const ok = await moveCardToGroup(item, cleanCat);
+                if (ok) {
+                    if (!isCategoryKnown(cleanCat)) {
+                        customCategories.value.push(cleanCat);
+                    }
+                    nativeAlert(`已将卡片移动至 [${cleanCat}]`, 'info');
                 }
-                nativeAlert(`已将卡片移动至 [${cleanCat}]`, 'info');
             }
         };
 
@@ -3057,16 +3267,16 @@ export default {
             
             if (newCat && newCat.trim() !== '') {
                 const cleanCat = newCat.trim();
-                library.value.forEach(item => {
-                    if (selectedIds.value.includes(item.id)) {
-                        item.category = cleanCat;
-                        persistCardCategory(item); // 【修复】批量移分组持久化
-                    }
-                });
-                if (!isCategoryKnown(cleanCat)) {
+                // 📁 批量物理移动（逐张移动并统计成功数）
+                let successCount = 0;
+                for (const item of library.value) {
+                    if (!selectedIds.value.includes(item.id)) continue;
+                    if (await moveCardToGroup(item, cleanCat)) successCount++;
+                }
+                if (successCount > 0 && !isCategoryKnown(cleanCat)) {
                     customCategories.value.push(cleanCat);
                 }
-                nativeAlert(`成功将 ${selectedIds.value.length} 张卡片移动至 [${cleanCat}]`, 'info');
+                nativeAlert(`成功将 ${successCount} / ${selectedIds.value.length} 张卡片移动至 [${cleanCat}]`, successCount > 0 ? 'info' : 'error');
                 clearSelection();
             }
         };
@@ -5055,6 +5265,7 @@ export default {
             const keys = new Set();
             const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
             entries.forEach(e => {
+                if (!e || typeof e !== 'object') return; // 脏数据条目防护
                 const kArr = Array.isArray(e.key) ? e.key : (typeof e.key === 'string' ? e.key.split(/[,，]/) : []);
                 kArr.forEach(k => {
                     const clean = String(k).trim().toLowerCase();
@@ -5474,6 +5685,7 @@ export default {
             targetWbs.forEach(wb => {
                 const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
                 entries.forEach(e => {
+                    if (!e || typeof e !== 'object') return; // 脏数据条目防护
                     const keysStr = (Array.isArray(e.key) ? e.key.join(',') : e.key || '').trim().toLowerCase();
                     const contentStr = (e.content || '').trim().toLowerCase();
                     const signature = `${keysStr}:::${contentStr}`;
@@ -5670,10 +5882,10 @@ export default {
         const ctx = {
             theme, toggleTheme, appSettings, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
-            viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt,
+            viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt, sanitizeImportedTags,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan, showDiskScanModal,
-            currentFolderPath, handleScanImported,
+            currentFolderPath, handleScanImported, refreshLibrary,
             isDragging, dragCounter, handleDragEnter, handleDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,
@@ -5684,7 +5896,8 @@ export default {
             allCategories, customCategories, currentCategoryKey,
             getCategoryDisplayName, addNewCategory,
             renameCurrentCategory, deleteCustomCategory, currentCategoryDeletable, currentCategoryRenamable,
-            currentCardCategory, handleCardCategoryChange,
+            currentCardCategory, handleCardCategoryChange, moveCardToGroup, triggerManualSnapshot,
+            snapshotConfig, saveSnapshotSettings,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
             selectFixedDirectory, addManualTag, changePage,

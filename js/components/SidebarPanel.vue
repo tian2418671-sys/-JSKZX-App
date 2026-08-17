@@ -43,7 +43,7 @@
                         :class="isMultiSelectMode ? 'bg-amber-600 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50'">
                     ☑️
                 </button>
-                <button @click="runDiskScan('specific')" title="扫描本地文件夹/盘符" class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50">
+                <button @click="refreshLibrary" title="重新扫描当前库目录（读取新放入的卡片）" class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50">
                     🔄
                 </button>
                 <button @click="showAdvancedFilters = !showAdvancedFilters"
@@ -464,6 +464,7 @@ export default {
             displayTagText: ctx.displayTagText,
             sortBy: ctx.sortBy,
             runDiskScan: ctx.runDiskScan,
+            refreshLibrary: ctx.refreshLibrary,
             deleteCardItem: ctx.deleteCardItem,
             // ✅ [UI 方案2] 列表项辅助：Token 估算 / 世界书标记 / 标签合并 / 快捷打标
             itemTokenCount: (item) => {

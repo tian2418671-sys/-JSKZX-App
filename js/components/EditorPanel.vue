@@ -35,6 +35,9 @@
                         <span v-if="!isRefactoring">✨ 格式升维 (降 Token)</span>
                         <span v-else class="animate-pulse">⏳ AI 正在重构中...</span>
                     </button>
+                    <button @click="triggerManualSnapshot" title="绕过冷却机制，立即将当前卡片状态备份至历史目录" class="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
+                        📸 快照
+                    </button>
                     <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
                         💾 覆盖保存
                     </button>
@@ -626,6 +629,7 @@ export default {
             refactorCardFormat: ctx.refactorCardFormat,
             isRefactoring: ctx.isRefactoring,
             saveToLocalDisk: ctx.saveToLocalDisk,
+            triggerManualSnapshot: ctx.triggerManualSnapshot,
             exportPackage: ctx.exportPackage,
             deleteCard: ctx.deleteCard,
             reset: ctx.reset,
