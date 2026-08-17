@@ -88,6 +88,7 @@
                 <div class="flex items-center gap-2 mb-2">
                     <input v-model="newGlobalTagInput" @keyup.enter="addTagToGlobalPool" type="text" placeholder="输入并回车直接新增全局标签..." class="flex-1 bg-zinc-800 border border-zinc-700 text-[11px] px-2 py-1 rounded outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
                     <button @click="addTagToGlobalPool" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] rounded transition shadow-sm font-bold">添加</button>
+                    <button @click="clearAllTagsFromPool" title="一键清空所有标签（系统库 + 全库卡片）" class="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[11px] rounded transition shadow-sm font-bold whitespace-nowrap">🧹 一键清空</button>
                 </div>
 
                 <div class="flex flex-wrap gap-1 p-1.5 bg-zinc-800/60 rounded border border-zinc-700 overflow-y-auto custom-scrollbar max-h-40">
@@ -649,6 +650,7 @@ export default {
             newGlobalTagInput: ctx.newGlobalTagInput,
             addTagToGlobalPool: ctx.addTagToGlobalPool,
             removeTagFromGlobalPool: ctx.removeTagFromGlobalPool,
+            clearAllTagsFromPool: ctx.clearAllTagsFromPool,
             addGlobalTag: ctx.addGlobalTag,
             tabs: ctx.tabs,
             currentTab: ctx.currentTab,

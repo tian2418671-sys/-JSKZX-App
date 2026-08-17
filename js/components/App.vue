@@ -3610,6 +3610,60 @@ export default {
             nativeAlert(`已从系统库彻底清洗标签：[${tagToRemove}]\n${savedCount > 0 ? `并已将 ${savedCount} 张受影响卡片物理保存到本地！` : '（库中未发现残留该标签的卡片）'}`, 'info');
         };
 
+        // 🧹 一键清空：彻底清空系统常用标签库 + 清洗全库所有卡片上的全部标签（物理落盘，不可撤销）
+        const clearAllTagsFromPool = async () => {
+            const poolCount = systemCommonTags.value.length;
+            const cardCount = library.value.length;
+            if (poolCount === 0 && cardCount === 0) {
+                return nativeAlert('当前没有可清空的标签。', 'info');
+            }
+            const ok = await confirmDialog(
+                `确定要一键清空所有标签吗？\n\n` +
+                `· 系统常用标签库：${poolCount} 个\n` +
+                `· 全库 ${cardCount} 张卡片上的全部标签（含原生 data.tags）\n\n` +
+                `⚠️ 此操作将物理落盘且不可撤销，请谨慎确认！`
+            );
+            if (!ok) return;
+
+            // 1. 清空系统标签池（watch deep 自动持久化）
+            systemCommonTags.value = [];
+
+            // 2. 清洗全库所有卡片的 customTags 与原生 data.tags
+            const modifiedItems = [];
+            library.value.forEach(item => {
+                let isModified = false;
+                if (Array.isArray(item.customTags) && item.customTags.length > 0) {
+                    item.customTags = [];
+                    isModified = true;
+                }
+                const d = item.data?.data || item.data || {};
+                if (Array.isArray(d.tags) && d.tags.length > 0) {
+                    d.tags = [];
+                    isModified = true;
+                } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
+                    d.tags = '';
+                    isModified = true;
+                }
+                if (isModified) modifiedItems.push(item);
+            });
+
+            // 3. 物理落盘（覆盖层写空数组 = 记录"用户已清空"，重扫不自动补标签）
+            let savedCount = 0;
+            for (const item of modifiedItems) {
+                try {
+                    await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
+                    savedCount++;
+                } catch (e) {
+                    console.error(`一键清空标签后物理保存失败 [${item.name}]:`, e);
+                }
+            }
+
+            // 4. 刷新当前卡片展示
+            if (cardData.value) triggerRef(cardData);
+
+            nativeAlert(`✅ 已一键清空全部标签！\n系统标签库 ${poolCount} 个已清空，全库 ${modifiedItems.length} 张卡片标签已清除，物理保存 ${savedCount} 张。`, 'info');
+        };
+
         // 5. 搜索快捷追加：点击搜索栏下方的快捷标签，直接填入搜索框并立即过滤
         const appendTagToSearch = (tag) => {
             if (!searchQueryInput.value) {
@@ -5920,7 +5974,7 @@ export default {
             isRefactoring, refactorCardFormat,
             toasts, showToast,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
-            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, appendTagToSearch,
+            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, clearAllTagsFromPool, appendTagToSearch,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             rebindTavernPath,
