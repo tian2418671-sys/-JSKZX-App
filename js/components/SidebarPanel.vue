@@ -195,6 +195,9 @@
             <div v-if="library.length === 0" class="flex flex-col items-center justify-center h-full text-zinc-500 text-xs text-center p-4">
                 将卡片拖拽到此处，<br>或点击左上角打开本地库
             </div>
+            <div v-else-if="filteredLibrary.length === 0" class="flex flex-col items-center justify-center h-full text-zinc-500 text-xs text-center p-4">
+                🔍 当前筛选/搜索条件下<br>没有匹配的卡片
+            </div>
 
             <!-- 分页控制条 -->
             <div class="flex items-center justify-between px-2 py-1.5 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0">
@@ -240,6 +243,9 @@
 
             <div v-if="library.length === 0" class="flex flex-col items-center justify-center h-40 text-zinc-500 text-xs text-center p-4" style="grid-column: 1 / -1;">
                 将卡片拖拽到此处，<br>或点击左上角打开本地库
+            </div>
+            <div v-else-if="filteredLibrary.length === 0" class="flex flex-col items-center justify-center h-40 text-zinc-500 text-xs text-center p-4" style="grid-column: 1 / -1;">
+                🔍 当前筛选/搜索条件下<br>没有匹配的卡片
             </div>
 
             <!-- 分页控制条 -->

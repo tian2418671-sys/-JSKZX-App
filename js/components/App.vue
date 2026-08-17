@@ -2061,7 +2061,10 @@ export default {
                     } else {
                         const targetCat = allCategories.value.find(c => c.key === currentCategoryKey.value);
                         if (targetCat) {
-                            matchesCategory = card.category === targetCat.cn || card.category === targetCat.en || card.category === targetCat.key;
+                            // 【加固】分组匹配兼容多种存储形态：预设 cn/en/key + 物理文件夹一级名（subFolder）
+                            const subName = card.subFolder ? card.subFolder.split(/[\\/]/)[0] : '';
+                            matchesCategory = card.category === targetCat.cn || card.category === targetCat.en || card.category === targetCat.key
+                                || (!!subName && (subName === targetCat.cn || subName === targetCat.en || subName === targetCat.key));
                         }
                     }
                 }
@@ -2100,16 +2103,20 @@ export default {
                 if (Array.isArray(wbEntries)) {
                     wbMatch = wbEntries.some(entry => {
                         if (!entry || typeof entry !== 'object') return false; // 防止脏数据条目（null/非对象）引发空引用崩溃
-                        const eName = (entry.name || entry.comment || '').toLowerCase();
-                        const eKeys = Array.isArray(entry.keys) ? entry.keys.join(' ') : String(entry.keys || '').toLowerCase();
-                        const eContent = (entry.content || '').toLowerCase();
+                        // 【关键修复】name/comment 可能是数字/对象等非字符串，直接 .toLowerCase() 会崩溃
+                        // （曾导致 filteredLibrary 抛错 → 侧边栏消失 / 搜索不到卡）
+                        const eName = String(entry.name || entry.comment || '').toLowerCase();
+                        const eKeys = Array.isArray(entry.keys) ? entry.keys.map(k => String(k)).join(' ') : String(entry.keys || '').toLowerCase();
+                        const eContent = String(entry.content || '').toLowerCase();
                         return eName.includes(query) || eKeys.includes(query) || eContent.includes(query);
                     });
                 }
 
                 const isMatch = name.includes(query) || creator.includes(query) || tagsMatch ||
                                 desc.includes(query) || personality.includes(query) || firstMes.includes(query) || wbMatch;
-                return matchesCategory && isMatch;
+                // 【修复】有搜索关键词时全局搜索（忽略当前分组过滤），避免"选择分组后搜不到其他分组的卡"；
+                // 无关键词时仍按分组过滤浏览
+                return isMatch;
             }).sort((a, b) => {
                 // ✅ [UI 方案1] 列表排序（在过滤结果上稳定排序，不修改原始 library）
                 if (sortBy.value === 'name') {
@@ -5630,9 +5637,9 @@ export default {
                     onlyCompareTags: [...keys2].filter(k => !keys1.has(k))
                 });
 
-                // 将所有词条内容拼接起来进行宏观文本对比
-                const text1 = entries1.map(e => e.content || '').join('\n');
-                const text2 = entries2.map(e => e.content || '').join('\n');
+                // 将所有词条内容拼接起来进行宏观文本对比（【加固】entry 判空 + String 强转，防脏数据崩溃）
+                const text1 = entries1.map(e => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
+                const text2 = entries2.map(e => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
                 const isTextSame = text1 === text2;
 
                 diffFieldResults.value.push({
@@ -5714,7 +5721,7 @@ export default {
                     nodes.push({
                         id: String(e.uid || idx),
                         name: label,
-                        symbolSize: Math.max(10, Math.min(22, 8 + (e.content || '').length / 40)),
+                        symbolSize: Math.max(10, Math.min(22, 8 + String(e.content || '').length / 40)),
                         entryIndex: idx,
                         itemStyle: {
                             color: e.enabled === false ? '#71717a' : (e.constant ? '#6366f1' : '#d97706')
@@ -5850,8 +5857,9 @@ export default {
                 const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
                 entries.forEach(e => {
                     if (!e || typeof e !== 'object') return; // 脏数据条目防护
-                    const keysStr = (Array.isArray(e.key) ? e.key.join(',') : e.key || '').trim().toLowerCase();
-                    const contentStr = (e.content || '').trim().toLowerCase();
+                    // 【加固】key/content 可能是数字/对象等非字符串，直接 .trim() 会崩溃
+                    const keysStr = String(Array.isArray(e.key) ? e.key.map(k => String(k)).join(',') : (e.key || '')).trim().toLowerCase();
+                    const contentStr = String(e.content || '').trim().toLowerCase();
                     const signature = `${keysStr}:::${contentStr}`;
 
                     if (!seenMap.has(signature)) {
