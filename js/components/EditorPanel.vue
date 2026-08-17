@@ -89,17 +89,36 @@
                     <input v-model="newGlobalTagInput" @keyup.enter="addTagToGlobalPool" type="text" placeholder="输入并回车直接新增全局标签..." class="flex-1 bg-zinc-800 border border-zinc-700 text-[11px] px-2 py-1 rounded outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
                     <button @click="addTagToGlobalPool" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] rounded transition shadow-sm font-bold">添加</button>
                     <button @click="clearAllTagsFromPool" title="一键清空所有标签（系统库 + 全库卡片）" class="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[11px] rounded transition shadow-sm font-bold whitespace-nowrap">🧹 一键清空</button>
+                    <button @click="isBatchDeleteTags = !isBatchDeleteTags; if (!isBatchDeleteTags) batchSelectedTags = new Set()"
+                            :class="isBatchDeleteTags ? 'bg-red-600 text-white border-red-600' : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'"
+                            class="px-3 py-1 text-[11px] rounded transition shadow-sm font-bold whitespace-nowrap border" title="进入批量模式，勾选多个标签后一键删除">☑️ 批量删除</button>
                 </div>
 
                 <div class="flex flex-wrap gap-1 p-1.5 bg-zinc-800/60 rounded border border-zinc-700 overflow-y-auto custom-scrollbar max-h-40">
                     <span v-for="tag in globalAvailableTags" :key="tag"
-                          :class="activeCardTags.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700'"
+                          :class="isBatchDeleteTags
+                              ? (batchSelectedTags.has(tag) ? 'bg-red-600 text-white border-red-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')
+                              : (activeCardTags.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')"
                           class="text-[10px] px-2 py-0.5 rounded transition shadow-sm border flex items-center gap-1 group cursor-pointer"
-                          @click="addGlobalTag(tag)">
-                        <span>+ {{ tag }}</span>
-                        <span @click.stop="removeTagFromGlobalPool(tag)" class="text-zinc-500 group-hover:text-red-400 hover:bg-red-500/20 hover:text-red-400 rounded-full w-3 h-3 flex items-center justify-center transition-colors font-bold ml-1" title="彻底删除此标签">×</span>
+                          @click="isBatchDeleteTags ? toggleBatchTagSelect(tag) : addGlobalTag(tag)">
+                        <template v-if="isBatchDeleteTags">
+                            <span>{{ batchSelectedTags.has(tag) ? '☑' : '☐' }} {{ tag }}</span>
+                        </template>
+                        <template v-else>
+                            <span>+ {{ tag }}</span>
+                            <span @click.stop="removeTagFromGlobalPool(tag)" class="text-zinc-500 group-hover:text-red-400 hover:bg-red-500/20 hover:text-red-400 rounded-full w-3 h-3 flex items-center justify-center transition-colors font-bold ml-1" title="彻底删除此标签">×</span>
+                        </template>
                     </span>
                     <div v-if="globalAvailableTags.length === 0" class="text-xs text-zinc-500 py-1">暂无可选标签，请输入后添加</div>
+                </div>
+
+                <!-- 批量删除标签操作栏 -->
+                <div v-if="isBatchDeleteTags" class="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-zinc-700">
+                    <span class="text-[10px] text-red-400 font-bold">已选 {{ batchSelectedTags.size }} 个标签</span>
+                    <div class="flex-1"></div>
+                    <button @click="selectAllBatchTags" class="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] rounded border border-zinc-700 transition">全选</button>
+                    <button @click="exitBatchDeleteTags" class="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] rounded border border-zinc-700 transition">取消</button>
+                    <button @click="confirmBatchDeleteTags" :disabled="batchSelectedTags.size === 0" class="px-2.5 py-1 bg-red-600 hover:bg-red-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed text-white text-[10px] rounded font-bold transition">🗑️ 删除选中 ({{ batchSelectedTags.size }})</button>
                 </div>
             </div>
 
@@ -574,6 +593,30 @@ export default {
     name: 'EditorPanel',
     setup() {
         const ctx = inject('appCtx');
+
+        // ✅ [批量删除标签] 标签云批量勾选删除模式（本组件本地状态）
+        const isBatchDeleteTags = ref(false); // 是否处于批量删除标签模式
+        const batchSelectedTags = ref(new Set()); // 批量模式下选中的标签集合
+        const toggleBatchTagSelect = (tag) => {
+            const s = new Set(batchSelectedTags.value);
+            if (s.has(tag)) s.delete(tag);
+            else s.add(tag);
+            batchSelectedTags.value = s;
+        };
+        const selectAllBatchTags = () => {
+            batchSelectedTags.value = new Set(ctx.globalAvailableTags.value || []);
+        };
+        const exitBatchDeleteTags = () => {
+            isBatchDeleteTags.value = false;
+            batchSelectedTags.value = new Set();
+        };
+        const confirmBatchDeleteTags = async () => {
+            const tags = Array.from(batchSelectedTags.value);
+            if (tags.length === 0) return;
+            const count = await ctx.batchRemoveTags(tags);
+            if (count > 0) exitBatchDeleteTags();
+        };
+
         // ✅ [世界书编辑器] 左侧词条列表可收起（纯视觉，不影响数据）
         const isWbSidebarCollapsed = ref(false);
         // ✅ [世界书编辑器] 当前选中编辑的词条（列表+详情布局）
@@ -652,6 +695,13 @@ export default {
             removeTagFromGlobalPool: ctx.removeTagFromGlobalPool,
             clearAllTagsFromPool: ctx.clearAllTagsFromPool,
             addGlobalTag: ctx.addGlobalTag,
+            // ✅ [批量删除标签] 标签云批量勾选删除
+            isBatchDeleteTags,
+            batchSelectedTags,
+            toggleBatchTagSelect,
+            selectAllBatchTags,
+            exitBatchDeleteTags,
+            confirmBatchDeleteTags,
             tabs: ctx.tabs,
             currentTab: ctx.currentTab,
             openTextModal: ctx.openTextModal,

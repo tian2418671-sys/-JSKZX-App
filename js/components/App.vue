@@ -288,11 +288,12 @@
                 <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
                 <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
             </div>
-            <div class="grid grid-cols-4 gap-1">
+            <div class="grid grid-cols-5 gap-1">
                 <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1.5 rounded transition font-medium">📁 移分组</button>
                 <button @click="showBatchTagModal = true" class="bg-gray-700 hover:bg-purple-600 py-1.5 rounded transition font-medium">🏷️ 贴标签</button>
                 <button @click="openAITagModal" class="bg-gray-700 hover:bg-amber-600 py-1.5 rounded transition font-medium">🤖 AI 打标</button>
                 <button @click="batchExportSelected" class="bg-gray-700 hover:bg-emerald-600 py-1.5 rounded transition font-medium">📦 导出</button>
+                <button @click="batchDeleteSelected" class="bg-gray-700 hover:bg-red-600 py-1.5 rounded transition font-medium" title="将选中的卡片批量移入回收站">🗑️ 删除</button>
             </div>
         </div>
 
@@ -3301,6 +3302,33 @@ export default {
             }
         };
 
+        // 🗑️ 批量删除：将选中的卡片批量移入全局回收站（安全可找回，与 Delete 键逻辑一致）
+        const batchDeleteSelected = async () => {
+            if (selectedIds.value.length === 0) return;
+            const ok = await confirmDialog(
+                `确定要将选中的 ${selectedIds.value.length} 张卡片移入回收站吗？\n` +
+                `(文件将放入全局回收站 jsTavern_Trash，支持手动找回)`
+            );
+            if (!ok) return;
+            const items = library.value.filter(i => selectedIds.value.includes(i.id));
+            const paths = items.map(i => i.path);
+            if (paths.length === 0) return;
+            // 若当前打开的卡片也在删除列表中，删除后关闭编辑面板
+            const openCardInList = cardData.value && items.some(i => i.data === cardData.value);
+            if (!window.electronAPI || typeof window.electronAPI.trashFiles !== 'function') {
+                return nativeAlert('当前环境不支持批量删除，请使用 Electron 版。', 'warning');
+            }
+            const res = await window.electronAPI.trashFiles(paths);
+            if (res && res.success) {
+                library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
+                selectedIds.value = [];
+                if (openCardInList) reset();
+                nativeAlert(`✅ 已将 ${paths.length} 张卡片移入回收站！`, 'info');
+            } else {
+                nativeAlert(`批量删除失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
         // 批量添加标签（多张卡片：内存 customTags + 原生 data.tags 双写，并逐张物理落盘）
         const batchAddTag = async () => {
             if (selectedIds.value.length === 0) return;
@@ -3662,6 +3690,57 @@ export default {
             if (cardData.value) triggerRef(cardData);
 
             nativeAlert(`✅ 已一键清空全部标签！\n系统标签库 ${poolCount} 个已清空，全库 ${modifiedItems.length} 张卡片标签已清除，物理保存 ${savedCount} 张。`, 'info');
+        };
+
+        // 🗑️ 批量删除标签：从系统标签库移除多个标签 + 清洗全库卡片残留（一次确认，批量落盘）
+        // @returns {number} 成功删除的标签数
+        const batchRemoveTags = async (tagList) => {
+            const tags = (tagList || []).filter(t => t && t.trim() !== '');
+            if (tags.length === 0) return 0;
+            const ok = await confirmDialog(
+                `确定要批量删除选中的 ${tags.length} 个标签吗？\n\n` +
+                `· 从系统常用标签库移除：${tags.slice(0, 6).join('、')}${tags.length > 6 ? ` 等 ${tags.length} 个` : ''}\n` +
+                `· 清洗全库卡片中残留的以上标签（物理落盘）`
+            );
+            if (!ok) return 0;
+
+            const tagSet = new Set(tags);
+            // 1. 从系统标签池移除（watch deep 自动持久化）
+            systemCommonTags.value = systemCommonTags.value.filter(t => !tagSet.has(t));
+
+            // 2. 清洗全库所有卡片的这些标签
+            const modifiedItems = [];
+            library.value.forEach(item => {
+                let isModified = false;
+                if (Array.isArray(item.customTags)) {
+                    const filtered = item.customTags.filter(t => !tagSet.has(t));
+                    if (filtered.length !== item.customTags.length) { item.customTags = filtered; isModified = true; }
+                }
+                const d = item.data?.data || item.data || {};
+                if (Array.isArray(d.tags)) {
+                    const filtered = d.tags.filter(t => !tagSet.has(t));
+                    if (filtered.length !== d.tags.length) { d.tags = filtered; isModified = true; }
+                } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
+                    const cleaned = d.tags.split(',').map(t => t.trim()).filter(t => t && !tagSet.has(t)).join(', ');
+                    if (cleaned !== d.tags) { d.tags = cleaned; isModified = true; }
+                }
+                if (isModified) modifiedItems.push(item);
+            });
+
+            // 3. 物理落盘 + 覆盖层同步
+            let savedCount = 0;
+            for (const item of modifiedItems) {
+                try {
+                    await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
+                    savedCount++;
+                } catch (e) {
+                    console.error(`批量删除标签后物理保存失败 [${item.name}]:`, e);
+                }
+            }
+            if (cardData.value) triggerRef(cardData);
+
+            nativeAlert(`🗑️ 已批量删除 ${tags.length} 个标签\n并清洗全库 ${modifiedItems.length} 张卡片，物理保存 ${savedCount} 张。`, 'info');
+            return tags.length;
         };
 
         // 5. 搜索快捷追加：点击搜索栏下方的快捷标签，直接填入搜索框并立即过滤
@@ -5962,7 +6041,7 @@ export default {
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
             batchChangeCategory, batchAddTag,
-            batchChangeCategoryModal, batchExportSelected,
+            batchChangeCategoryModal, batchExportSelected, batchDeleteSelected,
             showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
             systemCommonTags, batchTagChips, toggleBatchCommonTag, removeBatchTag,
             tagLangMode, toggleTagLangMode, getPresetTagText, displayTagText,
@@ -5974,7 +6053,7 @@ export default {
             isRefactoring, refactorCardFormat,
             toasts, showToast,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent,
-            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, clearAllTagsFromPool, appendTagToSearch,
+            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags, appendTagToSearch,
             isEditingSystemTags, addGlobalTag,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             rebindTavernPath,
