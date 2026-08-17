@@ -280,13 +280,19 @@
         <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
         <toast-container :toasts="toasts" />
 
-        <!-- ================= [ 批量操作悬浮控制台（页面正下方固定，宽敞现代，不挤侧边栏） ] ================= -->
+        <!-- ================= [ 批量操作悬浮控制台（可拖动：按住标题栏拖动，双击标题栏复位底部居中） ] ================= -->
         <div v-if="selectedIds.length > 0"
-             class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800/95 backdrop-blur-sm text-zinc-100 p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs border border-gray-700 rounded-xl"
-             style="min-width: 420px; max-width: 92vw;">
-            <div class="flex justify-between items-center px-1">
+             class="fixed z-50 bg-gray-800/95 backdrop-blur-sm text-zinc-100 p-2.5 flex flex-col gap-1.5 shadow-2xl text-xs border border-gray-700 rounded-xl"
+             :style="batchBarStyle">
+            <div class="flex justify-between items-center px-1 cursor-grab select-none active:cursor-grabbing"
+                 title="按住此处可随意拖动；双击复位到底部居中"
+                 @mousedown="startBatchBarDrag"
+                 @dblclick="resetBatchBarPos">
                 <span class="font-bold text-blue-400">已勾选 {{ selectedIds.length }} 张卡片</span>
-                <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-gray-500 select-none">⠿ 可拖动</span>
+                    <button @click="clearSelection" class="text-gray-400 hover:text-zinc-100">取消选择 ✕</button>
+                </div>
             </div>
             <div class="grid grid-cols-5 gap-1">
                 <button @click="batchChangeCategoryModal" class="bg-gray-700 hover:bg-blue-600 py-1.5 rounded transition font-medium">📁 移分组</button>
@@ -3047,6 +3053,52 @@ export default {
             selectedIds.value = [];
             lastSelectedIndex.value = -1;
         };
+
+        // ================= [ 批量操作悬浮控制台：可拖动定位（默认底部居中，拖动标题栏移动，双击复位） ] =================
+        const batchBarPos = ref(null); // { x, y } 拖动后的视口像素坐标；null = 默认底部居中
+        const batchBarStyle = computed(() => {
+            if (!batchBarPos.value) {
+                return { minWidth: '420px', maxWidth: '92vw', bottom: '1rem', left: '50%', transform: 'translateX(-50%)' };
+            }
+            return { minWidth: '420px', maxWidth: '92vw', left: batchBarPos.value.x + 'px', top: batchBarPos.value.y + 'px' };
+        });
+        let batchBarDrag = null; // 拖拽中的快照
+        const startBatchBarDrag = (e) => {
+            if (e.button !== 0) return; // 仅响应左键
+            if (e.target.closest('button')) return; // 不拦截按钮点击（取消选择等）
+            const panel = e.currentTarget.closest('.fixed');
+            if (!panel) return;
+            const rect = panel.getBoundingClientRect();
+            batchBarDrag = {
+                startX: e.clientX,
+                startY: e.clientY,
+                origLeft: rect.left,
+                origTop: rect.top,
+                width: rect.width,
+                height: rect.height,
+            };
+            document.body.classList.add('select-none'); // 拖拽期间禁用文本选中
+            document.addEventListener('mousemove', onBatchBarDragMove);
+            document.addEventListener('mouseup', endBatchBarDrag);
+            e.preventDefault();
+        };
+        const onBatchBarDragMove = (e) => {
+            if (!batchBarDrag) return;
+            const nx = batchBarDrag.origLeft + (e.clientX - batchBarDrag.startX);
+            const ny = batchBarDrag.origTop + (e.clientY - batchBarDrag.startY);
+            // 边界限制：不允许拖出视口
+            batchBarPos.value = {
+                x: Math.max(0, Math.min(nx, window.innerWidth - batchBarDrag.width)),
+                y: Math.max(0, Math.min(ny, window.innerHeight - batchBarDrag.height)),
+            };
+        };
+        const endBatchBarDrag = () => {
+            batchBarDrag = null;
+            document.body.classList.remove('select-none');
+            document.removeEventListener('mousemove', onBatchBarDragMove);
+            document.removeEventListener('mouseup', endBatchBarDrag);
+        };
+        const resetBatchBarPos = () => { batchBarPos.value = null; };
 
         // ================= 交互优化：多选开关与右键菜单 =================
         const isMultiSelectMode = ref(false); // 默认隐藏批量复选框
@@ -6076,6 +6128,7 @@ export default {
             exportLibraryDB, importLibraryDB,
             renameCard, exportWorldbook,
             selectedIds, handleCardClick, toggleSelection, clearSelection,
+            batchBarStyle, startBatchBarDrag, resetBatchBarPos,
             isMultiSelectMode, viewMode, toggleViewMode, isCompactMode, sortBy,
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
