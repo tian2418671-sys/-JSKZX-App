@@ -2823,6 +2823,7 @@ export default {
                             if (res && res.success) {
                                 library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
                                 selectedIds.value = [];
+                                await cleanupEmptyCategories(); // 🧹 自动清理空分组
                                 showToast(`已移入回收站 ${paths.length} 张卡片`, 'info');
                             }
                         }
@@ -3150,6 +3151,7 @@ export default {
                     library.value = library.value.filter(i => i.id !== item.id);
                     // 如果删除的正是当前打开的卡片，关闭编辑面板
                     if (cardData.value && item.data === cardData.value) reset();
+                    await cleanupEmptyCategories(); // 🧹 自动清理空分组
                     nativeAlert("卡片已安全移入本地回收站。", "info");
                 } else {
                     nativeAlert("操作失败: " + res.error, "error");
@@ -3217,6 +3219,7 @@ export default {
                             // 动态从内存中剔除，无需刷新
                             library.value = library.value.filter(c => c.path !== card.path);
                             if (wasCurrent) reset();
+                            await cleanupEmptyCategories(); // 🧹 自动清理空分组
                             addLog(`🗑️ 已将卡片移入回收站: ${card.name}`, 'warning');
                             nativeAlert('已安全移入回收站。', 'info');
                         } else {
@@ -3323,9 +3326,36 @@ export default {
                 library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
                 selectedIds.value = [];
                 if (openCardInList) reset();
+                await cleanupEmptyCategories(); // 🧹 自动清理空分组
                 nativeAlert(`✅ 已将 ${paths.length} 张卡片移入回收站！`, 'info');
             } else {
                 nativeAlert(`批量删除失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
+        // 🧹 删除卡片后自动清理空分组（自定义分组 + 物理文件夹分组；预设/未分类/全部保留）
+        const cleanupEmptyCategories = async () => {
+            if (customCategories.value.length === 0) return;
+            // 1. 统计各分组当前卡片数
+            const catCount = {};
+            library.value.forEach(item => {
+                const cat = item.category || '未分类';
+                catCount[cat] = (catCount[cat] || 0) + 1;
+            });
+            // 2. 找出已无卡片的自定义分组
+            const emptyCats = customCategories.value.filter(c => !catCount[c]);
+            if (emptyCats.length === 0) return;
+            // 3. 从分组列表移除（watch deep 自动持久化）
+            customCategories.value = customCategories.value.filter(c => catCount[c]);
+            if (emptyCats.includes(currentCategoryKey.value)) currentCategoryKey.value = 'all';
+            addLog(`🧹 已自动清理空分组: ${emptyCats.join(', ')}`, 'info');
+            // 4. 物理删除空文件夹（仅 Electron + 已设置库目录；非空文件夹自动跳过，绝不误删）
+            if (window.electronAPI && typeof window.electronAPI.deleteEmptyGroupFolder === 'function' && currentFolderPath.value) {
+                for (const cat of emptyCats) {
+                    try {
+                        await window.electronAPI.deleteEmptyGroupFolder({ libraryPath: currentFolderPath.value, groupName: cat });
+                    } catch (e) { /* 忽略 */ }
+                }
             }
         };
 
@@ -5286,6 +5316,7 @@ export default {
                 // 3. 若当前编辑卡片被清理，关闭编辑器
                 if (currentTrashed) reset();
 
+                await cleanupEmptyCategories(); // 🧹 自动清理空分组
                 nativeAlert(`清理成功！已将 ${res.count} 张冗余卡片移入回收站。`, 'info');
             } else {
                 nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
@@ -6041,7 +6072,7 @@ export default {
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
             batchChangeCategory, batchAddTag,
-            batchChangeCategoryModal, batchExportSelected, batchDeleteSelected,
+            batchChangeCategoryModal, batchExportSelected, batchDeleteSelected, cleanupEmptyCategories,
             showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
             systemCommonTags, batchTagChips, toggleBatchCommonTag, removeBatchTag,
             tagLangMode, toggleTagLangMode, getPresetTagText, displayTagText,

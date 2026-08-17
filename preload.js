@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     renameGroupFolder: (data) => ipcRenderer.invoke('fs:renameGroupFolder', data),
     // 📁 物理文件夹分组：移动卡片文件到目标分组文件夹
     moveCardToGroup: (data) => ipcRenderer.invoke('fs:moveCardToGroup', data),
+    // 🧹 物理文件夹分组：删除空分组文件夹（删除卡片后自动清理空分组用，只删空目录）
+    deleteEmptyGroupFolder: (data) => ipcRenderer.invoke('fs:deleteEmptyGroupFolder', data),
     // 📸 历史快照：更新快照配置（开关/冷却间隔/最大保留数）
     updateSnapshotConfig: (config) => ipcRenderer.invoke('settings:updateSnapshotConfig', config),
     // 📸 历史快照：手动为指定卡片创建快照（绕过冷却）

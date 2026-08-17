@@ -629,6 +629,25 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🧹 删除空分组文件夹（仅当文件夹为空时删除，绝不误删有卡片的目录；删除卡片后自动清理空分组用）
+  ipcMain.handle('fs:deleteEmptyGroupFolder', async (event, { libraryPath, groupName } = {}) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      const safeName = String(groupName || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+      if (!safeName) return { success: false, error: '分组名无效' };
+      const dirPath = path.join(libraryPath, safeName);
+      if (!isPathAllowed(dirPath)) return forbidden();
+      if (!fs.existsSync(dirPath)) return { success: true, notExist: true };
+      // 只允许删除空目录（存在卡片或其他文件时拒绝，防止误删用户数据）
+      const items = await fs.promises.readdir(dirPath);
+      if (items.length > 0) return { success: false, error: '文件夹非空，无法自动删除' };
+      await fs.promises.rmdir(dirPath);
+      return { success: true, deleted: safeName };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // IPC：读取全局标签库（userData/tavern_manager_config.json 的 globalTags 字段）
   // ⚠️ 必须用主进程配置文件而非 localStorage：dev(localhost) 与生产(app://) 是不同 origin，localStorage 互不共享
   ipcMain.handle('config:getGlobalTags', () => {
