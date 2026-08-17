@@ -54,6 +54,16 @@
                 </button>
             </div>
 
+            <!-- 搜索语法提示（超级搜索引擎：多词 AND / 前缀语法 / 排除词） -->
+            <p class="text-[10px] text-zinc-500 leading-snug px-0.5 select-none">
+                💡 <code class="text-zinc-400">傲娇 女仆</code>多词
+                <span class="text-zinc-700">|</span> <code class="text-zinc-400">t:奇幻</code>标签
+                <span class="text-zinc-700">|</span> <code class="text-zinc-400">a:作者</code>
+                <span class="text-zinc-700">|</span> <code class="text-zinc-400">w:世界书</code>
+                <span class="text-zinc-700">|</span> <code class="text-zinc-400">f:文件</code>
+                <span class="text-zinc-700">|</span> <code class="text-zinc-400">-排除</code>
+            </p>
+
             <!-- 行2：分类下拉 + 排序下拉 -->
             <div class="flex items-center gap-1.5 text-[11px]">
                 <select v-model="currentCategoryKey" class="flex-1 min-w-0 h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1.5 text-zinc-300 focus:outline-none focus:border-blue-500/80 truncate">
