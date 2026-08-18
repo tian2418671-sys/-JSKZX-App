@@ -1095,7 +1095,8 @@ app.whenReady().then(() => {
           return { success: false, error: "无法写入 PNG 结构。" };
         }
       }
-      return { success: false, error: "不支持的文件格式。" };
+      // 【修复 BUG-4】webp 等格式无法把 JSON 回写图内，明确提示而非笼统"不支持的文件格式"
+      return { success: false, error: `暂不支持 ${ext || ''} 格式的在线保存（仅支持 .json / .png 卡片，webp 无法回写数据）` };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -1533,7 +1534,9 @@ app.whenReady().then(() => {
         });
         bodyData = {
           model: payload.model,
-          max_tokens: 4096,
+          // 【修复】统一 max_tokens 口径：优先透传前端传入的上限，缺省再给 4096（Anthropic 必填字段），
+          // 不再单边硬编码 4096 截断长回复
+          max_tokens: payload.max_tokens || 4096,
           system: systemPrompt,
           messages: filteredMessages,
           temperature: payload.temperature ?? 0.2

@@ -587,7 +587,7 @@
 </template>
 
 <script>
-import { inject, ref, computed } from 'vue';
+import { inject, ref, computed, watch } from 'vue';
 
 export default {
     name: 'EditorPanel',
@@ -621,6 +621,11 @@ export default {
         const isWbSidebarCollapsed = ref(false);
         // ✅ [世界书编辑器] 当前选中编辑的词条（列表+详情布局）
         const currentEntry = ref(null);
+        // 【修复】切换世界书时清空当前选中词条（防旧书词条残留，详情面板 v-model 误改旧书对象）
+        watch(
+            () => (ctx.activeWorldbook ? ctx.activeWorldbook.value : null),
+            () => { currentEntry.value = null; }
+        );
         const selectEntry = (entry) => {
             if (!entry) return;
             currentEntry.value = entry;

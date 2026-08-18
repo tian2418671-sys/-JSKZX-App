@@ -105,7 +105,24 @@ export function parsePNGChunk(buffer) {
                 if (keyword === 'chara' || keyword === 'ccv3') {
                     // 兼容 V2(chara) / V3(ccv3) 两种数据块关键字；
                     // tEXt 为 latin1（或 Base64 字符串），iTXt 为 utf-8
-                    const textData = new TextDecoder('utf-8').decode(chunkData.slice(nullPos + (type === 'iTXt' ? 3 : 1)));
+                    // 【修复】iTXt 结构：keyword\0 compression_flag(1) compression_method(1)
+                    //   language_tag\0 translated_keyword\0 text —— 必须跳过语言标签与译名关键词两个 \0 终止段，
+                    //   文本起点才是真正的正文（旧代码 nullPos+3 定位到语言标签区，标准 iTXt 卡解析失败）
+                    let textStart;
+                    if (type === 'iTXt') {
+                        let p = nullPos + 1; // 跳过 keyword\0
+                        p += 2;              // 跳过 compression_flag + compression_method
+                        const langEnd = p < chunkData.length ? chunkData.indexOf(0, p) : -1; // language_tag 以 \0 结束
+                        if (langEnd === -1) {
+                            textStart = chunkData.length; // 结构异常，无文本可读
+                        } else {
+                            const trEnd = chunkData.indexOf(0, langEnd + 1); // translated_keyword 以 \0 结束
+                            textStart = trEnd === -1 ? chunkData.length : trEnd + 1;
+                        }
+                    } else {
+                        textStart = nullPos + 1; // tEXt：keyword\0 text
+                    }
+                    const textData = new TextDecoder('utf-8').decode(chunkData.slice(textStart));
                     const base64Str = textData.replace(/\0/g, ''); // 清理空字节
                     const jsonStr = decodeBase64UTF8(base64Str);
                     return JSON.parse(jsonStr);

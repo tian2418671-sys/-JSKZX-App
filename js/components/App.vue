@@ -1735,6 +1735,9 @@ export default {
 
             scrollToBottom();
 
+            // 【修复】记录发起请求时的卡片引用，防止在途请求期间切卡导致旧卡回复挂到新卡
+            const targetCard = cardData.value;
+
             // 过滤掉 UI 用的 name 属性，只保留 OpenAI 标准的 role 和 content
             const payload = {
                 model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
@@ -1747,6 +1750,9 @@ export default {
                 // 持久化 API Key（localStorage 可能不可用，做防御性写入）
                 try { localStorage.setItem('stc-api-key', apiKey.value); } catch (e) { /* 忽略 */ }
                 const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, apiKey.value, apiType.value);
+
+                // 【修复】在途请求期间用户切卡 → chatHistory 已被清空/重建，直接丢弃回复，不污染新卡
+                if (cardData.value !== targetCard) return;
 
                 const reply = extractReplyContent(result);
                 if (result.success && reply) {
@@ -2172,10 +2178,15 @@ export default {
                     return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
                 }
                 if (sortBy.value === 'time') {
-                    // 优先卡片内建 create_date；缺失时回退文件修改时间 mtime
-                    const ta = Date.parse((a.data?.data || a.data || {}).create_date) || (a._mtime || 0);
-                    const tb = Date.parse((b.data?.data || b.data || {}).create_date) || (b._mtime || 0);
-                    return tb - ta; // 最新优先
+                    // 【修复 BUG-1】"最新"以物理文件时间为准（_mtime = 修改/加入时间），
+                    // 避免卡片内建 create_date（作者创作日期可多年不变/同批卡相同）造成的排序混乱；
+                    // 物理时间缺失时才回退卡片内建 create_date（用于未落盘/特殊来源的卡）
+                    const pickTime = (card) => {
+                        const m = Number(card._mtime) || 0;
+                        if (m) return m;
+                        return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
+                    };
+                    return pickTime(b) - pickTime(a); // 最新优先
                 }
                 if (sortBy.value === 'tokens') {
                     return estimateCardTokens(b) - estimateCardTokens(a); // Token 多优先
@@ -2532,8 +2543,16 @@ export default {
             cardInfo.customTags = Array.from(new Set(generatedTags));
             cardInfo.category = assignedCategory;
 
-            // 动态将新分类加入分类表（命中预设分组时不重复添加）
-            if (!allCategories.value.some(c => c.cn === assignedCategory || c.en === assignedCategory || c.key === assignedCategory)) {
+            // 【修复 BUG-3】自动分类不再盲目创建分组：
+            //  · 开关开启（导入即净化）：完全不自动创建分组，自动分类仅落到卡片属性；
+            //  · 开关关闭：也先过滤「未分类」，仅对真正的新分类才补建分组。
+            //  分组在物理文件夹体系下以库目录子文件夹为准（walkLibraryDir 一级文件夹），
+            //  此处避免把自动贴标签引入的普通分类词当成分组，产生"幽灵分组"。
+            const shouldAutoBuildCategory = !sanitizeImportedTags.value;
+            const catTrimmed = String(assignedCategory || '').trim();
+            if (shouldAutoBuildCategory
+                && catTrimmed && catTrimmed !== '未分类'
+                && !allCategories.value.some(c => c.cn === assignedCategory || c.en === assignedCategory || c.key === assignedCategory)) {
                 customCategories.value.push(assignedCategory);
             }
         };
@@ -2637,7 +2656,10 @@ export default {
                         data: normalized,
                         category: '未分类',
                         customTags: [],
-                        _mtime: file.mtime || 0, // 文件修改时间（排序 fallback 用，避免 create_date 缺失时排序混乱）
+                        // 【修复 BUG-1】"最新"排序基准：扫描路径带真实物理 mtime；
+                        // 内存导入路径（拖拽/文件菜单/全盘收编）无 mtime → 以当前时间为准，
+                        // 保证新导入的卡在"最新"排序中正确排到最前（否则回退 create_date 可能排到旧卡后面）
+                        _mtime: file.mtime || Date.now(),
                         subFolder: file.subFolder || '' // 相对库根的文件夹路径（'' = 根目录；物理分组用）
                     };
 
@@ -3769,17 +3791,20 @@ export default {
         const globalAvailableTags = computed(() => {
             const tagSet = new Set(systemCommonTags.value);
             library.value.forEach(item => {
-                // 提取自定义标签
+                // 提取自定义标签（用户主动打的，始终保留）
                 if (item.customTags && Array.isArray(item.customTags)) {
                     item.customTags.forEach(t => { if (t) tagSet.add(t); });
                 }
-                // 提取卡片原生自带标签（兼顾旧版卡片的字符串格式）
-                const d = item.data?.data || item.data || {};
-                if (d.tags) {
-                    if (Array.isArray(d.tags)) {
-                        d.tags.forEach(t => { if (t) tagSet.add(t); });
-                    } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
-                        d.tags.split(',').forEach(t => tagSet.add(t.trim()));
+                // 【修复 BUG-2】卡片原生自带标签：仅在"导入时忽略卡片自带标签"开关关闭时透出
+                // （开启 = 忽略他人卡片的杂乱标签，不再混入全局标签池）
+                if (!sanitizeImportedTags.value) {
+                    const d = item.data?.data || item.data || {};
+                    if (d.tags) {
+                        if (Array.isArray(d.tags)) {
+                            d.tags.forEach(t => { if (t) tagSet.add(t); });
+                        } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
+                            d.tags.split(',').forEach(t => tagSet.add(t.trim()));
+                        }
                     }
                 }
             });
@@ -4300,6 +4325,8 @@ export default {
             isTranslating.value = true;
 
             // 兼容 V2（cardData.data）与 V1（cardData 顶层）结构
+            // 【修复】捕获起始卡片引用，防止在途翻译期间切卡导致结果回写到旧卡
+            const targetCard = cardData.value;
             const data = cardData.value?.data || cardData.value;
 
             // 构建严格的翻译 Prompt
@@ -4330,10 +4357,18 @@ export default {
 
             try {
                 // 依次翻译核心字段（防止拼在一起超长或弄乱格式）
-                if (data.description) data.description = await callAIForTranslation(data.description);
-                if (data.first_mes) data.first_mes = await callAIForTranslation(data.first_mes);
-                if (data.scenario) data.scenario = await callAIForTranslation(data.scenario);
-                if (data.mes_example) data.mes_example = await callAIForTranslation(data.mes_example);
+                // 【修复】每次回写前校验未切卡：切卡则丢弃剩余结果，避免翻译写回旧卡
+                const writeBackIfSameCard = async (key) => {
+                    if (!data[key]) return true;
+                    const translated = await callAIForTranslation(data[key]);
+                    if (cardData.value !== targetCard) return false; // 已切卡，中止
+                    data[key] = translated;
+                    return true;
+                };
+                if (!(await writeBackIfSameCard('description'))) return;
+                if (!(await writeBackIfSameCard('first_mes'))) return;
+                if (!(await writeBackIfSameCard('scenario'))) return;
+                if (!(await writeBackIfSameCard('mes_example'))) return;
 
                 refreshCardData(); // shallowRef 深层修改后强制刷新右侧界面
                 showToast('🎉 翻译完成！请检查右侧内容，确认后点击「覆盖保存」。', 'success');
@@ -4370,6 +4405,9 @@ export default {
 
             isRefactoring.value = true;
 
+            // 【修复】捕获起始卡片引用，防止在途重构期间切卡导致结果回写到旧卡
+            const targetCard = cardData.value;
+
             // 专为格式降维打击设计的 System Prompt
             const systemPrompt = `你是一个大语言模型提示词优化专家和角色卡设定师。
 用户会发送一段可能由旧版 W++、JSON 或繁琐描述堆砌的角色卡设定 (Description)。
@@ -4394,6 +4432,9 @@ export default {
                 const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
                 const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
                 if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
+
+                // 【修复】在途请求期间切卡 → 丢弃结果，避免回写到旧卡
+                if (cardData.value !== targetCard) return;
 
                 // 覆盖设定
                 data.description = extractReplyContent(result).trim();
