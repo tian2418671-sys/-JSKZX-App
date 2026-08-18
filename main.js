@@ -1239,6 +1239,70 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🧹 清理「无对应卡片」的孤儿快照目录（卡片被删除后其 .bak_history 残留；默认按目录整体判定）
+  ipcMain.handle('sys:cleanOrphanSnapshots', async (event, libraryPath) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      if (!fs.existsSync(libraryPath)) return { success: false, error: '库目录不存在' };
+      if (!fs.statSync(libraryPath).isDirectory()) return { success: false, error: '路径不是目录' };
+      let removedCount = 0;
+      let freedBytes = 0;
+      const calcDirSize = (p) => {
+        let total = 0;
+        let items;
+        try { items = fs.readdirSync(p, { withFileTypes: true }); } catch (e) { return 0; }
+        for (const it of items) {
+          const fp = path.join(p, it.name);
+          try {
+            if (it.isDirectory()) total += calcDirSize(fp);
+            else total += fs.statSync(fp).size;
+          } catch (e) { /* 忽略单个失败 */ }
+        }
+        return total;
+      };
+      // 递归收集孤儿 .bak_history：若其中所有快照对应的卡片均已不存在（目录级判定），视为孤儿目录
+      // ⚠️ 正向匹配（卡片 base 为快照前缀），避免快照 split('_')[0] 在「卡片名含下划线」时误判
+      const collectOrphans = (dir, result = []) => {
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return result; }
+        for (const f of entries) {
+          const full = path.join(dir, f.name);
+          if (f.name === '.bak_history') {
+            try {
+              const cardBases = new Set();
+              for (const ef of fs.readdirSync(dir)) {
+                if (ef.startsWith('.') || ef === '.bak_history') continue;
+                const efPath = path.join(dir, ef);
+                try { if (fs.statSync(efPath).isFile()) cardBases.add(ef.replace(/\.[^.]+$/, '')); } catch (e) { /* 忽略 */ }
+              }
+              const hfs = fs.readdirSync(full);
+              // 存在至少一张「有快照的卡片」仍存活 → 目录非孤儿
+              let alive = false;
+              for (const cb of cardBases) {
+                if (hfs.some(hf => hf.startsWith(cb + '_'))) { alive = true; break; }
+              }
+              if (!alive) result.push(full);
+            } catch (e) { /* 忽略 */ }
+          } else if (f.isDirectory() && !f.name.startsWith('.')) {
+            collectOrphans(full, result);
+          }
+        }
+        return result;
+      };
+      const orphans = collectOrphans(libraryPath);
+      for (const dir of orphans) {
+        try {
+          freedBytes += calcDirSize(dir);
+          fs.rmSync(dir, { recursive: true, force: true });
+          removedCount++;
+        } catch (e) { /* 单个失败继续 */ }
+      }
+      return { success: true, removedCount, freedBytes };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {

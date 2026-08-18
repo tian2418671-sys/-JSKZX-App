@@ -145,6 +145,9 @@
                             <button @click="cleanAllSnapshots" class="mt-2 w-full px-2 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white text-[11px] font-medium rounded transition" title="删除库目录下所有 .bak_history 快照文件夹，释放硬盘空间">
                                 🧹 一键清理全部历史快照
                             </button>
+                            <button @click="cleanOrphanSnapshots" class="mt-1.5 w-full px-2 py-1.5 bg-amber-600/80 hover:bg-amber-500 text-white text-[11px] font-medium rounded transition" title="仅删除「对应卡片已被删除」的孤儿快照目录，仍有卡片存活的快照会保留">
+                                🗑️ 清理孤儿快照（已删卡残留）
+                            </button>
                         </div>
                         <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between text-zinc-300 mb-1">
@@ -243,6 +246,7 @@ export default {
             sanitizeImportedTags: ctx.sanitizeImportedTags,
             snapshotConfig: ctx.snapshotConfig,
             cleanAllSnapshots: ctx.cleanAllSnapshots,
+            cleanOrphanSnapshots: ctx.cleanOrphanSnapshots,
             showApiModal: ctx.showApiModal,
             setTheme: ctx.setTheme,
             theme: ctx.theme,
