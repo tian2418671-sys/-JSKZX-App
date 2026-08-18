@@ -1590,10 +1590,8 @@ app.whenReady().then(() => {
           modelsUrl = ep; // 已是以 /models 结尾的完整列表地址，直接使用
         } else if (ep.endsWith('/chat/completions')) {
           modelsUrl = ep.replace(/\/chat\/completions$/, '/models');
-        } else if (/\/v1\/?$/.test(ep)) {
-          modelsUrl = ep.replace(/\/+$/, '') + '/models';
         } else {
-          modelsUrl = ep.replace(/\/+$/, '') + '/models';
+          modelsUrl = ep.replace(/\/+$/, '') + '/models'; // 其余（含 /v1、裸域名等）统一补 /models
         }
         const authKey = (apiKey && apiKey.trim()) ? apiKey.trim() : '';
         headers = { 'Content-Type': 'application/json' };

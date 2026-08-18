@@ -212,7 +212,7 @@ npm run build
 └───────────────┬─────────────────────────────────┘
                 │
 ┌───────────────▼─────────────────────────────────┐
-│  渲染进程 js/main.js（Vue 3 SFC 组件化）          │
+│  渲染进程 js/entry.js（Vue 3 SFC 组件化）          │
 │  App.vue 根组件 + 21 个 SFC 子组件               │
 │   ├─ HeaderBar / SidebarPanel / EditorPanel      │
 │   ├─ 14 个弹窗组件 + 2 个右键菜单组件            │
@@ -238,7 +238,7 @@ npm run build
 | `file:exportPackage` | `exportPackage` | 单卡整合包导出 |
 | `file:exportBatchPackage` | `exportBatchPackage` | 批量打包导出 |
 
-> **新增 IPC 的三步套路**：`main.js` 注册 `ipcMain.handle` → `preload.js` 暴露 → `js/main.js`（渲染进程）调用。
+> **新增 IPC 的三步套路**：`main.js` 注册 `ipcMain.handle` → `preload.js` 暴露 → `js/entry.js`（渲染进程）调用。
 
 ---
 
