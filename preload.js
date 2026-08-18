@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listCardSnapshots: (filePath) => ipcRenderer.invoke('card:listSnapshots', filePath),
     // 📸 历史快照：从快照恢复指定卡片（先备份当前版本再覆盖）
     restoreCardSnapshot: (payload) => ipcRenderer.invoke('card:restoreSnapshot', payload),
+    // 🧹 历史快照：一键清理全部历史快照垃圾（递归删除库目录下所有 .bak_history，释放硬盘空间）
+    cleanAllSnapshots: (libraryPath) => ipcRenderer.invoke('sys:cleanAllSnapshots', libraryPath),
     // 读取全局标签库（主进程配置文件，跨 dev/生产统一持久化）
     getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
     // 保存全局标签库到主进程配置文件

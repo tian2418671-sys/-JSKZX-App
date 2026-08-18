@@ -1155,6 +1155,52 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🧹 一键清理全部历史快照垃圾（递归删除库目录下所有 .bak_history，释放硬盘空间；保存后会重新生成）
+  ipcMain.handle('sys:cleanAllSnapshots', async (event, libraryPath) => {
+    try {
+      if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
+      if (!fs.existsSync(libraryPath)) return { success: false, error: '库目录不存在' };
+      if (!fs.statSync(libraryPath).isDirectory()) return { success: false, error: '路径不是目录' };
+      let removedCount = 0;
+      let freedBytes = 0;
+      // 计算目录占用字节数
+      const calcDirSize = (p) => {
+        let total = 0;
+        let items;
+        try { items = fs.readdirSync(p, { withFileTypes: true }); } catch (e) { return 0; }
+        for (const it of items) {
+          const fp = path.join(p, it.name);
+          try {
+            if (it.isDirectory()) total += calcDirSize(fp);
+            else total += fs.statSync(fp).size;
+          } catch (e) { /* 忽略单个失败 */ }
+        }
+        return total;
+      };
+      // 递归扫描：删除所有 .bak_history 文件夹（含物理分组子文件夹内的），跳过其他隐藏目录
+      const walk = (dir) => {
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const f of entries) {
+          if (f.name === '.bak_history') {
+            const full = path.join(dir, f.name);
+            try {
+              freedBytes += calcDirSize(full);
+              fs.rmSync(full, { recursive: true, force: true });
+              removedCount++;
+            } catch (e) { /* 单个删除失败继续 */ }
+          } else if (f.isDirectory() && !f.name.startsWith('.')) {
+            walk(path.join(dir, f.name));
+          }
+        }
+      };
+      walk(libraryPath);
+      return { success: true, removedCount, freedBytes };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {

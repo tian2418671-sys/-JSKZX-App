@@ -1285,6 +1285,24 @@ export default {
 
         const closeSnapshotModal = () => { showSnapshotModal.value = false; };
 
+        // 🧹 一键清理全部历史快照垃圾（递归删除库目录下所有 .bak_history，释放硬盘空间；之后保存会自动重新生成）
+        const cleanAllSnapshots = async () => {
+            if (!currentFolderPath.value) return nativeAlert('请先打开角色库目录。', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.cleanAllSnapshots !== 'function') {
+                return nativeAlert('当前版本不支持清理历史快照，请更新应用。', 'warning');
+            }
+            const ok = await confirmDialog('确定要清理角色库中的【全部历史快照】吗？\n（将删除库目录下所有 .bak_history 快照文件夹，释放硬盘空间；之后保存卡片时会自动重新生成）');
+            if (!ok) return;
+            const res = await window.electronAPI.cleanAllSnapshots(currentFolderPath.value);
+            if (res && res.success) {
+                const mb = ((res.freedBytes || 0) / 1024 / 1024).toFixed(1);
+                nativeAlert(`✅ 已清理 ${res.removedCount || 0} 个快照文件夹，释放约 ${mb} MB！\n之后保存卡片时将自动重新生成新快照。`, 'info');
+                addLog(`🧹 已清理 ${res.removedCount || 0} 个快照文件夹（释放 ${mb} MB）`, 'success');
+            } else {
+                nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
         // 分页状态
         const currentPage = ref(1);
         const itemsPerPage = ref(18);
@@ -6560,7 +6578,7 @@ export default {
             snapshotConfig, saveSnapshotSettings,
             // 📸 历史快照查看与一键恢复
             showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
-            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,
+            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, cleanAllSnapshots,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
             selectFixedDirectory, addManualTag, changePage,

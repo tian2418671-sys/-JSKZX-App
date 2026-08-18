@@ -142,6 +142,9 @@
                                 </div>
                             </div>
                             <span v-else class="block text-[10px] text-amber-500/80 mt-1">自动快照已关闭，可在卡片工具栏手动创建快照</span>
+                            <button @click="cleanAllSnapshots" class="mt-2 w-full px-2 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white text-[11px] font-medium rounded transition" title="删除库目录下所有 .bak_history 快照文件夹，释放硬盘空间">
+                                🧹 一键清理全部历史快照
+                            </button>
                         </div>
                         <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between text-zinc-300 mb-1">
@@ -239,6 +242,7 @@ export default {
             viewOptions: ctx.viewOptions,
             sanitizeImportedTags: ctx.sanitizeImportedTags,
             snapshotConfig: ctx.snapshotConfig,
+            cleanAllSnapshots: ctx.cleanAllSnapshots,
             showApiModal: ctx.showApiModal,
             setTheme: ctx.setTheme,
             theme: ctx.theme,
