@@ -4369,6 +4369,44 @@ export default {
         const startAITagging = async () => {
             if (isAITagging.value) return;
 
+            // ⚡ 限流/重试配置：批量打标逐张串行，需节流 + 退避重试，避免瞬时打满上游 429 额度
+            const AI_TAG_DELAY_MS = 1500;      // 每张卡片之间的请求间隔
+            const AI_TAG_MAX_RETRIES = 3;      // 单张卡片最多重试次数（不含首次）
+            const AI_TAG_RETRY_BASE_MS = 2000; // 指数退避基数（2s → 4s → 8s）
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            // 仅对 429 限流 / 网络瞬时错误重试；400/401/403/404 等业务错误直接判失败
+            const isRetryableAIError = (msg) => /429|rate[ _-]?limit|timeout|econnreset|fetch failed/i.test(msg || '');
+
+            // 带退避重试的 API 调用（返回成功 result，或抛出最终错误）
+            const callAIWithRetry = async (payload, authKey) => {
+                let lastErr;
+                for (let attempt = 0; attempt <= AI_TAG_MAX_RETRIES; attempt++) {
+                    try {
+                        const result = await window.electronAPI.sendChatMessage(
+                            apiEndpoint.value, payload, authKey, apiType.value
+                        );
+                        if (result && result.success) return result;
+
+                        const msg = (result && result.error) || 'API 请求失败';
+                        if (isRetryableAIError(msg) && attempt < AI_TAG_MAX_RETRIES) {
+                            lastErr = new Error(msg);
+                            await sleep(AI_TAG_RETRY_BASE_MS * Math.pow(2, attempt));
+                            continue;
+                        }
+                        throw new Error(msg);
+                    } catch (e) {
+                        const emsg = (e && e.message) || String(e);
+                        if (isRetryableAIError(emsg) && attempt < AI_TAG_MAX_RETRIES) {
+                            lastErr = e;
+                            await sleep(AI_TAG_RETRY_BASE_MS * Math.pow(2, attempt));
+                            continue;
+                        }
+                        throw e;
+                    }
+                }
+                throw lastErr;
+            };
+
             // 1. 目标：多选选中的卡片 ID（openAITagModal 已保证 selectedIds 非空，此处兜底校验）
             const targetIds = [...selectedIds.value];
 
@@ -4443,8 +4481,8 @@ export default {
                         temperature: 0.2 // 偏低温度保证 JSON 格式稳定性
                     };
                     const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
-                    const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
-                    if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
+                    // 429 限流 / 网络抖动时自动退避重试，避免批量打标大面积失败
+                    const result = await callAIWithRetry(payload, authKey);
 
                     // 6. 强力提取 JSON 数组（兼容 OpenAI / Anthropic 回复结构）
                     let rawReply = extractReplyContent(result).trim();
@@ -4487,6 +4525,9 @@ export default {
                     failCount++;
                     failReasons.push(`${card.name || '未知角色'}: ${(err && err.message) ? err.message : String(err)}`);
                 }
+
+                // 请求节流：卡片之间留出间隔，配合重试退避，防止触发上游 429 限流（最后一张无需再等）
+                if (i < targetIds.length - 1) await sleep(AI_TAG_DELAY_MS);
             }
 
             // 8. 扫尾工作
