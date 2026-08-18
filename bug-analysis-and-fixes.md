@@ -18,12 +18,14 @@
 | BUG-3 | 导入后自动创建分组 | ✅ 已修复 | `App.vue` `processAutoTagsAndCategory` 联动开关 + 过滤「未分类」 |
 | BUG-4 | webp 卡保存提示含糊 | ✅ 已修复 | `main.js` `file:saveCard` 明确提示「仅支持 .json/.png，webp 无法回写」 |
 | BUG-5 | 打包图标路径 | ❌ 不成立 | 当前工作区 `build/icon.ico` 存在，`package.json` 配置正确（buildResources 默认目录） |
-| BUG-6 | 快照配置重启不同步主进程 | ✅ 已修复 | 当前代码 `onMounted` 已 `await saveSnapshotSettings()` 启动同步 |
+| BUG-6 | 快照配置重启不同步主进程 | ✅ 已修复 | `watch(snapshotConfig, saveSnapshotSettings, { deep: true, immediate: true })` 补 immediate（启动即同步，与 onMounted 手动同步双保险） |
 | 中等 | 世界书切换后 `currentEntry` 残留 | ✅ 已修复 | `EditorPanel.vue` 新增 watch 清空选中词条 |
 | 轻微 | `pngParser.js` iTXt 偏移计算错误 | ✅ 已修复 | 正确跳过 language_tag\0 + translated_keyword\0（已单测验证） |
 | 轻微 | 汉化/升维/聊天三处异步竞态（切卡回写旧卡） | ✅ 已修复 | 捕获 `targetCard` 引用，在途期间切卡即丢弃结果 |
 | 轻微 | blob URL 未释放 | ❌ 不成立 | `reset` 已有 revoke；`handleImportFiles` 仅在真正需要时创建 blob |
-| 轻微 | `onMounted` 全局监听无清理 | ⏸️ 跳过 | 根组件几乎不卸载，影响可忽略 |
+| 轻微 | `onMounted` 全局监听无清理 | ✅ 已修复 | `App.vue` 加 `onUnmounted` 移除 `click`/`keydown` 三个全局监听（`handleGlobalClick`/`handleGlobalKeys`/`handleExtendedKeys`） |
+| 轻微 | blob URL 泄漏 | ✅ 已修复 | `processElectronFiles`/`refreshLibrary` 重建库前 revoke 旧卡片 `blob:` avatar；`openFromLibrary` 换卡时 revoke 旧预览 blob |
+| 优化 | 刷新全量重载（方案 B 增量刷新） | ✅ 已做 | `refreshLibrary` 按 `path+mtime` 差分——复用未变化卡片对象（保留用户自定义标签/分类），只解析新增/修改文件；被删卡片自动剔除并 revoke blob |
 | 合理代码 | `max_tokens` 双协议口径不一致 | ✅ 已修复 | `main.js` Anthropic 分支 `payload.max_tokens \|\| 4096`，与 OpenAI 分支一致透传 |
 | 合理代码 | `js/main.js` 与根 `main.js` 同名 | ✅ 已修复 | `git mv js/main.js js/entry.js` + `index.html` 引用 + README 同步；`vite build` 验证通过（640 模块） |
 | 合理代码 | `models:fetch` 冗余分支 | ✅ 已修复 | `/\/v1\/?$/` 分支与 `else` 分支结果完全相同，已合并为单一 else 分支 |

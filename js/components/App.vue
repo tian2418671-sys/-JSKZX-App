@@ -319,7 +319,7 @@
 </template>
 
 <script>
-import { ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef, provide, toRaw } from 'vue';
+import { ref, shallowRef, reactive, computed, watch, onMounted, onUnmounted, nextTick, triggerRef, provide, toRaw } from 'vue';
 import DOMPurify from 'dompurify'; // 渲染模式 XSS 清洗（本地依赖，随 Vite 打包，离线可用）
 import * as echarts from 'echarts'; // ECharts 由 npm 依赖提供（替代旧全局 script）
 import Section from './Section.vue'; // SFC 单文件组件（由 Section.js 迁移）
@@ -590,7 +590,7 @@ export default {
                 try { await window.electronAPI.updateSnapshotConfig(snapshotConfig.value); } catch (e) { /* 忽略 */ }
             }
         };
-        watch(snapshotConfig, saveSnapshotSettings, { deep: true });
+        watch(snapshotConfig, saveSnapshotSettings, { deep: true, immediate: true });
 
         // 字体设置应用：fontFamily/fontWeight 全局生效于 body；
         // 双轨字号：--ui-fs 接管外围界面（导航/侧边栏/菜单/弹窗），--workspace-fs 接管右侧工作区
@@ -1245,6 +1245,28 @@ export default {
             });
             if (res && res.success) {
                 nativeAlert(`✅ 已从快照恢复卡片 [${snapshotCardName.value}]！\n恢复前的版本已自动备份，可在列表中回退。`, 'info');
+                // 🔄 若恢复的正是当前打开的卡片，重新从文件解析刷新界面（内存 cardData 还是旧数据）
+                const curItem = library.value.find(i => i.path === snapshotCardPath.value);
+                if (curItem && cardData.value && curItem.data === cardData.value) {
+                    try {
+                        let buffer = null;
+                        if (window.electronAPI && typeof window.electronAPI.readBuffer === 'function') {
+                            const rb = await window.electronAPI.readBuffer(curItem.path);
+                            if (rb && typeof rb === 'object' && rb.buffer) buffer = rb.buffer;
+                        }
+                        if (buffer) {
+                            const parsed = parsePNGChunk(buffer) || deepScanForJSON(buffer);
+                            if (parsed) {
+                                const normalized = normalizeCardData(parsed);
+                                curItem.data = normalized;
+                                curItem.name = normalized.data?.name || parsed.name || curItem.name;
+                                cardData.value = normalized; // 重新绑定当前编辑面板
+                                refreshCardData();
+                                showToast('🔄 已从快照恢复并刷新当前卡片', 'success');
+                            }
+                        }
+                    } catch (e) { console.warn('恢复后刷新当前卡片失败', e); }
+                }
                 // 刷新列表（恢复操作会生成新的"当前版本"快照）
                 const listRes = await window.electronAPI.listCardSnapshots(snapshotCardPath.value);
                 snapshotList.value = (listRes && listRes.success && Array.isArray(listRes.snapshots)) ? listRes.snapshots : snapshotList.value;
@@ -2778,6 +2800,12 @@ export default {
             if (!folderData || !folderData.files) return;
 
             currentFolderPath.value = folderData.folderPath;
+            // 🧹 释放旧卡片 blob URL（浏览器降级导入的卡片用 blob: 临时地址，重建库后无人引用 → 泄漏；local-file 永久路径无需 revoke）
+            library.value.forEach(c => {
+                if (c.avatar && typeof c.avatar === 'string' && c.avatar.startsWith('blob:')) {
+                    try { URL.revokeObjectURL(c.avatar); } catch (e) { /* 忽略 */ }
+                }
+            });
             library.value = [];
 
             // 📁 物理子文件夹 = 分组：自动并入自定义分组列表（去重），刷新后立即可见
@@ -2922,7 +2950,41 @@ export default {
             const result = await window.electronAPI.rescanLibrary(currentFolderPath.value);
             if (result && result.files) {
                 appMode.value = 'characters';
-                await processElectronFiles(result);
+                // 🚀 增量刷新（方案 B）：按 path+mtime 差分，复用未变化卡片对象（不重新读盘解析），
+                // 只对新增/修改的卡片走完整解析——千卡库刷新从全量重载降为增量，保留用户自定义标签/分类
+                const oldMap = new Map(library.value.map(c => [c.path, c]));
+                const toParse = [];
+                const next = [];
+                for (const f of result.files) {
+                    const old = oldMap.get(f.path);
+                    if (old && Number(old._mtime) === Number(f.mtime)) {
+                        next.push(old); // 未变化：直接复用内存对象（含用户自定义状态）
+                    } else {
+                        toParse.push(f); // 新增 / mtime 变化：走完整解析
+                    }
+                }
+                // 释放被物理删除卡片的 blob URL（不在 result.files 里 → 旧 blob 无人引用）
+                const keptPaths = new Set(next.map(c => c.path));
+                library.value.forEach(c => {
+                    if (!keptPaths.has(c.path) && c.avatar && typeof c.avatar === 'string' && c.avatar.startsWith('blob:')) {
+                        try { URL.revokeObjectURL(c.avatar); } catch (e) { /* 忽略 */ }
+                    }
+                });
+                library.value = next;
+                // 📁 物理子文件夹 = 分组：合并新增分组
+                if (Array.isArray(result.categories)) {
+                    result.categories.forEach(cat => {
+                        if (cat && cat.trim() !== '' && !customCategories.value.includes(cat) && !isCategoryKnown(cat)) {
+                            customCategories.value.push(cat);
+                        }
+                    });
+                }
+                // 并发受限批处理解析新增/变化文件
+                const CONCURRENCY = 8;
+                for (let i = 0; i < toParse.length; i += CONCURRENCY) {
+                    const batch = toParse.slice(i, i + CONCURRENCY);
+                    await Promise.all(batch.map(file => parseAndAddCard(file)));
+                }
                 // 刷新后尽量保持当前打开卡片的编辑状态（按路径重新绑定新解析出的对象）
                 if (prevCardPath && cardData.value) {
                     const reopen = library.value.find(i => i.path === prevCardPath);
@@ -2935,6 +2997,15 @@ export default {
         };
 
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
+        // 🔧 全局监听引用（供 onUnmounted 清理，文档第 2 节轻微项：根组件全局监听无 onUnmounted 移除）
+        let _gClickHandler = null;
+        let _gKeysHandler = null;
+        let _eKeysHandler = null;
+        onUnmounted(() => {
+            if (_gClickHandler) window.removeEventListener('click', _gClickHandler);
+            if (_gKeysHandler) window.removeEventListener('keydown', _gKeysHandler);
+            if (_eKeysHandler) window.removeEventListener('keydown', _eKeysHandler);
+        });
         onMounted(async () => {
             // 📸 启动时把本地快照配置同步到主进程（跨重启保持设置一致）
             await saveSnapshotSettings();
@@ -3001,7 +3072,8 @@ export default {
                 }
             } catch (e) { /* 忽略 */ }
 
-            window.addEventListener('click', handleGlobalClick); // 点击任意处关闭右键菜单
+            _gClickHandler = handleGlobalClick;
+            window.addEventListener('click', _gClickHandler); // 点击任意处关闭右键菜单
             applyTheme(theme.value); // 应用已保存的主题
 
             // 全局快捷键：Ctrl+S 保存 / Ctrl+O 打开角色库 / Ctrl+I 导入卡片
@@ -3019,7 +3091,8 @@ export default {
                     selectAllCards();
                 }
             };
-            window.addEventListener('keydown', handleGlobalKeys);
+            _gKeysHandler = handleGlobalKeys;
+            window.addEventListener('keydown', _gKeysHandler);
 
             // 🌟 扩展快捷键：Ctrl+F 聚焦搜索 / Delete 移入回收站 / Esc 退出多选或关闭预览
             const handleExtendedKeys = async (e) => {
@@ -3069,7 +3142,8 @@ export default {
                     }
                 }
             };
-            window.addEventListener('keydown', handleExtendedKeys);
+            _eKeysHandler = handleExtendedKeys;
+            window.addEventListener('keydown', _eKeysHandler);
 
             if (!window.electronAPI) {
                 // 【健壮性】纯浏览器环境（无 preload）也应放行加载蒙版，避免永久卡在加载画面
@@ -3208,6 +3282,10 @@ export default {
 
         // 从库中点击打开卡片
         const openFromLibrary = (item) => {
+            // 🧹 切换卡片时释放上一张卡的 blob 预览（仅 blob: 引用需 revoke；local-file 永久路径无需）
+            if (imgUrl.value && imgUrl.value.startsWith('blob:') && imgUrl.value !== (item && item.avatar)) {
+                try { URL.revokeObjectURL(imgUrl.value); } catch (e) { /* 忽略 */ }
+            }
             cardData.value = item.data;
             imgUrl.value = item.avatar;
             currentTab.value = 'basic';
