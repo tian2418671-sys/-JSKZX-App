@@ -1764,12 +1764,18 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
       if (ext !== '.png' && ext !== '.webp' && ext !== '.json') continue;
       const isImage = ext === '.png' || ext === '.webp';
       let mtime = 0;
-      try { mtime = fs.statSync(absPath).mtimeMs || 0; } catch (e) { /* 文件被占用/删除时忽略 */ }
+      let birthtime = 0;
+      try {
+        const st = fs.statSync(absPath);
+        mtime = st.mtimeMs || 0;       // 文件修改时间
+        birthtime = st.birthtimeMs || 0; // 文件创建时间（Windows 支持；可 0，排序时自动回退）
+      } catch (e) { /* 文件被占用/删除时忽略 */ }
       files.push({
         name: f.name,
         path: absPath,
         url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null,
         mtime,
+        birthtime,
         subFolder: relPath || '', // 相对库根的文件夹路径（'' = 根目录）
         category: relPath ? relPath.split(path.sep)[0] : '未分类' // 一级文件夹名 = 物理分组
       });

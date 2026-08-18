@@ -2178,12 +2178,15 @@ export default {
                     return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
                 }
                 if (sortBy.value === 'time') {
-                    // 【修复 BUG-1】"最新"以物理文件时间为准（_mtime = 修改/加入时间），
-                    // 避免卡片内建 create_date（作者创作日期可多年不变/同批卡相同）造成的排序混乱；
+                    // 【修复 BUG-1】"最新"以物理文件时间为准（修改时间 > 创建时间），避免卡片内建 create_date
+                    // （作者创作日期可多年不变/同批卡相同）造成的排序混乱；
                     // 物理时间缺失时才回退卡片内建 create_date（用于未落盘/特殊来源的卡）
                     const pickTime = (card) => {
                         const m = Number(card._mtime) || 0;
+                        const c = Number(card._ctime) || 0;
+                        if (m && c) return Math.max(m, c); // 修改与创建取较新（最近活动）
                         if (m) return m;
+                        if (c) return c;
                         return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
                     };
                     return pickTime(b) - pickTime(a); // 最新优先
@@ -2656,10 +2659,11 @@ export default {
                         data: normalized,
                         category: '未分类',
                         customTags: [],
-                        // 【修复 BUG-1】"最新"排序基准：扫描路径带真实物理 mtime；
-                        // 内存导入路径（拖拽/文件菜单/全盘收编）无 mtime → 以当前时间为准，
+                        // 【修复 BUG-1】"最新"排序基准：扫描路径带真实物理 mtime/birthtime；
+                        // 内存导入路径（拖拽/文件菜单/全盘收编）无物理时间 → 以当前时间为准，
                         // 保证新导入的卡在"最新"排序中正确排到最前（否则回退 create_date 可能排到旧卡后面）
                         _mtime: file.mtime || Date.now(),
+                        _ctime: file.birthtime || 0, // 物理文件创建时间（mtime 缺失时排序回退）
                         subFolder: file.subFolder || '' // 相对库根的文件夹路径（'' = 根目录；物理分组用）
                     };
 
