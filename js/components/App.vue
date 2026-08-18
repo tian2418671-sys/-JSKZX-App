@@ -139,6 +139,7 @@
             @move-group="quickMoveGroup(contextMenu.item); closeContextMenu()"
             @export="exportCard(contextMenu.item); closeContextMenu()"
             @ai-tag="handleContextMenuAction('aiTag')"
+            @snapshots="handleContextMenuAction('snapshots')"
             @trash="handleContextMenuAction('trash')"
         />
 
@@ -172,6 +173,17 @@
             :show="showImageModal"
             :url="previewImageUrl"
             @close="showImageModal = false"
+        />
+
+        <!-- ================= [ 弹窗：历史快照列表与一键恢复（子组件 SnapshotModal） ] ================= -->
+        <snapshot-modal
+            :show="showSnapshotModal"
+            :snapshots="snapshotList"
+            :card-name="snapshotCardName"
+            :card-path="snapshotCardPath"
+            @close="closeSnapshotModal"
+            @restore="restoreSnapshot"
+            @open-folder="openSnapshotFolder"
         />
 
         <!-- ================= [ 弹窗：API 引擎与模型设置（子组件 ApiSettingsModal） ] ================= -->
@@ -307,7 +319,7 @@
 </template>
 
 <script>
-import { ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef, provide } from 'vue';
+import { ref, shallowRef, reactive, computed, watch, onMounted, nextTick, triggerRef, provide, toRaw } from 'vue';
 import DOMPurify from 'dompurify'; // 渲染模式 XSS 清洗（本地依赖，随 Vite 打包，离线可用）
 import * as echarts from 'echarts'; // ECharts 由 npm 依赖提供（替代旧全局 script）
 import Section from './Section.vue'; // SFC 单文件组件（由 Section.js 迁移）
@@ -336,6 +348,7 @@ import AiTagModal from './AITagModal.vue'; // AI 智能批量打标弹窗（⚠�
 import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
+import SnapshotModal from './SnapshotModal.vue'; // 📸 历史快照列表与一键恢复弹窗
 import { processFile, normalizeCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
@@ -452,7 +465,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -1195,6 +1208,60 @@ export default {
                 nativeAlert(`快照创建失败: ${(res && res.error) || '未知错误'}`, 'error');
             }
         };
+
+        // ================= [ 📸 历史快照：查看与一键恢复（第 10 节） ] =================
+        const showSnapshotModal = ref(false);
+        const snapshotList = ref([]);
+        const snapshotCardName = ref('');
+        const snapshotCardPath = ref('');
+
+        // 打开历史快照弹窗（列出 .bak_history 内该卡的全部快照，按时间倒序）
+        const openSnapshotModal = async (item) => {
+            if (!item) return;
+            if (!window.electronAPI || typeof window.electronAPI.listCardSnapshots !== 'function') {
+                return nativeAlert('当前版本不支持查看历史快照，请更新应用。', 'warning');
+            }
+            snapshotCardName.value = item.name || '未知角色';
+            snapshotCardPath.value = item.path || '';
+            const res = await window.electronAPI.listCardSnapshots(item.path);
+            snapshotList.value = (res && res.success && Array.isArray(res.snapshots)) ? res.snapshots : [];
+            showSnapshotModal.value = true;
+            if (!res || !res.success) {
+                nativeAlert(`读取历史快照失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
+        // 从指定快照恢复当前卡片（先备份当前版本，再把快照覆盖回原路径）
+        const restoreSnapshot = async (snap) => {
+            if (!snap || !snapshotCardPath.value) return;
+            const ok = await confirmDialog(`确定要将卡片 [${snapshotCardName.value}] 恢复为该快照吗？\n（当前版本会先自动备份为新快照，恢复后可再次回退）`);
+            if (!ok) return;
+            if (!window.electronAPI || typeof window.electronAPI.restoreCardSnapshot !== 'function') {
+                return nativeAlert('当前版本不支持快照恢复，请更新应用。', 'warning');
+            }
+            const res = await window.electronAPI.restoreCardSnapshot({
+                filePath: snapshotCardPath.value,
+                snapshotPath: snap.path
+            });
+            if (res && res.success) {
+                nativeAlert(`✅ 已从快照恢复卡片 [${snapshotCardName.value}]！\n恢复前的版本已自动备份，可在列表中回退。`, 'info');
+                // 刷新列表（恢复操作会生成新的"当前版本"快照）
+                const listRes = await window.electronAPI.listCardSnapshots(snapshotCardPath.value);
+                snapshotList.value = (listRes && listRes.success && Array.isArray(listRes.snapshots)) ? listRes.snapshots : snapshotList.value;
+            } else {
+                nativeAlert(`恢复失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
+        // 打开该卡片的快照文件夹（系统资源管理器）
+        const openSnapshotFolder = async () => {
+            if (!snapshotCardPath.value) return;
+            const historyDir = snapshotCardPath.value.replace(/[\\/][^\\/]*$/, '') + '\\.bak_history';
+            const res = await window.electronAPI.openPath(historyDir);
+            if (!res.success) nativeAlert(res.error || '打开失败', 'error');
+        };
+
+        const closeSnapshotModal = () => { showSnapshotModal.value = false; };
 
         // 分页状态
         const currentPage = ref(1);
@@ -2627,6 +2694,10 @@ export default {
                         return false;
                     }
                     parsedData = parsed;
+                } else if (file.embeddedData && typeof file.embeddedData === 'object') {
+                    // 🚀 性能优化：主进程扫描已本地提取内嵌 card JSON，直接复用，
+                    // 跳过整张 PNG 跨 IPC 读回（千卡库加载从几 GB 搬运降至几百 KB JSON）
+                    parsedData = file.embeddedData;
                 } else {
                     // 🛡️ 优先使用内存内容（文件菜单导入已用 File API 读取，绕过 IPC 白名单）
                     let buffer = null;
@@ -3404,6 +3475,12 @@ export default {
                         }
                         openAITagModal();
                         addLog(`🤖 已为 [${card.name}] 唤起 AI 打标`, 'info');
+                        break;
+                    }
+
+                    case 'snapshots': {
+                        // 📸 查看该卡片的历史快照并支持一键恢复
+                        await openSnapshotModal(card);
                         break;
                     }
 
@@ -5389,6 +5466,128 @@ export default {
         };
 
         // =========================================================
+        // 🎛️ 角色卡内嵌世界书（Character Book）细化操作
+        // 针对 data.character_book.entries（V2 字段 keys/secondary_keys），
+        // 与上方「独立世界书 IDE」的 activeWorldbook（V3 字段 key/keysecondary）区分
+        // =========================================================
+        const characterWorldbookSearchQuery = ref('');   // 词条关键字搜索（角色卡世界书 tab 专用）
+
+        // 确保角色卡存在 character_book.entries，返回该数组（V2/V3 的 data 内，或 V1 顶层）
+        const ensureCharacterBookEntries = () => {
+            if (!cardData.value) return null;
+            const target = safeData.value;
+            if (!target.character_book || typeof target.character_book !== 'object') {
+                target.character_book = { entries: [] };
+            }
+            if (!Array.isArray(target.character_book.entries)) {
+                target.character_book.entries = [];
+            }
+            return target.character_book.entries;
+        };
+
+        // 搜索过滤后的角色卡世界书词条（触发词/次级词/备注/正文 全字段匹配）
+        const filteredCharacterWorldbookEntries = computed(() => {
+            const q = characterWorldbookSearchQuery.value.trim().toLowerCase();
+            const list = worldbookEntries.value;
+            if (!q) return list;
+            return list.filter(entry => {
+                if (!entry) return false;
+                const keysStr = (Array.isArray(entry.keys) ? entry.keys.join(' ') : String(entry.keys || '')) + ' ' +
+                                (Array.isArray(entry.secondary_keys) ? entry.secondary_keys.join(' ') : '');
+                const text = `${entry.comment || entry.name || ''} ${entry.content || ''} ${keysStr}`.toLowerCase();
+                return text.includes(q);
+            });
+        });
+
+        // 新增空白词条（unshift 到最前）
+        const addCharacterWorldbookEntry = () => {
+            const entries = ensureCharacterBookEntries();
+            if (!entries) return;
+            entries.unshift({
+                uid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                keys: [], secondary_keys: [], content: '', comment: '',
+                constant: false, selective: false, insertion_order: 50,
+                position: 1, enabled: true, order: 100
+            });
+            refreshCardData();
+            addLog('➕ 新增了一条世界书词条', 'info');
+        };
+
+        // 删除词条（走原生 confirmDialog 确认）
+        const deleteCharacterWorldbookEntry = async (entry) => {
+            const entries = safeData.value.character_book?.entries;
+            if (!Array.isArray(entries)) return;
+            const index = entries.indexOf(toRaw(entry));   // toRaw 找回原始对象（worldbookEntries 返回的是 reactive 代理）
+            if (index === -1) return;
+            const ok = await confirmDialog('确定要删除这条世界书设定吗？操作不可逆！');
+            if (ok) {
+                entries.splice(index, 1);
+                refreshCardData();
+                addLog('🗑️ 删除了一条世界书词条', 'warning');
+            }
+        };
+
+        // 克隆词条（在后方插入副本）
+        const duplicateCharacterWorldbookEntry = (entry) => {
+            const entries = safeData.value.character_book?.entries;
+            if (!Array.isArray(entries)) return;
+            const index = entries.indexOf(toRaw(entry));
+            if (index === -1) return;
+            const cloned = JSON.parse(JSON.stringify(entry));
+            cloned.uid = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            cloned.comment = (cloned.comment || cloned.name || '词条') + ' (副本)';
+            entries.splice(index + 1, 0, cloned);
+            refreshCardData();
+            addLog('📋 复制了一条世界书词条', 'info');
+        };
+
+        // 上移/下移（dir = -1 上移，+1 下移）
+        const moveCharacterWorldbookEntry = (entry, dir) => {
+            const entries = safeData.value.character_book?.entries;
+            if (!Array.isArray(entries)) return;
+            const index = entries.indexOf(toRaw(entry));
+            if (index === -1) return;
+            const target = index + dir;
+            if (target < 0 || target >= entries.length) return;
+            const [item] = entries.splice(index, 1);
+            entries.splice(target, 0, item);
+            refreshCardData();
+        };
+
+        // 往词条 key 数组追加一个触发词（field: 'keys' | 'secondary_keys'）
+        const addEntryKey = (entry, value, field = 'keys') => {
+            if (!entry || !field) return;
+            const v = String(value || '').trim().replace(/,$/, '').trim();
+            if (!v) return;
+            if (!Array.isArray(entry[field])) entry[field] = [];
+            if (!entry[field].includes(v)) entry[field].push(v);
+            refreshCardData();
+        };
+
+        // 从词条 key 数组移除一个触发词
+        const removeEntryKey = (entry, value, field = 'keys') => {
+            if (!entry || !field || !Array.isArray(entry[field])) return;
+            entry[field] = entry[field].filter(k => k !== value);
+            refreshCardData();
+        };
+
+        // 触发词输入框的回车/逗号处理（标签化输入）
+        const handleEntryKeyInput = (entry, event, field = 'keys') => {
+            if (event.key === 'Enter' || event.key === ',') {
+                event.preventDefault();
+                addEntryKey(entry, event.target.value, field);
+                event.target.value = '';
+            }
+        };
+
+        // 写回 comment（兼容旧卡仅有 name 字段）
+        const updateEntryComment = (entry, value) => {
+            if (!entry) return;
+            entry.comment = value;
+            refreshCardData();
+        };
+
+        // =========================================================
         // 🔍 智能查重与版本清洗系统
         // =========================================================
         const showDedupeModal = ref(false);
@@ -6281,6 +6480,9 @@ export default {
             renameCurrentCategory, deleteCustomCategory, currentCategoryDeletable, currentCategoryRenamable,
             currentCardCategory, handleCardCategoryChange, moveCardToGroup, triggerManualSnapshot,
             snapshotConfig, saveSnapshotSettings,
+            // 📸 历史快照查看与一键恢复
+            showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
+            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
             selectFixedDirectory, addManualTag, changePage,
@@ -6340,6 +6542,11 @@ export default {
             // 🌍 世界书词条深度编辑 (Entry IDE)
             addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
             entrySearchQuery, filteredWorldbookEntries,
+            // 🎛️ 角色卡内嵌世界书细化操作（词条增删/克隆/排序/搜索/标签化触发词）
+            characterWorldbookSearchQuery, filteredCharacterWorldbookEntries,
+            addCharacterWorldbookEntry, deleteCharacterWorldbookEntry,
+            duplicateCharacterWorldbookEntry, moveCharacterWorldbookEntry,
+            addEntryKey, removeEntryKey, handleEntryKeyInput, updateEntryComment,
             // 🎨 三主题切换（暗夜/青灰/白昼）
             setTheme,
             // 🚀 首屏加载状态

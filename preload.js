@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateSnapshotConfig: (config) => ipcRenderer.invoke('settings:updateSnapshotConfig', config),
     // 📸 历史快照：手动为指定卡片创建快照（绕过冷却）
     createManualSnapshot: (filePath) => ipcRenderer.invoke('card:createManualSnapshot', filePath),
+    // 📸 历史快照：列出指定卡片的历史快照（.bak_history 内，按时间倒序）
+    listCardSnapshots: (filePath) => ipcRenderer.invoke('card:listSnapshots', filePath),
+    // 📸 历史快照：从快照恢复指定卡片（先备份当前版本再覆盖）
+    restoreCardSnapshot: (payload) => ipcRenderer.invoke('card:restoreSnapshot', payload),
     // 读取全局标签库（主进程配置文件，跨 dev/生产统一持久化）
     getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
     // 保存全局标签库到主进程配置文件

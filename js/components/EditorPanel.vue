@@ -219,51 +219,119 @@
                     </div>
                 </div>
 
-                <!-- 2. 世界书 (Worldbook) -->
+                <!-- 2. 世界书 (Worldbook) —— 增强版：搜索过滤 + 词条增删/克隆/排序 + 启用/常驻/条件开关 + 标签化触发词 -->
                 <div v-if="currentTab === 'worldbook'" class="max-w-5xl">
                     <div v-if="worldbookEntries.length > 0">
-                        <div class="flex justify-between items-center mb-3 bg-zinc-900 p-2 rounded border border-zinc-800">
-                            <span class="text-xs text-zinc-400 font-bold">共 {{ worldbookEntries.length }} 条世界书设定</span>
-                            <div class="flex gap-2">
-                                <button @click="expandAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部展开</button>
-                                <button @click="collapseAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部折叠</button>
+
+                        <!-- 工具栏：计数 + 搜索 + 新增 + 折叠 -->
+                        <div class="bg-zinc-900 p-2 rounded border border-zinc-800 mb-3">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-xs text-zinc-400 font-bold">共 {{ worldbookEntries.length }} 条世界书设定<span v-if="characterWorldbookSearchQuery.trim()" class="text-blue-400">（筛选后 {{ filteredCharacterWorldbookEntries.length }} 条）</span></span>
+                                <div class="flex gap-2">
+                                    <button @click="expandAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部展开</button>
+                                    <button @click="collapseAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部折叠</button>
+                                </div>
+                            </div>
+                            <div class="flex gap-2 items-center">
+                                <input v-model="characterWorldbookSearchQuery" type="text" placeholder="🔍 搜索: 触发词 / 正文 / 备注..." class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 outline-none text-xs text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50">
+                                <button @click="addCharacterWorldbookEntry" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded whitespace-nowrap">➕ 新增词条</button>
                             </div>
                         </div>
 
+                        <!-- 词条列表 -->
                         <div class="space-y-2">
-                            <div v-for="(entry, index) in worldbookEntries" :key="getEntryUid(entry)" class="bg-zinc-900 border border-zinc-800 rounded shadow-sm overflow-hidden transition-all">
+                            <div v-if="filteredCharacterWorldbookEntries.length === 0" class="text-zinc-500 text-center py-8 border border-dashed border-zinc-800 rounded">无匹配词条</div>
+                            <div v-for="(entry, index) in filteredCharacterWorldbookEntries" :key="getEntryUid(entry)" class="bg-zinc-900 border border-zinc-800 rounded shadow-sm overflow-hidden transition-all" :class="{ 'opacity-60': entry.enabled === false }">
 
+                                <!-- 词条头部 -->
                                 <div @click="toggleWorldbookEntry(entry)" class="px-3 py-2.5 bg-zinc-800/60 hover:bg-zinc-800 cursor-pointer flex justify-between items-center select-none">
                                     <div class="flex items-center gap-2 overflow-hidden">
                                         <span class="text-zinc-500 text-xs transition-transform inline-block" :class="worldbookExpanded[getEntryUid(entry)] ? 'rotate-90' : ''">▶</span>
-                                        <span class="font-bold text-xs text-zinc-200 truncate">{{ entry.name || entry.comment || '未命名条目' }}</span>
-                                        <span class="text-[10px] text-green-400 bg-green-500/10 px-1.5 py-0.2 rounded border border-green-500/30 truncate max-w-xs" v-if="entry.keys && entry.keys.length">
+                                        <span class="font-bold text-xs text-zinc-200 truncate">{{ entry.comment || entry.name || '未命名条目' }}</span>
+                                        <span v-if="entry.enabled === false" class="text-[10px] px-1.5 py-0.5 rounded border border-zinc-600 bg-zinc-800 text-zinc-500 whitespace-nowrap">禁用</span>
+                                        <span v-if="entry.constant" class="text-[10px] px-1.5 py-0.5 rounded border border-purple-500/30 bg-purple-500/10 text-purple-400 whitespace-nowrap">常驻</span>
+                                        <span class="text-[10px] text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded border border-green-500/30 truncate max-w-xs" v-if="entry.keys && entry.keys.length">
                                             🔑 {{ entry.keys.join(', ') }}
                                         </span>
                                     </div>
-                                    <div class="flex items-center gap-2 shrink-0">
+                                    <div class="flex items-center gap-1.5 shrink-0">
                                         <span class="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400 border border-zinc-700">优先级: {{ entry.insertion_order ?? 50 }}</span>
+                                        <button @click.stop="moveCharacterWorldbookEntry(entry, -1)" class="text-zinc-400 hover:text-white hover:bg-zinc-700 px-1 py-0.5 rounded text-xs" title="上移">↑</button>
+                                        <button @click.stop="moveCharacterWorldbookEntry(entry, 1)" class="text-zinc-400 hover:text-white hover:bg-zinc-700 px-1 py-0.5 rounded text-xs" title="下移">↓</button>
+                                        <button @click.stop="duplicateCharacterWorldbookEntry(entry)" class="text-zinc-400 hover:text-blue-400 hover:bg-zinc-700 px-1 py-0.5 rounded text-xs" title="克隆">⧉</button>
+                                        <button @click.stop="deleteCharacterWorldbookEntry(entry)" class="text-zinc-400 hover:text-rose-400 hover:bg-zinc-700 px-1 py-0.5 rounded text-xs" title="删除">🗑</button>
                                     </div>
                                 </div>
 
+                                <!-- 词条展开详情 -->
                                 <div v-if="worldbookExpanded[getEntryUid(entry)]" class="p-3 border-t border-zinc-800 bg-zinc-950/60 space-y-3 text-xs">
 
-                                    <div class="grid grid-cols-3 gap-2">
+                                    <!-- 名称 + 优先级 + 权重 -->
+                                    <div class="grid grid-cols-4 gap-2">
                                         <div class="col-span-2 flex flex-col gap-1">
-                                            <label class="font-bold text-zinc-400">条目名称 (Name / Comment):</label>
-                                            <input v-model="entry.name" @input="refreshCardData" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="条目名称">
+                                            <label class="font-bold text-zinc-400">名称 / 备注 (Comment):</label>
+                                            <input :value="entry.comment || entry.name || ''" @input="updateEntryComment(entry, $event.target.value)" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="条目名称/备注">
                                         </div>
                                         <div class="flex flex-col gap-1">
-                                            <label class="font-bold text-zinc-400">优先级 (Order):</label>
-                                            <input v-model.number="entry.insertion_order" type="number" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="50">
+                                            <label class="font-bold text-zinc-400">优先级:</label>
+                                            <input v-model.number="entry.insertion_order" type="number" @input="refreshCardData" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="50">
+                                        </div>
+                                        <div class="flex flex-col gap-1">
+                                            <label class="font-bold text-zinc-400">权重:</label>
+                                            <input v-model.number="entry.order" type="number" @input="refreshCardData" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="50">
                                         </div>
                                     </div>
 
-                                    <div class="flex flex-col gap-1">
-                                        <label class="font-bold text-zinc-400">触发关键词 (Keys，用逗号分隔):</label>
-                                        <input :value="getKeysString(entry.keys)" @input="updateEntryKeys(entry, $event.target.value)" class="bg-zinc-800 border border-zinc-700 rounded p-1.5 outline-none text-zinc-200 placeholder-zinc-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50" placeholder="关键词1, 关键词2">
+                                    <!-- 状态开关 + 插入位置 -->
+                                    <div class="grid grid-cols-4 gap-2 items-center">
+                                        <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                                            <input type="checkbox" :checked="entry.enabled !== false" @change="entry.enabled = $event.target.checked; refreshCardData()" class="rounded bg-zinc-900 border-zinc-700 text-emerald-500 focus:ring-0">
+                                            <span :class="entry.enabled !== false ? 'text-emerald-400 font-bold' : 'text-zinc-500'">启用</span>
+                                        </label>
+                                        <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                                            <input type="checkbox" :checked="!!entry.constant" @change="entry.constant = $event.target.checked; refreshCardData()" class="rounded bg-zinc-900 border-zinc-700 text-purple-500 focus:ring-0">
+                                            <span :class="entry.constant ? 'text-purple-400 font-bold' : 'text-zinc-500'">常驻显示</span>
+                                        </label>
+                                        <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                                            <input type="checkbox" :checked="!!entry.selective" @change="entry.selective = $event.target.checked; refreshCardData()" class="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0">
+                                            <span :class="entry.selective ? 'text-amber-400 font-bold' : 'text-zinc-500'">条件触发</span>
+                                        </label>
+                                        <div class="flex flex-col gap-1">
+                                            <label class="font-bold text-zinc-400">插入位置:</label>
+                                            <select :value="entry.position ?? 1" @change="entry.position = Number($event.target.value); refreshCardData()" class="bg-zinc-800 border border-zinc-700 rounded p-1 outline-none text-zinc-200">
+                                                <option :value="0">顶部（定义前）</option>
+                                                <option :value="1">底部（定义后）</option>
+                                                <option :value="2">聊天记录前</option>
+                                                <option :value="3">@D 深度提示内</option>
+                                            </select>
+                                        </div>
                                     </div>
 
+                                    <!-- 触发关键词（标签化） -->
+                                    <div class="flex flex-col gap-1">
+                                        <label class="font-bold text-zinc-400">触发关键词 (Keys):</label>
+                                        <div class="flex flex-wrap gap-1 p-1.5 bg-zinc-800 border border-zinc-700 rounded min-h-[34px] items-center">
+                                            <span v-for="k in (entry.keys || [])" :key="k" class="text-[10px] bg-green-500/10 text-green-400 px-2 py-0.5 rounded border border-green-500/30 flex items-center gap-1">
+                                                {{ k }}
+                                                <button @click="removeEntryKey(entry, k, 'keys')" class="hover:text-red-400">×</button>
+                                            </span>
+                                            <input @keydown="handleEntryKeyInput(entry, $event, 'keys')" @blur="addEntryKey(entry, $event.target.value, 'keys'); $event.target.value=''" type="text" placeholder="输入后回车/逗号添加" class="flex-1 min-w-[120px] bg-transparent outline-none text-zinc-200 placeholder-zinc-500 text-[11px]">
+                                        </div>
+                                    </div>
+
+                                    <!-- 次级关键词（标签化） -->
+                                    <div class="flex flex-col gap-1">
+                                        <label class="font-bold text-zinc-400">次级关键词 (Secondary Keys):</label>
+                                        <div class="flex flex-wrap gap-1 p-1.5 bg-zinc-800 border border-zinc-700 rounded min-h-[34px] items-center">
+                                            <span v-for="k in (entry.secondary_keys || [])" :key="k" class="text-[10px] bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30 flex items-center gap-1">
+                                                {{ k }}
+                                                <button @click="removeEntryKey(entry, k, 'secondary_keys')" class="hover:text-red-400">×</button>
+                                            </span>
+                                            <input @keydown="handleEntryKeyInput(entry, $event, 'secondary_keys')" @blur="addEntryKey(entry, $event.target.value, 'secondary_keys'); $event.target.value=''" type="text" placeholder="输入后回车/逗号添加" class="flex-1 min-w-[120px] bg-transparent outline-none text-zinc-200 placeholder-zinc-500 text-[11px]">
+                                        </div>
+                                    </div>
+
+                                    <!-- 正文 -->
                                     <div class="flex flex-col gap-1">
                                         <div class="flex justify-between items-center">
                                             <label class="font-bold text-zinc-400">注入正文内容 (Content):</label>
@@ -273,11 +341,12 @@
                                     </div>
 
                                 </div>
-
                             </div>
                         </div>
                     </div>
-                    <div v-else class="text-zinc-500 text-center py-10">此卡片未内置世界书数据</div>
+                    <div v-else class="text-zinc-500 text-center py-10">此卡片未内置世界书数据
+                        <button @click="addCharacterWorldbookEntry" class="ml-2 text-blue-400 hover:underline">+ 立即新增一条</button>
+                    </div>
                 </div>
 
                 <!-- 正则脚本：兼容 V2/V3 的可视化编辑器 -->
@@ -719,6 +788,17 @@ export default {
             collapseAllWorldbook: ctx.collapseAllWorldbook,
             getKeysString: ctx.getKeysString,
             updateEntryKeys: ctx.updateEntryKeys,
+            // 🎛️ 角色卡内嵌世界书细化操作（词条增删/克隆/排序/搜索/标签化触发词）
+            characterWorldbookSearchQuery: ctx.characterWorldbookSearchQuery,
+            filteredCharacterWorldbookEntries: ctx.filteredCharacterWorldbookEntries,
+            addCharacterWorldbookEntry: ctx.addCharacterWorldbookEntry,
+            deleteCharacterWorldbookEntry: ctx.deleteCharacterWorldbookEntry,
+            duplicateCharacterWorldbookEntry: ctx.duplicateCharacterWorldbookEntry,
+            moveCharacterWorldbookEntry: ctx.moveCharacterWorldbookEntry,
+            addEntryKey: ctx.addEntryKey,
+            removeEntryKey: ctx.removeEntryKey,
+            handleEntryKeyInput: ctx.handleEntryKeyInput,
+            updateEntryComment: ctx.updateEntryComment,
             // ✅ [紧凑化] 点击启用圆点切换词条启用/停用（缺失 enabled 视为启用，首次点击=停用）
             toggleEntryState: (entry) => {
                 if (!entry) return;

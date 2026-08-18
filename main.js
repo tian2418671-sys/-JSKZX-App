@@ -233,6 +233,35 @@ function writeTavernPNGChunk(buffer, updatedJson) {
   return Buffer.concat(parts);
 }
 
+// 读取 PNG 内嵌 chara/ccv3 数据块的 JSON（扫描阶段调用，避免整图跨 IPC 搬运）
+// 与 writeTavernPNGChunk 对称；buffer 可为文件头截断段（chara 块位于 IHDR 之后、IDAT 之前）
+// 注：按 tEXt（keyword\0 + Base64）标准结构提取；异常 iTXt/损坏块返回 null，由前端回退完整 readBuffer 解析，绝不漏卡
+function readTavernPNGChunk(buffer) {
+  if (!buffer || buffer.length < 8 || buffer.readUInt32BE(0) !== 0x89504E47) return null;
+  let offset = 8;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    if (offset + 12 + length > buffer.length) break; // 越界/截断保护
+    const type = buffer.subarray(offset + 4, offset + 8).toString('latin1');
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === 'tEXt' || type === 'iTXt') {
+      const nullPos = data.indexOf(0);
+      if (nullPos > 0) {
+        const keyword = data.subarray(0, nullPos).toString('latin1');
+        if (keyword === 'chara' || keyword === 'ccv3') {
+          const raw = data.subarray(nullPos + 1); // 跳过 keyword\0
+          const base64Str = raw.toString('latin1').replace(/\0/g, '');
+          try {
+            return JSON.parse(Buffer.from(base64Str, 'base64').toString('utf-8'));
+          } catch (e) { return null; }
+        }
+      }
+    }
+    offset += 12 + length;
+  }
+  return null;
+}
+
 // 系统级应用数据目录（用于保存配置，不会随项目丢失）
 const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.json');
 
@@ -1069,6 +1098,63 @@ app.whenReady().then(() => {
     return await processCardSnapshot(filePath, true);
   });
 
+  // 📸 列出指定卡片的历史快照（.bak_history/baseName_*，按时间倒序）
+  ipcMain.handle('card:listSnapshots', async (event, filePath) => {
+    try {
+      if (!filePath || typeof filePath !== 'string' || !isPathAllowed(filePath)) return forbidden();
+      const fileDir = path.dirname(filePath);
+      const baseName = path.basename(filePath, path.extname(filePath));
+      const ext = path.extname(filePath);
+      const historyDir = path.join(fileDir, '.bak_history');
+      if (!fs.existsSync(historyDir)) return { success: true, snapshots: [] };
+      const allFiles = await fs.promises.readdir(historyDir);
+      const snaps = [];
+      for (const f of allFiles) {
+        // 精确前缀匹配（base + '_'）避免 "卡A" 误配到 "卡A2" 的快照
+        if (!f.startsWith(baseName + '_') || !f.endsWith(ext)) continue;
+        const p = path.join(historyDir, f);
+        try {
+          const st = await fs.promises.stat(p);
+          snaps.push({
+            fileName: f,
+            path: p,
+            mtimeMs: st.mtimeMs,
+            size: st.size,
+            isManual: /_manual\./.test(f) // 手动快照带 _manual 标记
+          });
+        } catch (e) { /* 文件被外部删除时跳过 */ }
+      }
+      snaps.sort((a, b) => b.mtimeMs - a.mtimeMs); // 最新在前
+      return { success: true, snapshots: snaps };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // 📸 从历史快照恢复指定卡片（先把当前版本备份为新快照防丢，再把快照复制覆盖回原路径）
+  ipcMain.handle('card:restoreSnapshot', async (event, payload) => {
+    try {
+      const filePath = payload && payload.filePath;
+      const snapshotPath = payload && payload.snapshotPath;
+      if (!filePath || typeof filePath !== 'string' || !isPathAllowed(filePath)) return forbidden();
+      if (!snapshotPath || typeof snapshotPath !== 'string' || !isPathAllowed(snapshotPath)) return forbidden();
+      if (!fs.existsSync(filePath)) return { success: false, error: '原卡片文件不存在' };
+      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在（可能已被清理）' };
+      // 安全校验：快照必须位于原卡片同目录的 .bak_history 下（防任意文件覆盖）
+      const expectedDir = path.join(path.dirname(filePath), '.bak_history').toLowerCase();
+      if (path.dirname(snapshotPath).toLowerCase() !== expectedDir) {
+        return { success: false, error: '非法快照路径' };
+      }
+      // 1. 先把当前版本强制备份为新快照（恢复后仍可回退）
+      await processCardSnapshot(filePath, true);
+      // 2. 复制快照覆盖回原文件
+      await fs.promises.copyFile(snapshotPath, filePath);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {
@@ -1768,6 +1854,22 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
         mtime = st.mtimeMs || 0;       // 文件修改时间
         birthtime = st.birthtimeMs || 0; // 文件创建时间（Windows 支持；可 0，排序时自动回退）
       } catch (e) { /* 文件被占用/删除时忽略 */ }
+      // 🚀 性能优化：扫描时主进程本地提取 PNG 内嵌卡片 JSON（只读文件头 1MB，
+      // chara/ccv3 块位于 IHDR 之后、IDAT 之前），随 files 一起返回，
+      // 前端直接复用，彻底省掉"整张 PNG 跨 IPC 读回渲染端"的最大瓶颈。
+      // 提取失败（异常 iTXt/截断）→ embeddedData=null，前端自动回退完整 readBuffer，绝不漏卡
+      let embeddedData = null;
+      if (ext === '.png') {
+        try {
+          const size = fs.statSync(absPath).size;
+          const headLen = Math.min(1024 * 1024, size);
+          const fd = fs.openSync(absPath, 'r');
+          const head = Buffer.alloc(headLen);
+          fs.readSync(fd, head, 0, headLen, 0);
+          fs.closeSync(fd);
+          embeddedData = readTavernPNGChunk(head) || null;
+        } catch (e) { embeddedData = null; }
+      }
       files.push({
         name: f.name,
         path: absPath,
@@ -1775,7 +1877,8 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
         mtime,
         birthtime,
         subFolder: relPath || '', // 相对库根的文件夹路径（'' = 根目录）
-        category: relPath ? relPath.split(path.sep)[0] : '未分类' // 一级文件夹名 = 物理分组
+        category: relPath ? relPath.split(path.sep)[0] : '未分类', // 一级文件夹名 = 物理分组
+        embeddedData // 🚀 内嵌 card JSON（无则 null），前端解析优先复用
       });
     }
   }
