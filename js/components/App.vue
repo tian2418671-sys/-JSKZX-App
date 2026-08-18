@@ -1376,10 +1376,15 @@ export default {
             }
         });
 
+        // 🛡️ 启动配置恢复保护：loadAppConfig 恢复字段时置 true，防止各 watch 触发写盘把「恢复值/旧残留」回写 app_config.json
+        //    （否则旧文件 / localStorage 残留会在加载竞态中被写回权威文件，导致「删除/清空后重启复活」）
+        let isRestoringConfig = false;
+
         // 统一写入磁盘：从各响应式源收集完整配置 → JSON 剥离 Vue 响应式 Proxy → 原子落盘
         // ⚠️ 关键：ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
         //    "An object could not be cloned"（structured clone 失败）→ 必须统一 JSON 序列化剥离。
         const syncConfigToDisk = () => {
+            if (isRestoringConfig) return; // 启动恢复期间不落盘，避免把恢复值/旧值写回造成复活
             if (!window.electronAPI || typeof window.electronAPI.saveAppConfig !== 'function') return;
             const payload = {
                 language: 'zh-CN',
@@ -1432,21 +1437,11 @@ export default {
         };
 
         // 【兼容保留】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
-        // 现在内部直接走统一中枢 syncConfigToDisk（app_config.json 权威），
-        // 同时保留旧 IPC config:saveUiSettings 写入（向后兼容旧版 tavern_manager_config.json）。
+        // 现在内部直接走统一中枢 syncConfigToDisk（app_config.json 唯一权威），旧文件双写已移除（避免双权威竞态）。
         const saveUiSettingsToDisk = () => {
             if (!window.electronAPI) return;
-            // 旧路径：写入 tavern_manager_config.json 的 uiSettings（兼容历史读取）
-            if (typeof window.electronAPI.saveUiSettings === 'function') {
-                const legacyPayload = {
-                    customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
-                    removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
-                    tagLangMode: tagLangMode.value,
-                    localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {}))
-                };
-                window.electronAPI.saveUiSettings(legacyPayload).catch(() => { });
-            }
-            // 新路径：统一写入 app_config.json（最高权威）
+            if (isRestoringConfig) return; // 启动恢复期间不落盘
+            // 统一写入 app_config.json（唯一权威）；旧文件 uiSettings 双写已移除
             syncConfigToDisk();
         };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
@@ -3041,40 +3036,43 @@ export default {
                 if (window.electronAPI && typeof window.electronAPI.loadAppConfig === 'function') {
                     const cfg = await window.electronAPI.loadAppConfig();
                     if (cfg && typeof cfg === 'object') {
-                        // 全局标签池（globalTags）
-                        // 🐛 修复「删除标签后重启复发」：app_config.json 是唯一权威，必须【整体替换】而非【并集合并】。
-                        //    否则生产模式(app://)下 localStorage 不持久、初始化回退到内置默认池，
-                        //    并集会把「已删除的默认标签」重新带回（"一键清空"也会被忽略）。
-                        if (Array.isArray(cfg.globalTags)) {
-                            const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
-                            isLoadingGlobalTags = true;   // 🛡️ 装载标记：恢复期间禁止 watch 写盘（防竞态自污染）
-                            systemCommonTags.value = Array.from(new Set(cleanTags));
-                            isLoadingGlobalTags = false;
-                        }
-                        // 自定义分组
-                        if (Array.isArray(cfg.customCategories)) {
-                            const clean = cfg.customCategories.filter(c => typeof c === 'string' && c.trim() !== '');
-                            if (clean.length) customCategories.value = clean;
-                        }
-                        // 删除/重命名的预设分组记录
-                        if (Array.isArray(cfg.removedDefaultKeys)) {
-                            removedDefaultKeys.value = cfg.removedDefaultKeys;
-                            defaultCategories.value = allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key));
-                        }
-                        // 标签语言模式
-                        if (cfg.tagLangMode === 'cn' || cfg.tagLangMode === 'en' || cfg.tagLangMode === 'both') {
-                            tagLangMode.value = cfg.tagLangMode;
-                        }
-                        // 卡片属性物理覆盖表（防重扫冲刷的核心数据）
-                        if (cfg.cardOverlays && typeof cfg.cardOverlays === 'object') {
-                            appConfig.value.cardOverlays = cfg.cardOverlays;
-                        }
-                        // API 配置（生产 app:// 下 localStorage 不持久，物理文件恢复）
-                        if (cfg.api && typeof cfg.api === 'object') {
-                            if (typeof cfg.api.endpoint === 'string' && cfg.api.endpoint) apiEndpoint.value = cfg.api.endpoint;
-                            if (typeof cfg.api.key === 'string') apiKey.value = cfg.api.key;
-                            if (typeof cfg.api.model === 'string' && cfg.api.model) apiModel.value = cfg.api.model;
-                            if (cfg.api.type === 'anthropic' || cfg.api.type === 'openai') apiType.value = cfg.api.type;
+                        isRestoringConfig = true; // 🛡️ 恢复期间统一禁止写盘（防竞态自污染，任何恢复值都不回写磁盘）
+                        try {
+                            // 全局标签池（globalTags）
+                            // 🐛 修复「删除标签后重启复发」：app_config.json 是唯一权威，必须【整体替换】而非【并集合并】。
+                            //    否则生产模式(app://)下 localStorage 不持久、初始化回退到内置默认池，
+                            //    并集会把「已删除的默认标签」重新带回（"一键清空"也会被忽略）。
+                            if (Array.isArray(cfg.globalTags)) {
+                                const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
+                                systemCommonTags.value = Array.from(new Set(cleanTags));
+                            }
+                            // 自定义分组（空数组也要覆盖，尊重「全部删除」结果）
+                            if (Array.isArray(cfg.customCategories)) {
+                                const clean = cfg.customCategories.filter(c => typeof c === 'string' && c.trim() !== '');
+                                customCategories.value = clean;
+                            }
+                            // 删除/重命名的预设分组记录
+                            if (Array.isArray(cfg.removedDefaultKeys)) {
+                                removedDefaultKeys.value = cfg.removedDefaultKeys;
+                                defaultCategories.value = allDefaultCategories.filter(c => !removedDefaultKeys.value.includes(c.key));
+                            }
+                            // 标签语言模式
+                            if (cfg.tagLangMode === 'cn' || cfg.tagLangMode === 'en' || cfg.tagLangMode === 'both') {
+                                tagLangMode.value = cfg.tagLangMode;
+                            }
+                            // 卡片属性物理覆盖表（防重扫冲刷的核心数据）
+                            if (cfg.cardOverlays && typeof cfg.cardOverlays === 'object') {
+                                appConfig.value.cardOverlays = cfg.cardOverlays;
+                            }
+                            // API 配置（空串也要覆盖，尊重「清空」结果）
+                            if (cfg.api && typeof cfg.api === 'object') {
+                                if (typeof cfg.api.endpoint === 'string') apiEndpoint.value = cfg.api.endpoint;
+                                if (typeof cfg.api.key === 'string') apiKey.value = cfg.api.key;
+                                if (typeof cfg.api.model === 'string') apiModel.value = cfg.api.model;
+                                if (cfg.api.type === 'anthropic' || cfg.api.type === 'openai') apiType.value = cfg.api.type;
+                            }
+                        } finally {
+                            isRestoringConfig = false;
                         }
                     }
                 } else if (window.electronAPI && typeof window.electronAPI.getUiSettings === 'function') {
@@ -3832,17 +3830,10 @@ export default {
             return defaults;
         })());
 
-        // 🛡️ 加载恢复保护：loadAppConfig 恢复全局标签时置 true，防止 watch 把「恢复值」误当用户编辑回写磁盘
-        //    （否则旧文件/初始化默认值会在竞态中被写回 app_config.json，导致已删除标签复活）
-        let isLoadingGlobalTags = false;
-
         // 系统/常用标签库变化时自动持久化：统一配置中枢（app_config.json 唯一权威）+ localStorage 兜底（浏览器环境）
+        // （写盘 guard 已内置于 syncConfigToDisk，启动恢复期间不会落盘）
         watch(systemCommonTags, (val) => {
-            if (isLoadingGlobalTags) return; // 加载恢复期间不写盘，避免竞态自污染
-            try {
-                // 统一中枢：写入 app_config.json 的 globalTags（唯一权威）
-                syncConfigToDisk();
-            } catch (e) { /* 忽略 */ }
+            try { syncConfigToDisk(); } catch (e) { /* 忽略 */ }
             try { localStorage.setItem('customSystemTags', JSON.stringify(val)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
 
