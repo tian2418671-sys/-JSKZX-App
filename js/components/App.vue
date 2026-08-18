@@ -1398,6 +1398,21 @@ export default {
                     key: apiKey ? apiKey.value : (appConfig.value.api && appConfig.value.api.key) || '',
                     model: apiModel ? apiModel.value : (appConfig.value.api && appConfig.value.api.model) || '',
                     type: apiType ? apiType.value : (appConfig.value.api && appConfig.value.api.type) || 'openai'
+                },
+                // 🧩 UI 状态统一收口：生产 app:// 下 localStorage 不持久，改存 app_config.json
+                ui: {
+                    theme: theme.value,
+                    appSettings: JSON.parse(JSON.stringify(appSettings.value || {})),
+                    sanitizeImportedTags: sanitizeImportedTags.value,
+                    snapshotConfig: JSON.parse(JSON.stringify(snapshotConfig.value || {})),
+                    localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {})),
+                    sidebarWidth: Number(sidebarWidth.value) || 0,
+                    viewMode: viewMode.value,
+                    isCompactMode: isCompactMode.value,
+                    sortBy: sortBy.value,
+                    systemPromptPresets: JSON.parse(JSON.stringify(Array.isArray(systemPromptPresets.value) ? systemPromptPresets.value : [])),
+                    lastWorldbookDirPath: lastWorldbookDirPath.value || '',
+                    wbCategoryMap: JSON.parse(JSON.stringify(wbCategoryMap.value || {}))
                 }
             };
             window.electronAPI.saveAppConfig(payload).catch(() => { });
@@ -3070,6 +3085,31 @@ export default {
                                 if (typeof cfg.api.key === 'string') apiKey.value = cfg.api.key;
                                 if (typeof cfg.api.model === 'string') apiModel.value = cfg.api.model;
                                 if (cfg.api.type === 'anthropic' || cfg.api.type === 'openai') apiType.value = cfg.api.type;
+                            }
+                            // 🧩 UI 状态恢复（app_config.json 权威）
+                            if (cfg.ui && typeof cfg.ui === 'object') {
+                                if (typeof cfg.ui.theme === 'string' && cfg.ui.theme) theme.value = cfg.ui.theme;
+                                if (cfg.ui.appSettings && typeof cfg.ui.appSettings === 'object') {
+                                    appSettings.value = { ...appSettings.value, ...cfg.ui.appSettings };
+                                }
+                                if (typeof cfg.ui.sanitizeImportedTags === 'boolean') sanitizeImportedTags.value = cfg.ui.sanitizeImportedTags;
+                                if (cfg.ui.snapshotConfig && typeof cfg.ui.snapshotConfig === 'object') {
+                                    snapshotConfig.value = { ...snapshotConfig.value, ...cfg.ui.snapshotConfig };
+                                }
+                                if (cfg.ui.localCategoryMap && typeof cfg.ui.localCategoryMap === 'object') {
+                                    localCategoryMap.value = { ...localCategoryMap.value, ...cfg.ui.localCategoryMap };
+                                }
+                                if (typeof cfg.ui.sidebarWidth === 'number') sidebarWidth.value = cfg.ui.sidebarWidth;
+                                if (cfg.ui.viewMode === 'list' || cfg.ui.viewMode === 'grid') viewMode.value = cfg.ui.viewMode;
+                                if (typeof cfg.ui.isCompactMode === 'boolean') isCompactMode.value = cfg.ui.isCompactMode;
+                                if (['name', 'time', 'tokens'].includes(cfg.ui.sortBy)) sortBy.value = cfg.ui.sortBy;
+                                if (Array.isArray(cfg.ui.systemPromptPresets) && cfg.ui.systemPromptPresets.length) {
+                                    systemPromptPresets.value = cfg.ui.systemPromptPresets;
+                                }
+                                if (typeof cfg.ui.lastWorldbookDirPath === 'string') lastWorldbookDirPath.value = cfg.ui.lastWorldbookDirPath;
+                                if (cfg.ui.wbCategoryMap && typeof cfg.ui.wbCategoryMap === 'object') {
+                                    wbCategoryMap.value = { ...wbCategoryMap.value, ...cfg.ui.wbCategoryMap };
+                                }
                             }
                         } finally {
                             isRestoringConfig = false;
@@ -5926,6 +5966,17 @@ export default {
         const saveWbCategoriesMap = () => {
             try { localStorage.setItem('jsTavern_wbCategories', JSON.stringify(wbCategoryMap.value)); } catch (e) { /* 忽略 */ }
         };
+
+        // ================= [ UI 状态统一收口到 app_config.json ] =================
+        // 生产 app:// 下 localStorage 不持久，这些 UI 偏好变化时在写 localStorage 之外，
+        // 再触发一次 syncConfigToDisk 写入 app_config.json（localCategoryMap 已由自身 watch 收口，此处去重）。
+        // 与此处建立集中 watch：所有相关 ref 已声明完毕（最后一个为 wbCategoryMap），
+        // 回调里的 syncConfigToDisk 已内置 isRestoringConfig guard，恢复期触发的写盘会被自动拦截，无需 immediate。
+        watch(
+            [theme, appSettings, sanitizeImportedTags, snapshotConfig, sidebarWidth, viewMode, isCompactMode, sortBy, systemPromptPresets, lastWorldbookDirPath, wbCategoryMap],
+            () => syncConfigToDisk(),
+            { deep: true }
+        );
 
         // 重命名后迁移持久化分组键（旧 path/name -> 新 path/name），避免分类在重扫后丢失
         const migrateWbCategoryKey = (oldKey, newKey) => {
