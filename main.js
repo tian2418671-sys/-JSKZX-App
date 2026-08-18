@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { pathToFileURL } = require('url');
+const crypto = require('crypto'); // 📸 快照内容去重（SHA-256）
 
 // ================= 兼容 360 主动防御：禁用 GPU 进程沙箱 =================
 // 症状：安装版在装有 360（ZhuDongFangYu 主动防御内核驱动）的机器上启动即闪退，
@@ -95,6 +96,21 @@ async function cleanupOldSnapshots(historyDir, baseFileName, ext, maxCount) {
 }
 
 /**
+ * 计算文件内容 SHA-256（内容去重用；走流式读取，PNG 大文件不一次性吃满内存）
+ * @param {string} filePath 文件物理路径
+ * @returns {Promise<string|null>} 十六进制哈希；读取失败返回 null
+ */
+function hashFileContent(filePath) {
+  return new Promise((resolve) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (d) => hash.update(d));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', () => resolve(null));
+  });
+}
+
+/**
  * 核心快照生成与清理函数（保存前调用 = 备份旧版本；手动触发绕过冷却）
  * @param {string} filePath 原始角色卡物理路径
  * @param {boolean} isManual 是否为手动触发（绕过冷却节流阀）
@@ -126,7 +142,29 @@ async function processCardSnapshot(filePath, isManual = false) {
       await fs.promises.mkdir(historyDir, { recursive: true });
     }
 
-    // 4. 生成带精准时间戳的备份文件名（手动快照带 _manual 标记）
+    // 4. 内容去重：若与「最新一份快照」内容完全一致，说明自上次备份后未改动，跳过（省空间）
+    //    （手动快照绕过此判断，保证用户显式操作一定生效）
+    if (!isManual) {
+      const currentHash = await hashFileContent(filePath);
+      if (currentHash) {
+        let latestHash = null;
+        try {
+          const existing = await fs.promises.readdir(historyDir);
+          const mine = existing
+            .filter(f => f.startsWith(baseName + '_') && f.endsWith(ext))
+            .sort(); // 文件名含 ISO 时间戳，字典序即时间序
+          const latestName = mine[mine.length - 1];
+          if (latestName) latestHash = await hashFileContent(path.join(historyDir, latestName));
+        } catch (e) { /* 目录为空或读取失败时忽略，走正常备份 */ }
+
+        if (currentHash && latestHash && currentHash === latestHash) {
+          cardLastBackupMap.set(filePath, now);
+          return { success: true, skipped: true, reason: '内容未变化，跳过快照' };
+        }
+      }
+    }
+
+    // 5. 生成带精准时间戳的备份文件名（手动快照带 _manual 标记）
     const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
     const backupFileName = `${baseName}_${timestampStr}${isManual ? '_manual' : ''}${ext}`;
     const backupFilePath = path.join(historyDir, backupFileName);
@@ -135,7 +173,7 @@ async function processCardSnapshot(filePath, isManual = false) {
     await fs.promises.copyFile(filePath, backupFilePath);
     cardLastBackupMap.set(filePath, now);
 
-    // 5. 自动清理超出最大保留数量的旧快照
+    // 6. 自动清理超出最大保留数量的旧快照
     await cleanupOldSnapshots(historyDir, baseName, ext, snapshotConfig.maxSnapshots);
 
     return { success: true, backupFilePath, isManual };
