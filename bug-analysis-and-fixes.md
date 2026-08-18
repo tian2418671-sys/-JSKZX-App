@@ -25,8 +25,8 @@
 | 轻微 | blob URL 未释放 | ❌ 不成立 | `reset` 已有 revoke；`handleImportFiles` 仅在真正需要时创建 blob |
 | 轻微 | `onMounted` 全局监听无清理 | ⏸️ 跳过 | 根组件几乎不卸载，影响可忽略 |
 | 合理代码 | `max_tokens` 双协议口径不一致 | ✅ 已修复 | `main.js` Anthropic 分支 `payload.max_tokens \|\| 4096`，与 OpenAI 分支一致透传 |
-| 合理代码 | `js/main.js` 与根 `main.js` 同名 | ⏸️ 未改 | 当前工作区渲染入口已为 `js/main.js`（Vite 构建），改名需同步 index.html/README，风险收益比低 |
-| 合理代码 | `models:fetch` 冗余分支 | ⏸️ 未改 | 当前代码已合并为单一智能构建逻辑 |
+| 合理代码 | `js/main.js` 与根 `main.js` 同名 | ✅ 已修复 | `git mv js/main.js js/entry.js` + `index.html` 引用 + README 同步；`vite build` 验证通过（640 模块） |
+| 合理代码 | `models:fetch` 冗余分支 | ✅ 已修复 | `/\/v1\/?$/` 分支与 `else` 分支结果完全相同，已合并为单一 else 分支 |
 | 优化 | 刷新全量重载卡顿（embeddedData 主进程提取） | ⏸️ 未做 | 较大改动，待后续性能优化专项处理 |
 
 > 说明：本文档部分行号针对旧路径 `d:\1\JSKZX` 早期版本，应用修复时以当前工作区实际代码为准。
