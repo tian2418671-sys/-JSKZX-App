@@ -71,6 +71,26 @@
                                       placeholder="例如：请重点分析角色的性格特征，忽略外观描述..."
                                       class="w-full bg-white border border-gray-300 rounded p-2 text-xs text-gray-700 focus:outline-none focus:border-blue-500 placeholder-gray-400 resize-y shadow-sm"></textarea>
                         </div>
+
+                        <!-- 🚨 破限 (Jailbreak) 强制越狱：对抗模型拒答及道德审查，破限词自动保存 -->
+                        <div class="mt-3 border border-rose-300 bg-rose-50 rounded-lg p-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" :checked="useJailbreak" @change="$emit('update:useJailbreak', $event.target.checked)" :disabled="isAITagging"
+                                           class="w-4 h-4 text-rose-600 bg-white border-gray-300 rounded focus:ring-rose-600 focus:ring-2">
+                                    <span class="text-sm font-bold text-rose-600 flex items-center gap-1">⚠️ 启用强制破限 (Jailbreak)</span>
+                                </label>
+                                <span class="text-[10px] text-gray-500">用于对抗模型拒答及道德审查</span>
+                            </div>
+                            <transition name="fade">
+                                <div v-show="useJailbreak" class="mt-2">
+                                    <textarea :value="jailbreakPrompt" @input="$emit('update:jailbreakPrompt', $event.target.value)" :disabled="isAITagging" rows="3"
+                                              class="w-full bg-white/80 border border-rose-300 rounded p-2 text-xs text-rose-800 focus:border-rose-500 focus:outline-none resize-y shadow-sm placeholder-rose-400 custom-scrollbar"
+                                              placeholder="输入你的强力破限咒语 (Jailbreak Prompt)..."></textarea>
+                                    <p class="text-[10px] text-rose-500/80 mt-1">💡 破限词将自动拼接在系统提示词最末尾（注意力权重最高），输入一次永久保存，重启不丢。</p>
+                                </div>
+                            </transition>
+                        </div>
                     </div>
 
                     <!-- 📝 3. 系统级微调全局提示词预设库 -->
@@ -181,6 +201,8 @@ export default {
         newAICandidateTag: { type: String, default: '' },
         enableAIExtraction: { type: Boolean, default: true },
         customAIPrompt: { type: String, default: '' },
+        useJailbreak: { type: Boolean, default: true },
+        jailbreakPrompt: { type: String, default: '' },
         systemPromptPresets: { type: Array, default: () => [] },
         activeSystemPromptId: { type: String, default: '' },
         apiEndpoint: { type: String, default: '' },
@@ -195,6 +217,7 @@ export default {
     emits: [
         'close', 'remove-ai-candidate-tag', 'update:newAICandidateTag', 'add-ai-candidate-tag-manual',
         'add-ai-candidate-tag', 'update:enableAIExtraction', 'update:customAIPrompt',
+        'update:useJailbreak', 'update:jailbreakPrompt',
         'add-system-prompt-preset', 'update:activeSystemPromptId', 'save-system-prompts',
         'delete-system-prompt-preset', 'fetch-available-models', 'update:apiEndpoint',
         'update:apiKey', 'update:apiModel', 'start-tagging', 'remove-system-common-tag'
