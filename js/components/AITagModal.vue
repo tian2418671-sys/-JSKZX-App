@@ -83,11 +83,20 @@
                                 <span class="text-[10px] text-gray-500">用于对抗模型拒答及道德审查</span>
                             </div>
                             <transition name="fade">
-                                <div v-show="useJailbreak" class="mt-2">
+                                <div v-show="useJailbreak" class="mt-2 space-y-2">
+                                    <!-- 📚 预设快速套用：选中即覆盖当前破限词 -->
+                                    <div class="flex items-center gap-2" v-if="jailbreakPresets.length > 0">
+                                        <label class="text-[10px] text-rose-500 shrink-0">📚 预设套用:</label>
+                                        <select :value="''" @change="$emit('update:jailbreakPrompt', $event.target.value)" :disabled="isAITagging"
+                                                class="flex-1 h-7 bg-white border border-rose-300 rounded px-1.5 text-xs text-rose-700 focus:outline-none focus:border-rose-500">
+                                            <option value="" disabled>— 选择预设覆盖当前破限词 —</option>
+                                            <option v-for="p in jailbreakPresets" :key="p.id" :value="p.content">{{ p.name }}</option>
+                                        </select>
+                                    </div>
                                     <textarea :value="jailbreakPrompt" @input="$emit('update:jailbreakPrompt', $event.target.value)" :disabled="isAITagging" rows="3"
                                               class="w-full bg-white/80 border border-rose-300 rounded p-2 text-xs text-rose-800 focus:border-rose-500 focus:outline-none resize-y shadow-sm placeholder-rose-400 custom-scrollbar"
                                               placeholder="输入你的强力破限咒语 (Jailbreak Prompt)..."></textarea>
-                                    <p class="text-[10px] text-rose-500/80 mt-1">💡 破限词将自动拼接在系统提示词最末尾（注意力权重最高），输入一次永久保存，重启不丢。</p>
+                                    <p class="text-[10px] text-rose-500/80 mt-1">💡 破限词自动拼接在系统提示词最末尾（注意力权重最高），输入一次永久保存，重启不丢。</p>
                                 </div>
                             </transition>
                         </div>
@@ -203,6 +212,7 @@ export default {
         customAIPrompt: { type: String, default: '' },
         useJailbreak: { type: Boolean, default: true },
         jailbreakPrompt: { type: String, default: '' },
+        jailbreakPresets: { type: Array, default: () => [] },
         systemPromptPresets: { type: Array, default: () => [] },
         activeSystemPromptId: { type: String, default: '' },
         apiEndpoint: { type: String, default: '' },
