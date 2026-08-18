@@ -3037,9 +3037,12 @@ export default {
                     const cfg = await window.electronAPI.loadAppConfig();
                     if (cfg && typeof cfg === 'object') {
                         // 全局标签池（globalTags）
-                        if (Array.isArray(cfg.globalTags) && cfg.globalTags.length > 0) {
+                        // 🐛 修复「删除标签后重启复发」：app_config.json 是唯一权威，必须【整体替换】而非【并集合并】。
+                        //    否则生产模式(app://)下 localStorage 不持久、初始化回退到内置默认池，
+                        //    并集会把「已删除的默认标签」重新带回（"一键清空"也会被忽略）。
+                        if (Array.isArray(cfg.globalTags)) {
                             const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
-                            if (cleanTags.length) systemCommonTags.value = Array.from(new Set([...systemCommonTags.value, ...cleanTags]));
+                            systemCommonTags.value = Array.from(new Set(cleanTags));
                         }
                         // 自定义分组
                         if (Array.isArray(cfg.customCategories)) {
@@ -3809,16 +3812,13 @@ export default {
                 'RPG (文字游戏/跑团)', 'Scenario (特定情景剧)', 'Narrator (旁白驱动)', 'Assistant (AI助手/工具卡)'
             ];
             // 优先读取 localStorage 中用户自定义的标签（越用越懂你）；无记录/损坏时回退默认池
-            // ⚠️ 防御历史污染：旧版 bug 曾导致 localStorage 只存了部分自定义标签（默认标签全丢）
+            // 🐛 修复「删除标签后重启复发」：旧逻辑用「默认标签命中率 < 50% 即判定污染并回填默认」，
+            //    删掉超过一半默认标签后，重启会把已删除的默认标签全部复活。
+            //    现在：只要存在有效保存记录（含空数组 = 用户主动清空），一律尊重保存结果，绝不自动回填默认。
             try {
                 const saved = JSON.parse(localStorage.getItem('customSystemTags'));
-                if (Array.isArray(saved) && saved.length > 0) {
+                if (Array.isArray(saved)) {
                     const clean = saved.filter(t => typeof t === 'string' && t.trim() !== '');
-                    const defaultHits = defaults.filter(d => clean.includes(d)).length;
-                    // 若保存列表缺失大半默认标签 → 判定为污染数据，合并默认补全；否则视为完整状态（尊重用户删除操作）
-                    if (defaultHits < defaults.length / 2) {
-                        return Array.from(new Set([...defaults, ...clean]));
-                    }
                     return Array.from(new Set(clean));
                 }
             } catch (e) { /* 忽略 */ }
@@ -3838,15 +3838,15 @@ export default {
             try { localStorage.setItem('customSystemTags', JSON.stringify(val)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
 
-        // 从主进程配置文件加载全局标签（与现有池合并，避免丢默认标签；dev 与生产共享同一份 userData 配置）
+        // 从主进程配置文件加载全局标签（dev 与生产共享同一份 userData 配置）
+        // 🐛 修复「删除标签后重启复发」：同样改为【整体替换】——旧配置也是用户状态的权威快照，
+        //    并集合并会把已删除的默认标签重新带回（与 loadAppConfig 的 globalTags 口径保持一致）
         const loadGlobalTagsFromDisk = async () => {
             if (!window.electronAPI || !window.electronAPI.getGlobalTags) return;
             try {
                 const saved = await window.electronAPI.getGlobalTags();
-                if (Array.isArray(saved) && saved.length > 0) {
-                    // 合并（去重）：配置为完整列表时结果不变；若配置不完整也不丢默认标签
-                    const merged = Array.from(new Set([...systemCommonTags.value, ...saved.filter(t => typeof t === 'string' && t.trim() !== '')]));
-                    systemCommonTags.value = merged;
+                if (Array.isArray(saved)) {
+                    systemCommonTags.value = Array.from(new Set(saved.filter(t => typeof t === 'string' && t.trim() !== '')));
                 }
             } catch (e) { console.warn('加载全局标签失败', e); }
         };
