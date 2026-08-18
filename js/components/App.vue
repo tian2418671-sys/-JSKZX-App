@@ -3047,7 +3047,9 @@ export default {
                         //    并集会把「已删除的默认标签」重新带回（"一键清空"也会被忽略）。
                         if (Array.isArray(cfg.globalTags)) {
                             const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
+                            isLoadingGlobalTags = true;   // 🛡️ 装载标记：恢复期间禁止 watch 写盘（防竞态自污染）
                             systemCommonTags.value = Array.from(new Set(cleanTags));
+                            isLoadingGlobalTags = false;
                         }
                         // 自定义分组
                         if (Array.isArray(cfg.customCategories)) {
@@ -3830,32 +3832,23 @@ export default {
             return defaults;
         })());
 
-        // 系统/常用标签库变化时自动持久化：统一配置中枢（app_config.json）+ 旧配置兼容 + localStorage 兜底（浏览器环境）
+        // 🛡️ 加载恢复保护：loadAppConfig 恢复全局标签时置 true，防止 watch 把「恢复值」误当用户编辑回写磁盘
+        //    （否则旧文件/初始化默认值会在竞态中被写回 app_config.json，导致已删除标签复活）
+        let isLoadingGlobalTags = false;
+
+        // 系统/常用标签库变化时自动持久化：统一配置中枢（app_config.json 唯一权威）+ localStorage 兜底（浏览器环境）
         watch(systemCommonTags, (val) => {
+            if (isLoadingGlobalTags) return; // 加载恢复期间不写盘，避免竞态自污染
             try {
-                // 统一中枢：写入 app_config.json 的 globalTags（权威）
+                // 统一中枢：写入 app_config.json 的 globalTags（唯一权威）
                 syncConfigToDisk();
-                // 兼容：旧 tavern_manager_config.json 的 globalTags 字段
-                if (window.electronAPI && window.electronAPI.saveGlobalTags) {
-                    window.electronAPI.saveGlobalTags(JSON.parse(JSON.stringify(val)));
-                }
             } catch (e) { /* 忽略 */ }
             try { localStorage.setItem('customSystemTags', JSON.stringify(val)); } catch (e) { /* 忽略 */ }
         }, { deep: true });
 
-        // 从主进程配置文件加载全局标签（dev 与生产共享同一份 userData 配置）
-        // 🐛 修复「删除标签后重启复发」：同样改为【整体替换】——旧配置也是用户状态的权威快照，
-        //    并集合并会把已删除的默认标签重新带回（与 loadAppConfig 的 globalTags 口径保持一致）
-        const loadGlobalTagsFromDisk = async () => {
-            if (!window.electronAPI || !window.electronAPI.getGlobalTags) return;
-            try {
-                const saved = await window.electronAPI.getGlobalTags();
-                if (Array.isArray(saved)) {
-                    systemCommonTags.value = Array.from(new Set(saved.filter(t => typeof t === 'string' && t.trim() !== '')));
-                }
-            } catch (e) { console.warn('加载全局标签失败', e); }
-        };
-        loadGlobalTagsFromDisk(); // setup 阶段即发起异步加载（不阻塞首屏）
+        // ⚠️ 已移除 loadGlobalTagsFromDisk()：旧文件 tavern_manager_config.json 的读取路径与
+        //    app_config.json 权威加载形成竞态（两个不同文件互相覆盖），是「删除标签重启复发」的根源。
+        //    旧文件 globalTags 的迁移已在 main.js sys:loadConfig 首次启动时一次性完成，无需再读取。
 
         // ================= 标签中英文切换系统 =================
         // 标签语言模式: 'cn' (纯中文), 'en' (纯英文), 'both' (中英双语)
