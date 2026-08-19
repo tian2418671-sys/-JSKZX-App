@@ -9,11 +9,11 @@
  * @returns {string} 解码后的字符串
  */
 export function decodeBase64UTF8(base64) {
-    try {
-        return decodeURIComponent(escape(atob(base64)));
-    } catch (e) {
-        return atob(base64);
-    }
+    // 🔧 代码审查修复 7：废弃 escape() → TextDecoder 标准解码（无非 ASCII 越界隐患）
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 }
 
 /**

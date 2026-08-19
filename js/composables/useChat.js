@@ -22,10 +22,15 @@ export function useChat({
     const chatContainer = ref(null); // 用于自动滚动
 
     // 手动保存 API 配置（按钮触发，立即落盘 + 提示）
-    const saveApiConfig = () => {
+    const saveApiConfig = async () => {
         try {
             localStorage.setItem('stc-api-endpoint', apiEndpoint.value);
-            localStorage.setItem('stc-api-key', apiKey.value);
+            // 🔐 加密 API Key 后落盘（代码审查修复 2）
+            let encKey = apiKey.value || '';
+            if (encKey && window.electronAPI && typeof window.electronAPI.encryptSecret === 'function') {
+                try { const enc = await window.electronAPI.encryptSecret(encKey); if (enc && enc.success && enc.value) encKey = enc.value; } catch (e) { /* 加密失败回退明文 */ }
+            }
+            localStorage.setItem('stc-api-key', encKey);
             localStorage.setItem('stc-api-model', apiModel.value);
             localStorage.setItem('stc-api-type', apiType.value);
             syncConfigToDisk(); // 🛡️ 统一中枢立即落盘（生产 app:// 下 localStorage 不持久，物理文件才是权威）
@@ -145,7 +150,15 @@ export function useChat({
 
         try {
             // 持久化 API Key（localStorage 可能不可用，做防御性写入）
-            try { localStorage.setItem('stc-api-key', apiKey.value); } catch (e) { /* 忽略 */ }
+            // 🔐 加密后落盘（代码审查修复 2）
+            try {
+                if (apiKey.value && window.electronAPI && typeof window.electronAPI.encryptSecret === 'function') {
+                    const enc = await window.electronAPI.encryptSecret(apiKey.value);
+                    localStorage.setItem('stc-api-key', (enc && enc.success && enc.value) ? enc.value : apiKey.value);
+                } else {
+                    localStorage.setItem('stc-api-key', apiKey.value);
+                }
+            } catch (e) { /* 忽略 */ }
             const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, apiKey.value, apiType.value);
 
             // 【修复】在途请求期间用户切卡 → chatHistory 已被清空/重建，直接丢弃回复，不污染新卡

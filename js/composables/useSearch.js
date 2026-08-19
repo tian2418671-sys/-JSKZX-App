@@ -154,15 +154,17 @@ export function useSearch({
                 return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
             }
             if (sortBy.value === 'time') {
-                // 【修复 BUG-1】"最新"以物理文件时间为准（修改时间 > 创建时间），避免卡片内建 create_date
-                // （作者创作日期可多年不变/同批卡相同）造成的排序混乱；
-                // 物理时间缺失时才回退卡片内建 create_date（用于未落盘/特殊来源的卡）
+                // 【修复 BUG-2】"最新"以物理【创建时间 birthtime】为第一基准：
+                //   实测发现库内大量卡片的 mtime（修改时间）会被批量操作/touch 统一成同一时刻
+                //   （全库 mtime 同时被改），导致 Math.max(mtime,birthtime) 全库同值 → 排序退化、
+                //   "最新"错乱。而 birthtime（文件进入库的时刻）不会被批量统一，天然稳定：
+                //   新导入/复制/下载的卡 birthtime = 入库时刻 → 正确排最前。
+                //   内存导入（拖拽/链接下载）未重扫前 _ctime=0，回退 _mtime(=导入时刻) 同样最新。
                 const pickTime = (card) => {
-                    const m = Number(card._mtime) || 0;
-                    const c = Number(card._ctime) || 0;
-                    if (m && c) return Math.max(m, c); // 修改与创建取较新（最近活动）
-                    if (m) return m;
+                    const c = Number(card._ctime) || 0; // 创建时间（进入库的时刻，最可靠）
                     if (c) return c;
+                    const m = Number(card._mtime) || 0; // 修改时间（可能被批量统一，仅作回退）
+                    if (m) return m;
                     return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
                 };
                 return pickTime(b) - pickTime(a); // 最新优先

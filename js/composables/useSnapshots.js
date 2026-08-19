@@ -28,7 +28,13 @@ export function useSnapshots({
             localStorage.setItem('snapshot_max_count', String(snapshotConfig.value.maxSnapshots));
         } catch (e) { /* 忽略 */ }
         if (window.electronAPI && typeof window.electronAPI.updateSnapshotConfig === 'function') {
-            try { await window.electronAPI.updateSnapshotConfig(snapshotConfig.value); } catch (e) { /* 忽略 */ }
+            try {
+                // ⚠️ 必须 JSON 序列化剥离 Vue reactive Proxy：
+                //   snapshotConfig.value 是响应式代理，直接传 IPC 会报 "An object could not be cloned"，
+                //   导致开关永远同步不到主进程 → 关闭自动快照后仍生成快照（历史 BUG 根因）
+                const plain = JSON.parse(JSON.stringify(snapshotConfig.value));
+                await window.electronAPI.updateSnapshotConfig(plain);
+            } catch (e) { console.warn('快照配置同步主进程失败:', e); }
         }
     };
     watch(snapshotConfig, saveSnapshotSettings, { deep: true });

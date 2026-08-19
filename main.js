@@ -7,7 +7,7 @@
  * - `local-file://` 特权协议安全读取磁盘图片：无需关闭 webSecurity 即可展示本地立绘；
  * - 文件夹选择通过原生 dialog 弹出，选中的路径静默保存到系统 userData 目录。
  */
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater'); // 【新增】OTA 自动更新模块（发布需上传 latest.yml）
 const path = require('path');
 const fs = require('fs');
@@ -443,6 +443,24 @@ function atomicWriteJson(filePath, data) {
   fs.renameSync(tmpPath, filePath);
 }
 
+// 🔁 通用退避重试（代码审查修复 8）：仅对 5xx / 网络错误重试，业务错误（4xx）立即返回
+async function fetchWithRetry(url, options, retries = 2, backoffMs = 800) {
+  let lastError;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || res.status < 500) return res; // 仅对 5xx / 网络错误重试
+      lastError = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastError = e;
+    }
+    if (i < retries) {
+      await new Promise(r => setTimeout(r, backoffMs * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
 // ================= [ 📸 快照配置持久化：跨重启记住「是否启用自动快照」 ] =================
 // app_config.json 的 ui.snapshotConfig 是权威源（前端恢复后经 IPC 同步覆盖）；
 // 此处单独落盘作为主进程启动早期兜底，双源在正常流程下保持一致。
@@ -466,7 +484,7 @@ function loadSnapshotConfig() {
 function saveSnapshotConfig() {
   try {
     atomicWriteJson(SNAPSHOT_CONFIG_PATH, snapshotConfig);
-  } catch (e) { /* 写盘失败忽略 */ }
+  } catch (e) { console.error('快照配置写盘失败:', e); }
 }
 
 // 启动即加载，确保主进程从第一刻起就记住用户「关闭自动快照」的选择（前端 IPC 同步前兜底）
@@ -646,6 +664,12 @@ const skipFolders = [
 // 角色卡 PNG 因内嵌设定代码（Base64 JSON），体积几乎不可能小于 40KB；
 // 小于该值极大概率是图标/UI 贴图等垃圾文件，在解析前直接丢弃（体积拦截）
 const MIN_CARD_FILE_SIZE = 40960;
+// 🔢 魔法数字常量化（代码审查修复 9）：集中定义散落的大小上限 / 批次 / 进度 / 缺省值
+const MAX_URL_DOWNLOAD_BYTES = 20 * 1024 * 1024; // 角色卡 URL 下载上限
+const MAX_WB_FETCH_BYTES     = 50 * 1024 * 1024; // 世界书 URL 拉取上限
+const SCAN_FILE_BATCH        = 64;               // 扫描文件批并发
+const SCAN_PROGRESS_STEP     = 100;              // 每 N 个文件上报一次进度
+const CHAT_DEFAULT_MAX_TOKENS = 4096;            // OpenAI/Anthropic 缺省 max_tokens
 
 // 递归扫描核心引擎（目录串行递归 + 文件批并发，彻底避免 EMFILE 句柄爆炸崩溃）
 async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 }, useSizeFilter = false) {
@@ -667,7 +691,7 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
 
         // 2. 文件：分批并发收集（单批上限 64，兼顾 SSD 并行与文件句柄安全）
         const fileEntries = files.filter(f => f.isFile());
-        const BATCH = 64;
+        const BATCH = SCAN_FILE_BATCH;
         for (let i = 0; i < fileEntries.length; i += BATCH) {
             const batch = fileEntries.slice(i, i + BATCH);
             const batchResults = await Promise.all(batch.map(async (file) => {
@@ -691,7 +715,7 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
 
                 progressState.count++;
                 // 降低通信频率：每找到 100 张卡片才给前端发一次进度，防止主进程阻塞
-                if (progressState.count % 100 === 0) {
+                if (progressState.count % SCAN_PROGRESS_STEP === 0) {
                     event.sender.send('scan-progress', { 
                         status: `🚀 极速检索中... 已发现 ${progressState.count} 个目标文件`, 
                         count: progressState.count 
@@ -1086,7 +1110,7 @@ app.whenReady().then(() => {
       const headers = {};
       if (apiKey && apiKey.trim()) headers['Authorization'] = `Bearer ${apiKey.trim()}`;
 
-      const response = await fetch(importUrl, { method: 'POST', headers, body: form });
+      const response = await fetchWithRetry(importUrl, { method: 'POST', headers, body: form });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         if (response.status === 403) {
@@ -1196,7 +1220,12 @@ app.whenReady().then(() => {
 
   // IPC：原生消息对话框（替代 alert）
   ipcMain.handle('dialog:showMessage', async (event, options) => {
-    return await dialog.showMessageBox(options);
+    // 🛡️ 类型规范化：Electron showMessageBox 仅接受 none/info/error/question/warning；
+    //   渲染层 nativeAlert 会传 'success' 等业务类型，直接透传会抛 "Invalid message box type" 导致弹窗失败
+    const allowed = ['none', 'info', 'error', 'question', 'warning'];
+    const opts = { ...(options || {}) };
+    if (!allowed.includes(opts.type)) opts.type = 'info'; // success 等业务类型归一到 info
+    return await dialog.showMessageBox(opts);
   });
 
   // IPC：系统级拖拽复制文件到库
@@ -1542,6 +1571,28 @@ app.whenReady().then(() => {
   });
 
   // IPC：保存卡片（写入前自动备份历史快照到 .bak_history；异步化防大图保存卡主进程）
+  // 🔐 safeStorage 敏感配置加密 / 解密（代码审查修复 2）：API Key 等不再明文落盘
+  // 兼容性：加密不可用（无 keychain 的环境）时返回 value=null，调用方回退明文；解密失败（旧明文数据）返回原值
+  ipcMain.handle('secret:encrypt', (event, plainText) => {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) return { success: true, value: null };
+      const buf = safeStorage.encryptString(String(plainText || ''));
+      return { success: true, value: buf.toString('base64') };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+  ipcMain.handle('secret:decrypt', (event, cipherText) => {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) return { success: true, value: null };
+      const buf = Buffer.from(String(cipherText || ''), 'base64');
+      return { success: true, value: safeStorage.decryptString(buf) };
+    } catch (e) {
+      // 旧版明文 / 非法密文：返回空值，由调用方回退原值使用（向后兼容）
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
     try {
       if (!isPathAllowed(filePath)) return forbidden();
@@ -1555,7 +1606,10 @@ app.whenReady().then(() => {
 
       const ext = path.extname(filePath).toLowerCase();
       if (ext === '.json') {
-        await fs.promises.writeFile(filePath, JSON.stringify(updatedJson, null, 2), 'utf-8');
+        // 🔐 原子写入：tmp + rename，中途崩溃不再损坏原卡（代码审查修复 3）
+        const tmpPath = filePath + '.tmp';
+        await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
+        await fs.promises.rename(tmpPath, filePath);
         return { success: true };
       } else if (ext === '.png') {
         const buffer = await fs.promises.readFile(filePath);
@@ -1720,7 +1774,7 @@ app.whenReady().then(() => {
         return { success: false, error: `网络请求失败 (状态码: ${response.status})` };
       }
       const text = await response.text();
-      if (text.length > 50 * 1024 * 1024) {
+      if (text.length > MAX_WB_FETCH_BYTES) {
         return { success: false, error: '响应体过大（超过 50MB），已中止拉取。' };
       }
       return { success: true, data: text };
@@ -1750,7 +1804,7 @@ app.whenReady().then(() => {
       }
       const buf = Buffer.from(await response.arrayBuffer());
       if (!buf || buf.length === 0) return { success: false, error: '下载内容为空。' };
-      if (buf.length > 20 * 1024 * 1024) {
+      if (buf.length > MAX_URL_DOWNLOAD_BYTES) {
         return { success: false, error: '文件过大（超过 20MB），已中止下载。' };
       }
 
@@ -1985,9 +2039,13 @@ app.whenReady().then(() => {
     return { success: true };
   });
 
-  // 3. 触发退出并安装
+  // 3. 触发退出并安装（静默升级：不弹安装向导界面，装完自动重启）
+  //    quitAndInstall(isSilent, isForceRunAfter)：两参默认 false
+  //    isSilent=true → 静默运行安装器（不弹 assisted installer 界面）
+  //    isForceRunAfter=true → 安装完成后自动重启应用
+  //    注意：必须保持 per-user（package.json 勿设 perMachine:true），否则无 UAC 提权静默写入会 EACCES
   ipcMain.handle('sys:installUpdate', () => {
-    autoUpdater.quitAndInstall();
+    autoUpdater.quitAndInstall(true, true);
     return { success: true };
   });
 
@@ -2072,7 +2130,7 @@ app.whenReady().then(() => {
           model: payload.model,
           // 【修复】统一 max_tokens 口径：优先透传前端传入的上限，缺省再给 4096（Anthropic 必填字段），
           // 不再单边硬编码 4096 截断长回复
-          max_tokens: payload.max_tokens || 4096,
+          max_tokens: payload.max_tokens || CHAT_DEFAULT_MAX_TOKENS,
           system: systemPrompt,
           messages: filteredMessages,
           temperature: payload.temperature ?? 0.2
@@ -2085,7 +2143,7 @@ app.whenReady().then(() => {
         bodyData = payload;
       }
 
-      const response = await fetch(fetchUrl, {
+      const response = await fetchWithRetry(fetchUrl, {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(bodyData)
@@ -2134,7 +2192,7 @@ app.whenReady().then(() => {
         if (authKey) headers['Authorization'] = `Bearer ${authKey}`;
       }
 
-      const response = await fetch(modelsUrl, { method: 'GET', headers });
+      const response = await fetchWithRetry(modelsUrl, { method: 'GET', headers });
       if (!response.ok) {
         return { success: false, error: `HTTP ${response.status} ${response.statusText}` };
       }
@@ -2313,11 +2371,16 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
         try {
           const size = fs.statSync(absPath).size;
           const headLen = Math.min(1024 * 1024, size);
-          const fd = fs.openSync(absPath, 'r');
-          const head = Buffer.alloc(headLen);
-          fs.readSync(fd, head, 0, headLen, 0);
-          fs.closeSync(fd);
-          embeddedData = readTavernPNGChunk(head) || null;
+          // 🔐 文件句柄 try/finally 防泄漏（代码审查修复 4）
+          let fd = null;
+          try {
+            fd = fs.openSync(absPath, 'r');
+            const head = Buffer.alloc(headLen);
+            fs.readSync(fd, head, 0, headLen, 0);
+            embeddedData = readTavernPNGChunk(head) || null;
+          } finally {
+            if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* 关闭失败忽略 */ } }
+          }
         } catch (e) { embeddedData = null; }
       }
       files.push({
@@ -2351,6 +2414,16 @@ function scanAndSaveFolder(folderPath) {
     const files = [];
     const categories = new Set();
     walkLibraryDir(folderPath, '', files, categories);
+
+    // 🧹 修复「卡片导入/扫描出现空分组」：空文件夹不再产生"幽灵分组"。
+    // 物理分组只保留确实包含卡片文件的文件夹；误建/残留的空文件夹（如 123/、555/）不再显示为分组。
+    const cardFolders = new Set();
+    for (const f of files) {
+      if (f.subFolder) cardFolders.add(f.subFolder.split(path.sep)[0]);
+    }
+    for (const c of Array.from(categories)) {
+      if (!cardFolders.has(c)) categories.delete(c);
+    }
 
     return { folderPath, files, categories: Array.from(categories) };
   } catch (e) {

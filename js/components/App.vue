@@ -951,9 +951,18 @@ export default {
         // 统一写入磁盘：从各响应式源收集完整配置 → JSON 剥离 Vue 响应式 Proxy → 原子落盘
         // ⚠️ 关键：ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
         //    "An object could not be cloned"（structured clone 失败）→ 必须统一 JSON 序列化剥离。
-        const syncConfigToDisk = () => {
+        const syncConfigToDisk = async () => {
             if (isRestoringConfig) return; // 启动恢复期间不落盘，避免把恢复值/旧值写回造成复活
             if (!window.electronAPI || typeof window.electronAPI.saveAppConfig !== 'function') return;
+            // 🔐 加密 API Key 后落盘（代码审查修复 2）：密文写入 app_config.json，明文只存内存
+            const rawKey = apiKey ? apiKey.value : (appConfig.value.api && appConfig.value.api.key) || '';
+            let encKey = rawKey || '';
+            if (rawKey && typeof window.electronAPI.encryptSecret === 'function') {
+                try {
+                    const enc = await window.electronAPI.encryptSecret(rawKey);
+                    if (enc && enc.success && enc.value) encKey = enc.value;
+                } catch (e) { /* 加密失败回退明文 */ }
+            }
             const payload = {
                 language: 'zh-CN',
                 tagLangMode: tagLangMode.value,
@@ -963,7 +972,7 @@ export default {
                 cardOverlays: JSON.parse(JSON.stringify(appConfig.value.cardOverlays || {})),
                 api: {
                     endpoint: apiEndpoint ? apiEndpoint.value : (appConfig.value.api && appConfig.value.api.endpoint) || '',
-                    key: apiKey ? apiKey.value : (appConfig.value.api && appConfig.value.api.key) || '',
+                    key: encKey,
                     model: apiModel ? apiModel.value : (appConfig.value.api && appConfig.value.api.model) || '',
                     type: apiType ? apiType.value : (appConfig.value.api && appConfig.value.api.type) || 'openai'
                 },
@@ -1050,6 +1059,15 @@ export default {
         let savedApiKey = '';
         try { savedApiKey = localStorage.getItem('stc-api-key') || ''; } catch (e) { /* 忽略 */ }
         const apiKey = ref(savedApiKey);
+        // 🔐 解密历史密文（代码审查修复 2）：兼容旧明文——解密失败则原样使用
+        if (savedApiKey && window.electronAPI && typeof window.electronAPI.decryptSecret === 'function') {
+            (async () => {
+                try {
+                    const dec = await window.electronAPI.decryptSecret(savedApiKey);
+                    if (dec && dec.success && typeof dec.value === 'string') apiKey.value = dec.value;
+                } catch (e) { /* 解密失败回退明文 */ }
+            })();
+        }
 
         // API 模型名称（OpenAI 兼容格式的 model 字段；本地 LM Studio/Ollama 通常忽略，可留空回退 local-model）
         let savedApiModel = '';
@@ -1068,8 +1086,16 @@ export default {
             try { localStorage.setItem('stc-api-endpoint', v || ''); } catch (e) { /* 忽略 */ }
             syncConfigToDisk();
         });
-        watch(apiKey, (v) => {
-            try { localStorage.setItem('stc-api-key', v || ''); } catch (e) { /* 忽略 */ }
+        watch(apiKey, async (v) => {
+            // 🔐 落盘前加密（代码审查修复 2）：密文写入 localStorage，明文只存内存
+            let storeVal = v || '';
+            if (storeVal && window.electronAPI && typeof window.electronAPI.encryptSecret === 'function') {
+                try {
+                    const enc = await window.electronAPI.encryptSecret(storeVal);
+                    if (enc && enc.success && enc.value) storeVal = enc.value;
+                } catch (e) { /* 加密失败回退明文 */ }
+            }
+            try { localStorage.setItem('stc-api-key', storeVal); } catch (e) { /* 忽略 */ }
             syncConfigToDisk();
         });
         watch(apiModel, (v) => {
@@ -1740,8 +1766,16 @@ export default {
             for (const [tag, regex] of Object.entries(autoTagRules)) {
                 if (regex.test(fullText) && !generatedTags.includes(tag)) {
                     generatedTags.push(tag);
-                    // 简单的自动分类：将匹配到的第一个大类作为分类
-                    if (assignedCategory === '未分类') assignedCategory = tag.split(' ')[0];
+                    // 【修复】自动分类仅落到已知预设分组：
+                    //   tag.split(' ')[0] 可能产生预设外的英文组名（如 'Monster (魔物娘)' → 'Monster'），
+                    //   导致导入卡片被分到莫名/英文名的分组（用户眼中"没有名字的分组"）。
+                    //   未知组名不设分类（保持"未分类"），也不自动创建新分组。
+                    if (assignedCategory === '未分类') {
+                        const cand = tag.split(' ')[0];
+                        if (allCategories.value.some(c => c.key === cand || c.cn === cand || c.en === cand)) {
+                            assignedCategory = cand;
+                        }
+                    }
                 }
             }
 
@@ -1995,7 +2029,16 @@ export default {
                             // API 配置（空串也要覆盖，尊重「清空」结果）
                             if (cfg.api && typeof cfg.api === 'object') {
                                 if (typeof cfg.api.endpoint === 'string') apiEndpoint.value = cfg.api.endpoint;
-                                if (typeof cfg.api.key === 'string') apiKey.value = cfg.api.key;
+                                if (typeof cfg.api.key === 'string') {
+                                    apiKey.value = cfg.api.key;
+                                    // 🔐 解密后使用（代码审查修复 2）：兼容旧明文——解密失败回退原值
+                                    if (cfg.api.key && window.electronAPI && typeof window.electronAPI.decryptSecret === 'function') {
+                                        try {
+                                            const dec = await window.electronAPI.decryptSecret(cfg.api.key);
+                                            if (dec && dec.success && typeof dec.value === 'string') apiKey.value = dec.value;
+                                        } catch (e) { /* 回退明文 */ }
+                                    }
+                                }
                                 if (typeof cfg.api.model === 'string') apiModel.value = cfg.api.model;
                                 if (cfg.api.type === 'anthropic' || cfg.api.type === 'openai') apiType.value = cfg.api.type;
                             }

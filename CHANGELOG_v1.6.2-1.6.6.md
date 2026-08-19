@@ -1,7 +1,73 @@
-# SillyTavern 角色卡管理器 · v1.6.2 → v1.6.6 更新汇总
+# SillyTavern 角色卡管理器 · v1.6.2 → v1.8.2 更新汇总
 
-> 更新周期：2026-08-15 ~ 2026-08-16
+> 更新周期：2026-08-15 ~ 2026-08-19
 > 技术栈：Electron + Vue3 + Tailwind + ECharts
+
+---
+
+## ✨ v1.8.2 —— 换卡图 + 链接下载导入 + 下拉菜单 + 静默升级 + 安全加固 + 8 项 BUG 修复 + 代码审查整改
+
+> 内部详细版（对外精简版见 RELEASE_NOTES.md v1.8.2）
+
+### 🖼️ 换卡图（新功能）
+- 工具栏 ⚙ 菜单 / 右键菜单「🖼️ 换卡图」：选择新立绘一键替换
+- PNG 卡**原地替换**（内嵌 chara/ccv3 数据完整保留）；WebP / JSON 卡自动转标准 PNG 卡
+- 主进程新增 `card:replaceImage` IPC + 7 个 PNG 工具函数（buildPngChunk / isCharaChunk / isPNGBuffer / embedCardJSONIntoPNG / calibrateCardData / getCardName / validateCardPNG）
+- sharp 可选依赖（N-API 走 ABI 兼容，Electron 下验证通过）
+
+### 🌐 从链接下载导入角色卡（新功能）
+- 顶部「🌐 链接导入」+ 文件菜单入口
+- 主进程 `card:downloadFromUrl` IPC：`net.fetch` 走系统代理下载 → PNG/JSON 校验 → 落盘卡片库（同名跳过不覆盖）
+- 支持 PNG 卡（内嵌 chara/ccv3 块）与 JSON 卡；20MB 上限；非角色卡文件明确报错
+- 进度提示用非阻塞 toast（避免模态框阻塞导致「下载中」卡死）
+
+### ⚙️ 编辑器工具栏下拉菜单
+- 7 个操作按钮（汉化/升维/快照/换卡图/保存/导出/删除）收进 ⚙
+- `<Teleport to="body">` + fixed 定位 + 全屏透明遮罩：彻底解决遮挡 / 裁剪 / 层级问题
+
+### � 更新后静默升级（新功能）
+- **根因定位**：真正导致「更新 = 重装向导」的不是 oneClick，而是 `sys:installUpdate` 里**无参 `quitAndInstall()`**——`isSilent` / `isForceRunAfter` 默认均 false → 以非静默方式运行安装器（assisted installer 弹界面）、装完不自动重启
+- **最小修复 1 行**：`autoUpdater.quitAndInstall(true, true)`（`isSilent=true` 静默升级；`isForceRunAfter=true` 装完自动重启）
+- 首次安装自定义目录已支持：`oneClick:false` + `allowToChangeInstallationDirectory:true`（assisted 向导可自选 D/E 盘），无需改动
+- ⚠️ 关键前提：保持 per-user（package.json **勿设 `perMachine:true`**）——否则装到 C:\Program Files，静默更新因无 UAC 提权写入失败（EACCES）
+
+### �🐛 Bug 修复（8 项，含根因）
+
+1. **卡片导入空分组**：清理历史遗留的幽灵分组数据（`123`/`555`）并把卡片回退「未分类」
+2. **编辑器内容区右侧大面积空白**：移除 basic / advanced / worldbook / regex 4 处 `max-w-5xl` 宽度限制，内容随窗口铺满
+3. **历史快照配置重启丢失**：快照开关 / 冷却 / 保留数持久化到 app_config + snapshot_config.json 双源
+4. **「最新」排序错乱**：根因=全库 mtime 被批量 touch 统一成同一时刻导致排序退化；改以物理**创建时间 birthtime** 为第一基准（稳定反映入库时刻）
+5. **关闭自动快照仍生成快照**：根因=`saveSnapshotSettings` 把 Vue reactive Proxy 直接传 IPC 报 `An object could not be cloned`，主进程始终默认 `enabled=true`；改为 `JSON.parse(JSON.stringify())` 剥离后同步
+6. **保存成功弹窗报错**：`showMessage` 收到非标准 type `success` 抛 `Invalid message box type`；主进程做类型归一（→ info）
+7. **导入卡片出现无名/陌生分组**：根因=自动分类 `tag.split(' ')[0]` 把 `Monster (魔物娘)`→`Monster` 等英文规则名当分组创建；改为分类只落预设分组，未知组名保持「未分类」且不自动建组
+8. **空物理文件夹显示为空分组**：`walkLibraryDir` 无条件把一级文件夹当分组；改为扫描后仅保留**确实包含卡片文件**的文件夹作为物理分组
+
+### 🔐 安全与稳定性加固（代码审查 37 项整改）
+
+- **依赖 CVE**：`npm audit` 检出 15 项漏洞（全在构建工具链）→ 升级 electron-builder 26.15.3 + electron 43.4.1，**0 漏洞**
+- **API Key 明文落盘 → safeStorage 加密**：内存明文、磁盘密文，兼容旧明文自动回退；main.js `secret:encrypt/decrypt` IPC + preload + App.vue / useChat.js 读写改造
+- **JSON 卡原子写入**：file:saveCard 改 tmp + rename 替换，中途崩溃不再损坏原卡
+- **文件句柄防泄漏**：walkLibraryDir `openSync` 套 try/finally
+- **关键落盘补日志**：saveSnapshotConfig 写盘失败不再静默吞掉（console.error）
+- **渲染层统一错误兜底**：entry.js `errorHandler` 加用户提示 + 全局 `error` / `unhandledrejection` 监听
+- **废弃 escape() 移除**：pngParser 改 TextDecoder 标准 UTF-8 解码（无非 ASCII 越界隐患）
+- **网络请求重试**：`fetchWithRetry`（5xx / 网络错误退避重试）接入 chat:send / models:fetch / tavern:push
+- **魔法数字常量化**：`MAX_URL_DOWNLOAD_BYTES` / `MAX_WB_FETCH_BYTES` / `SCAN_FILE_BATCH` / `SCAN_PROGRESS_STEP` / `CHAT_DEFAULT_MAX_TOKENS`
+- **运行时依赖精确版本**：dompurify / electron-updater / sharp 去掉 caret（^）
+
+### 🧪 单元测试（node:test，19 用例全过）
+
+- `test/tokenEstimate.test.mjs`：Token 估算边界（空 / 非字符串 / 中英混合）
+- `test/cardLoader.test.mjs`：normalizeCardData V1 / V2 / V3 结构兜底
+- `test/pngParser.test.mjs`：PNG tEXt / ccv3 / 截断 / 损坏解析
+- `test/businessData.test.mjs`：典型业务数据回归（V2/V3 卡、Token 业务口径）
+- `npm test` 一键运行
+
+### ⬆️ 依赖升级
+
+- Electron 33 → **43.4.1**（主进程 API 全部兼容验证通过，国内镜像安装）
+- electron-builder 25 → **26.15.3**
+- `npm audit` **0 已知漏洞**
 
 ---
 
