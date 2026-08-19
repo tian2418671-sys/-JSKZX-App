@@ -15,6 +15,10 @@ const os = require('os');
 const { pathToFileURL } = require('url');
 const crypto = require('crypto'); // 📸 快照内容去重（SHA-256）
 
+// 📸 换卡图：非 PNG 新图转 PNG（可选依赖；未安装/加载失败时 PNG→PNG 换图仍可用）
+let sharp = null;
+try { sharp = require('sharp'); } catch (e) { sharp = null; }
+
 // ================= 兼容 360 主动防御：禁用 GPU 进程沙箱 =================
 // 症状：安装版在装有 360（ZhuDongFangYu 主动防御内核驱动）的机器上启动即闪退，
 // 表现：GPU 子进程以沙箱(降权)方式加载 DLL 被内核驱动拦截 → 0xC0000135 循环崩溃
@@ -271,6 +275,131 @@ function writeTavernPNGChunk(buffer, updatedJson) {
   return Buffer.concat(parts);
 }
 
+// ================= [ 换卡图：内嵌数据 + 校验校准 ] =================
+// PNG 协议关键字常量（避免魔法字符串散落）
+const CHUNK_TEXt = 'tEXt';
+const CHUNK_iTXt = 'iTXt';
+const CHUNK_IHDR = 'IHDR';
+const CHUNK_IEND = 'IEND';
+const CHARA_KEYWORDS = ['chara', 'ccv3'];
+
+// 构建单个 PNG 块（length + type + data + CRC32）
+function buildPngChunk(type, data) {
+  const typeBuf = Buffer.from(type, 'latin1');
+  const lengthBuf = Buffer.alloc(4);
+  lengthBuf.writeUInt32BE(data.length);
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])));
+  return Buffer.concat([lengthBuf, typeBuf, data, crcBuf]);
+}
+
+// 判断某块是否为 chara/ccv3 文本数据块
+function isCharaChunk(type, data) {
+  if (type !== CHUNK_TEXt && type !== CHUNK_iTXt) return false;
+  const nullPos = data.indexOf(0);
+  if (nullPos <= 0) return false;
+  const kw = data.subarray(0, nullPos).toString('latin1');
+  return CHARA_KEYWORDS.includes(kw);
+}
+
+// 判断是否为 PNG（文件头签名）
+function isPNGBuffer(buf) {
+  return !!(buf && buf.length >= 8 && buf.readUInt32BE(0) === 0x89504E47);
+}
+
+// 将角色卡 JSON 内嵌为 PNG 的 chara 块（插入 IHDR 之后；清理旧 chara/ccv3，避免幽灵数据残留）
+function embedCardJSONIntoPNG(pngBuf, cardJson) {
+  if (!isPNGBuffer(pngBuf)) return null;
+
+  const base64 = Buffer.from(JSON.stringify(cardJson), 'utf-8').toString('base64');
+  const chunkData = Buffer.concat([
+    Buffer.from('chara', 'latin1'),
+    Buffer.from([0]),
+    Buffer.from(base64, 'latin1')
+  ]);
+
+  const sig = pngBuf.subarray(0, 8);
+  const chunks = [];
+  let offset = 8;
+  while (offset + 12 <= pngBuf.length) {
+    const length = pngBuf.readUInt32BE(offset);
+    if (offset + 12 + length > pngBuf.length) break;
+    const type = pngBuf.subarray(offset + 4, offset + 8).toString('latin1');
+    const data = pngBuf.subarray(offset + 8, offset + 8 + length);
+    chunks.push({ type, data });
+    offset += 12 + length;
+  }
+
+  // 去掉旧 chara/ccv3
+  const cleaned = chunks.filter(c => !isCharaChunk(c.type, c.data));
+
+  // 插到 IHDR 之后、IDAT 之前（标准位置）
+  const ihdrIdx = cleaned.findIndex(c => c.type === CHUNK_IHDR);
+  const insertAt = ihdrIdx === -1 ? 0 : ihdrIdx + 1;
+  cleaned.splice(insertAt, 0, { type: CHUNK_TEXt, data: chunkData });
+
+  // IEND 兜底
+  const last = cleaned[cleaned.length - 1];
+  if (!last || last.type !== CHUNK_IEND) cleaned.push({ type: CHUNK_IEND, data: Buffer.alloc(0) });
+
+  const parts = [sig];
+  for (const c of cleaned) parts.push(buildPngChunk(c.type, c.data));
+  return Buffer.concat(parts);
+}
+
+// 自动校准：V1/V2/V3 统一补齐为合法 V2 结构，并清洗空标签
+// （注：与前端 cardLoader.js 的 normalizeCardData 思路一致，但本文件为 Node/CJS 环境，
+//   无法直接复用浏览器 ESM 模块，故保留独立实现并保持口径一致）
+function calibrateCardData(raw) {
+  let card = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+
+  if (!card.spec && card.data && typeof card.data === 'object') {
+    card.spec = 'chara_card_v2';
+    card.spec_version = '2.0';
+  } else if (!card.spec && !card.data) {
+    card = { spec: 'chara_card_v2', spec_version: '2.0', data: { ...card } };
+  }
+
+  if (card.data && typeof card.data === 'object') {
+    card.data.tags = Array.isArray(card.data.tags)
+      ? Array.from(new Set(card.data.tags.filter(t => typeof t === 'string' && t.trim() !== '').map(t => t.trim())))
+      : [];
+    card.data.alternate_greetings = Array.isArray(card.data.alternate_greetings)
+      ? card.data.alternate_greetings
+      : [];
+    card.data.extensions = (card.data.extensions && typeof card.data.extensions === 'object')
+      ? card.data.extensions
+      : {};
+  }
+  return card;
+}
+
+// 提取角色名
+function getCardName(card) {
+  return String((card && card.data && card.data.name) || (card && card.name) || '').trim();
+}
+
+// 校验生成后的 PNG：结构合法 + 内嵌数据可回读
+function validateCardPNG(pngBuf) {
+  const report = { ok: false, errors: [], warnings: [] };
+  if (!isPNGBuffer(pngBuf)) { report.errors.push('不是有效的 PNG 图片'); return report; }
+
+  let card = null;
+  try { card = readTavernPNGChunk(pngBuf); } catch (e) { card = null; }
+  if (!card) { report.errors.push('内嵌角色卡数据(chara/ccv3)缺失或无法解析'); return report; }
+
+  if (!getCardName(card)) report.warnings.push('角色缺少 name');
+
+  const calibrated = calibrateCardData(card);
+  const changed = JSON.stringify(calibrated) !== JSON.stringify(card);
+  if (changed) report.warnings.push('结构已自动校准（补齐 spec/data 及缺失数组字段、清洗空标签）');
+
+  report.ok = report.errors.length === 0;
+  report.card = calibrated;
+  report.calibrated = changed;
+  return report;
+}
+
 // 读取 PNG 内嵌 chara/ccv3 数据块的 JSON（扫描阶段调用，避免整图跨 IPC 搬运）
 // 与 writeTavernPNGChunk 对称；buffer 可为文件头截断段（chara 块位于 IHDR 之后、IDAT 之前）
 // 注：按 tEXt（keyword\0 + Base64）标准结构提取；异常 iTXt/损坏块返回 null，由前端回退完整 readBuffer 解析，绝不漏卡
@@ -313,6 +442,35 @@ function atomicWriteJson(filePath, data) {
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
   fs.renameSync(tmpPath, filePath);
 }
+
+// ================= [ 📸 快照配置持久化：跨重启记住「是否启用自动快照」 ] =================
+// app_config.json 的 ui.snapshotConfig 是权威源（前端恢复后经 IPC 同步覆盖）；
+// 此处单独落盘作为主进程启动早期兜底，双源在正常流程下保持一致。
+const SNAPSHOT_CONFIG_PATH = path.join(app.getPath('userData'), 'snapshot_config.json');
+
+function loadSnapshotConfig() {
+  try {
+    if (fs.existsSync(SNAPSHOT_CONFIG_PATH)) {
+      const saved = JSON.parse(fs.readFileSync(SNAPSHOT_CONFIG_PATH, 'utf-8'));
+      if (saved && typeof saved === 'object') {
+        if (typeof saved.enabled === 'boolean') snapshotConfig.enabled = saved.enabled;
+        const interval = Number(saved.intervalMinutes);
+        if (!Number.isNaN(interval) && interval >= 0) snapshotConfig.intervalMinutes = interval;
+        const max = Number(saved.maxSnapshots);
+        if (!Number.isNaN(max) && max >= 0) snapshotConfig.maxSnapshots = max;
+      }
+    }
+  } catch (e) { /* 读取失败时保留默认值 */ }
+}
+
+function saveSnapshotConfig() {
+  try {
+    atomicWriteJson(SNAPSHOT_CONFIG_PATH, snapshotConfig);
+  } catch (e) { /* 写盘失败忽略 */ }
+}
+
+// 启动即加载，确保主进程从第一刻起就记住用户「关闭自动快照」的选择（前端 IPC 同步前兜底）
+loadSnapshotConfig();
 
 // ================= 路径安全白名单 =================
 // 所有涉及任意 filePath 的 IPC handler 必须先过 isPathAllowed 校验，
@@ -1127,7 +1285,87 @@ app.whenReady().then(() => {
       const max = Number(config.maxSnapshots);
       if (!Number.isNaN(max) && max >= 0) snapshotConfig.maxSnapshots = max;
     }
+    saveSnapshotConfig(); // 🔧 持久化，避免重启后回到默认 true
     return { success: true, config: snapshotConfig };
+  });
+
+  // 📸 换角色卡图：选择新立绘，内嵌原卡数据，校验 + 自动校准后落盘
+  ipcMain.handle('card:replaceImage', async (event, { cardPath, cardJson } = {}) => {
+    try {
+      if (!cardPath || typeof cardPath !== 'string' || !isPathAllowed(cardPath)) return forbidden();
+      if (!fs.existsSync(cardPath)) return { success: false, error: '卡片文件不存在: ' + cardPath };
+
+      // 1. 弹窗选择新图片（用户对话框选择，天然可信）
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        title: '选择新的角色立绘图片',
+        filters: [{ name: '图片', extensions: ['png', 'webp', 'jpg', 'jpeg'] }]
+      });
+      if (canceled || filePaths.length === 0) return { success: false, error: '用户取消操作' };
+      const newImagePath = filePaths[0];
+      addAllowedRoot(path.dirname(newImagePath));
+
+      // 2. 读取新图；非 PNG 先转 PNG
+      let imageBuf = await fs.promises.readFile(newImagePath);
+      if (!isPNGBuffer(imageBuf)) {
+        if (!sharp) return { success: false, error: '新图为非 PNG 格式，需先 `npm install sharp` 以支持格式转换。' };
+        imageBuf = await sharp(imageBuf).png().toBuffer();
+      }
+
+      // 3. 卡片数据：优先用前端传入；否则从原文件回读（PNG 内嵌 / JSON 纯文本）
+      let card = (cardJson && typeof cardJson === 'object') ? cardJson : null;
+      if (!card) {
+        try {
+          const srcBuf = await fs.promises.readFile(cardPath);
+          if (isPNGBuffer(srcBuf)) card = readTavernPNGChunk(srcBuf);
+          else if (/\.json$/i.test(cardPath)) card = JSON.parse(srcBuf.toString('utf-8'));
+        } catch (e) { /* 忽略 */ }
+      }
+      if (!card) return { success: false, error: '无法获取卡片数据，请先打开该卡片再换图。' };
+
+      // 4. 自动校准
+      const calibrated = calibrateCardData(card);
+
+      // 5. 内嵌 + 生成 PNG，并往返校验
+      const outBuf = embedCardJSONIntoPNG(imageBuf, calibrated);
+      if (!outBuf) return { success: false, error: '新图片无法写入角色卡数据。' };
+
+      const report = validateCardPNG(outBuf);
+      if (!report.ok) return { success: false, error: '校验失败：' + report.errors.join('；') };
+
+      // 6. 目标路径：PNG 就地覆盖；webp/json 升级为同名 .png
+      const ext = path.extname(cardPath).toLowerCase();
+      const targetPath = ext === '.png' ? cardPath : cardPath.slice(0, -ext.length) + '.png';
+
+      // 7. 写前手动备份原卡（.bak_history），再原子写入
+      if (targetPath === cardPath) {
+        await processCardSnapshot(cardPath, true);
+      }
+      const tmpPath = targetPath + '.tmp';
+      await fs.promises.writeFile(tmpPath, outBuf);
+      await fs.promises.rename(tmpPath, targetPath);
+
+      // 8. webp/json 升级后删除旧文件，避免刷新时误扫成重复卡片
+      if (targetPath !== cardPath && fs.existsSync(cardPath)) {
+        try { await fs.promises.unlink(cardPath); } catch (e) { /* 忽略 */ }
+      }
+
+      const message = ['✅ 换卡图成功' + (report.calibrated ? '（已自动校准）' : '')]
+        .concat((report.warnings || []).map(w => '⚠ ' + w))
+        .join('\n');
+
+      return {
+        success: true,
+        newPath: targetPath,
+        oldPath: cardPath,
+        format: 'png',
+        calibrated: report.calibrated,
+        warnings: report.warnings || [],
+        message
+      };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   });
 
   // 📸 手动创建快照（绕过冷却节流阀，立即为指定卡片备份当前状态）

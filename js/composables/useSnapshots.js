@@ -8,6 +8,7 @@ import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { normalizeCardData } from '../utils/cardLoader.js';
 
 export function useSnapshots({
+    snapshotConfig, // ⚠️ 由 App.vue 顶层注入（syncConfigToDisk / 集中 watch 需早期引用 snapshotConfig，不能在此尾部才定义，否则 TDZ）
     library,
     cardData,
     currentFolderPath,
@@ -18,16 +19,7 @@ export function useSnapshots({
     refreshCardData
 }) {
     // ================= [ 📸 历史快照配置（设置面板可调，自动同步主进程） ] =================
-    const snapshotConfig = ref((() => {
-        const defaults = { enabled: true, intervalMinutes: 5, maxSnapshots: 10 };
-        try {
-            return {
-                enabled: localStorage.getItem('snapshot_enabled') !== 'false',
-                intervalMinutes: Number(localStorage.getItem('snapshot_interval')) || defaults.intervalMinutes,
-                maxSnapshots: Number(localStorage.getItem('snapshot_max_count')) || defaults.maxSnapshots
-            };
-        } catch (e) { return { ...defaults }; }
-    })());
+    // snapshotConfig ref 由 App.vue 注入，此处仅保留持久化与同步逻辑
     // 持久化到 localStorage + 同步主进程（开关/冷却/最大保留数变化即时生效）
     const saveSnapshotSettings = async () => {
         try {
@@ -39,7 +31,7 @@ export function useSnapshots({
             try { await window.electronAPI.updateSnapshotConfig(snapshotConfig.value); } catch (e) { /* 忽略 */ }
         }
     };
-    watch(snapshotConfig, saveSnapshotSettings, { deep: true, immediate: true });
+    watch(snapshotConfig, saveSnapshotSettings, { deep: true });
 
     // 📸 手动创建当前卡片快照（绕过冷却，立即备份当前状态到 .bak_history）
     const triggerManualSnapshot = async () => {
@@ -171,7 +163,7 @@ export function useSnapshots({
     };
 
     return {
-        snapshotConfig, saveSnapshotSettings,
+        saveSnapshotSettings, // snapshotConfig 由 App.vue 持有，不返回（避免重复声明）
         triggerManualSnapshot,
         showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
         openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,

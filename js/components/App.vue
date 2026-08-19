@@ -145,6 +145,7 @@
             @export="exportCard(contextMenu.item); closeContextMenu()"
             @ai-tag="handleContextMenuAction('aiTag')"
             @snapshots="handleContextMenuAction('snapshots')"
+            @replace-image="replaceCardImage(contextMenu.item); closeContextMenu()"
             @trash="handleContextMenuAction('trash')"
         />
 
@@ -919,7 +920,9 @@ export default {
 
         // 合并系统预设与自定义分组
         const allCategories = computed(() => {
-            const customObjs = customCategories.value.map(c => ({ key: c, cn: c, en: c }));
+            const customObjs = customCategories.value
+                .filter(c => typeof c === 'string' && c.trim() !== '') // 🔧 兜底过滤空值，任何来源的空组都无法渲染
+                .map(c => ({ key: c, cn: c, en: c }));
             return [...defaultCategories.value, ...customObjs];
         });
 
@@ -1013,6 +1016,21 @@ export default {
         // 🛡️ 启动配置恢复保护：loadAppConfig 恢复字段时置 true，防止各 watch 触发写盘把「恢复值/旧残留」回写 app_config.json
         //    （否则旧文件 / localStorage 残留会在加载竞态中被写回权威文件，导致「删除/清空后重启复活」）
         let isRestoringConfig = false;
+
+        // 📸 历史快照配置 ref
+        // ⚠️ 必须在此（syncConfigToDisk / 集中 watch 之前）顶层定义：
+        //    syncConfigToDisk(ui.snapshotConfig) 与集中 watch 在 setup 早期就引用 snapshotConfig，
+        //    若只由 useSnapshots（setup 尾部注入）定义会触发 TDZ「Cannot access 'snapshotConfig' before initialization」。
+        const snapshotConfig = ref((() => {
+            const defaults = { enabled: true, intervalMinutes: 5, maxSnapshots: 10 };
+            try {
+                return {
+                    enabled: localStorage.getItem('snapshot_enabled') !== 'false',
+                    intervalMinutes: Number(localStorage.getItem('snapshot_interval')) || defaults.intervalMinutes,
+                    maxSnapshots: Number(localStorage.getItem('snapshot_max_count')) || defaults.maxSnapshots
+                };
+            } catch (e) { return { ...defaults }; }
+        })());
 
         // 统一写入磁盘：从各响应式源收集完整配置 → JSON 剥离 Vue 响应式 Proxy → 原子落盘
         // ⚠️ 关键：ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
@@ -2674,8 +2692,6 @@ export default {
             if (_eKeysHandler) window.removeEventListener('keydown', _eKeysHandler);
         });
         onMounted(async () => {
-            // 📸 启动时把本地快照配置同步到主进程（跨重启保持设置一致）
-            await saveSnapshotSettings();
             // =========================================================
             // 🛡️ 统一持久化中枢装载：从 app_config.json（最高权威）恢复全部全局状态
             // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，物理文件才是权威。
@@ -2771,6 +2787,11 @@ export default {
                     }
                 }
             } catch (e) { /* 忽略 */ }
+
+            // 📸 恢复权威快照配置（app_config.json）后、加载卡片触发 saveCard 之前，
+            //    再把正确配置同步到主进程——防止用 localStorage 默认值反向覆盖主进程、
+            //    以及启动加载卡片时误生成自动快照。
+            await saveSnapshotSettings();
 
             _gClickHandler = handleGlobalClick;
             window.addEventListener('click', _gClickHandler); // 点击任意处关闭右键菜单
@@ -2956,6 +2977,8 @@ export default {
 
                 if (dbData.categories && Array.isArray(dbData.categories)) {
                     dbData.categories.forEach(c => {
+                        // 🔧 修复：只接受「非空字符串」，杜绝空组 / 幽灵分组
+                        if (typeof c !== 'string' || c.trim() === '') return;
                         if (!isCategoryKnown(c)) {
                             customCategories.value.push(c);
                         }
@@ -2968,8 +2991,13 @@ export default {
                     library.value.forEach(item => {
                         const config = importedConfig.value[item.name];
                         if (config) {
-                            item.category = config.category || item.category;
-                            item.customTags = config.customTags || item.customTags;
+                            item.category = (typeof config.category === 'string' && config.category.trim() !== '')
+                                ? config.category.trim()
+                                : item.category;
+                            // 🔧 修复：标签只保留「非空字符串」，杜绝空/脏标签注入
+                            item.customTags = Array.isArray(config.customTags)
+                                ? Array.from(new Set(config.customTags.filter(t => typeof t === 'string' && t.trim() !== '')))
+                                : item.customTags;
                         }
                     });
                 }
@@ -3549,7 +3577,10 @@ export default {
             library.value.forEach(item => {
                 // 提取自定义标签（用户主动打的，始终保留）
                 if (item.customTags && Array.isArray(item.customTags)) {
-                    item.customTags.forEach(t => { if (t) tagSet.add(t); });
+                    // 🔧 修复：只聚合「非空字符串」标签，杜绝空白 chip
+                    item.customTags.forEach(t => {
+                        if (typeof t === 'string' && t.trim() !== '') tagSet.add(t);
+                    });
                 }
                 // 【修复 BUG-2】卡片原生自带标签：仅在"导入时忽略卡片自带标签"开关关闭时透出
                 // （开启 = 忽略他人卡片的杂乱标签，不再混入全局标签池）
@@ -3557,9 +3588,12 @@ export default {
                     const d = item.data?.data || item.data || {};
                     if (d.tags) {
                         if (Array.isArray(d.tags)) {
-                            d.tags.forEach(t => { if (t) tagSet.add(t); });
+                            // 🔧 修复：同上
+                            d.tags.forEach(t => {
+                                if (typeof t === 'string' && t.trim() !== '') tagSet.add(t);
+                            });
                         } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
-                            d.tags.split(',').forEach(t => tagSet.add(t.trim()));
+                            d.tags.split(',').forEach(t => { if (t.trim() !== '') tagSet.add(t.trim()); });
                         }
                     }
                 }
@@ -4848,12 +4882,13 @@ export default {
         };
 
         // 📸 历史快照功能：组合式函数注入（依赖 App.vue 共享状态；行为与原内联实现一致）
+        // ⚠️ snapshotConfig 由 App.vue 顶层定义并注入（syncConfigToDisk/集中 watch 需早期引用，防 TDZ）
         const {
-            snapshotConfig, saveSnapshotSettings, triggerManualSnapshot,
+            saveSnapshotSettings, triggerManualSnapshot,
             showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
             openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,
             cleanAllSnapshots, cleanOrphanSnapshots
-        } = useSnapshots({ library, cardData, currentFolderPath, nativeAlert, confirmDialog, addLog, showToast, refreshCardData });
+        } = useSnapshots({ snapshotConfig, library, cardData, currentFolderPath, nativeAlert, confirmDialog, addLog, showToast, refreshCardData });
 
         // 📁 角色卡分组/分类：组合式函数注入（状态仍在 App.vue，此处仅注入操作逻辑）
         const {
@@ -4863,7 +4898,46 @@ export default {
             quickMoveGroup, batchChangeCategory, batchChangeCategoryModal, cleanupEmptyCategories
         } = useCardGroups({ library, cardData, currentFolderPath, appConfig, selectedIds, customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown, nativeAlert, confirmDialog, appPrompt, addLog, persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk });
 
-        // 🔍 查重与差异比对：组合式函数注入（estimateCardTokens 为共享工具，保留在 App.vue）
+        // � 换角色卡图：选择新立绘替换，成功后刷新路径/立绘，并展示校验校准结果
+        // （item 为空时自动定位当前打开的卡片；PNG 卡原地替换，WebP / JSON 卡升级为标准 PNG 卡）
+        const replaceCardImage = async (item) => {
+            if (!item) {
+                if (!cardData.value) return nativeAlert('请先打开一张卡片。', 'warning');
+                item = library.value.find(i => i.data === cardData.value) || null;
+                if (!item) return nativeAlert('未找到当前卡片的库记录。', 'warning');
+            }
+            if (!item || !item.path) return nativeAlert('未找到卡片文件路径', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.replaceCardImage !== 'function') {
+                return nativeAlert('当前版本不支持换卡图，请更新应用。', 'warning');
+            }
+            const ok = await confirmDialog(
+                `将为角色卡【${item.name}】更换立绘图片。\n` +
+                `（PNG 卡原地替换；WebP / JSON 卡将转为标准 PNG 卡）`
+            );
+            if (!ok) return;
+
+            const payload = { cardPath: item.path };
+            if (item.data) payload.cardJson = JSON.parse(JSON.stringify(item.data));
+
+            const res = await window.electronAPI.replaceCardImage(payload);
+            if (res && res.success) {
+                const isImage = /\.(png|webp|jpe?g)$/i.test(res.newPath);
+                const oldPath = item.path;
+                item.path = res.newPath;
+                item.fileName = res.newPath.split(/[\\/]/).pop();
+                item.avatar = isImage ? `local-file://img/?path=${encodeURIComponent(res.newPath)}&_=${Date.now()}` : null;
+                migrateOverlayKey(oldPath, res.newPath); // 分组/标签覆盖层跟随新路径
+                // 若正打开该卡，刷新立绘显示
+                if (cardData.value && item.data === cardData.value) {
+                    imgUrl.value = item.avatar;
+                }
+                nativeAlert(res.message || '换卡图成功', 'info');
+            } else {
+                nativeAlert(`换卡图失败: ${(res && res.error) || '未知错误'}`, 'error');
+            }
+        };
+
+        // �🔍 查重与差异比对：组合式函数注入（estimateCardTokens 为共享工具，保留在 App.vue）
         const {
             showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup,
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
@@ -4929,6 +5003,7 @@ export default {
             isMultiSelectMode, viewMode, toggleViewMode, isCompactMode, sortBy,
             contextMenu, openContextMenu, closeContextMenu,
             quickMoveGroup, exportCard, deleteCardItem, handleContextMenuAction,
+            replaceCardImage,
             batchChangeCategory, batchAddTag,
             batchChangeCategoryModal, batchExportSelected, batchDeleteSelected, cleanupEmptyCategories,
             showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,

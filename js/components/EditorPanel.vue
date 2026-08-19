@@ -38,6 +38,9 @@
                     <button @click="triggerManualSnapshot" title="绕过冷却机制，立即将当前卡片状态备份至历史目录" class="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
                         📸 快照
                     </button>
+                    <button @click="replaceCardImage()" title="选择新立绘替换当前卡片（PNG 卡原地替换；WebP/JSON 卡转为标准 PNG 卡）" class="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
+                        🖼️ 换卡图
+                    </button>
                     <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
                         💾 覆盖保存
                     </button>
@@ -748,6 +751,7 @@ export default {
             isRefactoring: ctx.isRefactoring,
             saveToLocalDisk: ctx.saveToLocalDisk,
             triggerManualSnapshot: ctx.triggerManualSnapshot,
+            replaceCardImage: ctx.replaceCardImage,
             exportPackage: ctx.exportPackage,
             deleteCard: ctx.deleteCard,
             reset: ctx.reset,

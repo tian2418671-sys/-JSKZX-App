@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readText: (filePath) => ipcRenderer.invoke('file:readText', filePath),
     // 保存卡片 JSON 到本地文件
     saveCard: (filePath, updatedJson) => ipcRenderer.invoke('file:saveCard', filePath, updatedJson),
+    // 📸 换角色卡图：选择新图并替换，返回新路径与校验校准报告
+    replaceCardImage: (data) => ipcRenderer.invoke('card:replaceImage', data),
     // 原生消息对话框（替代 alert）
     showMessage: (options) => ipcRenderer.invoke('dialog:showMessage', options),
     // 系统级拖拽复制文件到卡片库
