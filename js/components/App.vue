@@ -364,6 +364,12 @@ import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
 import { useWorldbookEntries } from '../composables/useWorldbookEntries.js'; // 📚 世界书词条深度编辑（Entry IDE）组合式函数
 import { useAITools } from '../composables/useAITools.js'; // ✨ AI 打标/翻译/格式升维功能（拆分出的组合式函数）
+import { useTags } from '../composables/useTags.js'; // 🏷️ 标签系统（批量标签/预设标签/系统标签池/中英切换/全局标签库）组合式函数
+import { useChat } from '../composables/useChat.js'; // 💬 聊天测卡（聊天历史/发送/API 设置/模型拉取）组合式函数
+import { useSearch } from '../composables/useSearch.js'; // 🔎 超级搜索引擎（搜索防抖/全字段过滤/分页）组合式函数
+import { useGraph } from '../composables/useGraph.js'; // 🕸️ 关系图谱（角色宇宙关系图谱生成/渲染）组合式函数
+import { useDiskScan } from '../composables/useDiskScan.js'; // 💽 磁盘卡片扫描（全盘扫描/收编/刷新目录）组合式函数
+import { useBatch } from '../composables/useBatch.js'; // ✅ 批量操作（多选/批量导出/批量删除/批量打标）组合式函数
 
 /** 用户可读的错误提示映射 */
 const ERROR_MESSAGES = {
@@ -371,97 +377,7 @@ const ERROR_MESSAGES = {
     DEFAULT: '文件读取或解析失败，请检查文件是否损坏。'
 };
 
-// ================= 🚀 超级搜索引擎：全字段穿透辅助函数 =================
-
-/**
- * 安全提取卡片对象内所有递归可检索字符串（防 null/undefined 报错，兼容 V1/V2/V3/SillyTavern 扩展）
- * 覆盖：物理文件名/路径/分组、角色名/作者/描述/性格/场景/首条开场白/对话示例/作者备注、
- * 备选开场白列表、深度提示词/系统提示词、正则脚本、内嵌世界书全部词条（名称/注释/触发词/正文）
- */
-function extractCardSearchableText(item) {
-    const data = (item && item.data && item.data.data) || (item && item.data) || {};
-    const textSegments = [];
-    const push = (v) => { if (v !== undefined && v !== null && v !== '') textSegments.push(String(v)); };
-
-    // 1. 基础物理与系统信息
-    if (item && item.fileName) push(item.fileName); // 物理文件名（含扩展名）
-    if (item && item.path) push(item.path); // 绝对路径
-    if (item && item.subFolder) push(item.subFolder); // 物理分组
-    if (item && item.category) push(item.category);
-    if (item && item.name) push(item.name);
-    if (item && item.creator) push(item.creator);
-
-    // 2. 核心人设文本
-    push(data.name);
-    push(data.creator || data.author);
-    push(data.description);
-    push(data.personality);
-    push(data.scenario);
-    push(data.first_mes);
-    push(data.mes_example);
-    push(data.creator_notes);
-
-    // 3. 备选开场白 (Alternate Greetings)
-    if (Array.isArray(data.alternate_greetings)) {
-        push(data.alternate_greetings.map(g => String(g)).join(' '));
-    }
-
-    // 4. 扩展配置 (Extensions: depth_prompt / system_prompt / regex_scripts)
-    const ext = data.extensions;
-    if (ext && typeof ext === 'object') {
-        if (ext.depth_prompt && ext.depth_prompt.prompt) push(ext.depth_prompt.prompt);
-        if (ext.system_prompt !== undefined && ext.system_prompt !== null) {
-            push(typeof ext.system_prompt === 'string' ? ext.system_prompt : JSON.stringify(ext.system_prompt));
-        }
-        if (Array.isArray(ext.regex_scripts)) {
-            ext.regex_scripts.forEach(script => {
-                if (!script || typeof script !== 'object') return;
-                if (script.scriptName) push(script.scriptName);
-                if (script.findRegex) push(script.findRegex);
-                if (script.replaceString) push(script.replaceString);
-            });
-        }
-    }
-
-    // 5. 关联世界书 (Character Book / Lorebook)
-    const book = data.character_book || (item && item.data && item.data.character_book) || (item && item.character_book);
-    if (book) {
-        const entries = book.entries || (Array.isArray(book) ? book : []);
-        if (Array.isArray(entries)) {
-            entries.forEach(entry => {
-                if (!entry || typeof entry !== 'object') return; // 防脏数据条目（null/非对象）崩溃
-                if (entry.comment || entry.name) push(entry.comment || entry.name);
-                if (entry.content) push(entry.content);
-                if (Array.isArray(entry.keys)) push(entry.keys.map(k => String(k)).join(' '));
-                if (Array.isArray(entry.secondary_keys)) push(entry.secondary_keys.map(k => String(k)).join(' '));
-            });
-        }
-    }
-
-    // 拼合成单一的全量小写字符串流
-    return textSegments.join(' ').toLowerCase();
-}
-
-/**
- * 提取卡片的所有标签数组（兼容数组/逗号分隔字符串/customTags/原生 tags）
- */
-function extractCardTags(item) {
-    const data = (item && item.data && item.data.data) || (item && item.data) || {};
-    const tags = new Set();
-    const collect = (t) => {
-        if (Array.isArray(t)) {
-            t.forEach(x => { if (x !== undefined && x !== null && x !== '') tags.add(String(x).toLowerCase()); });
-        } else if (typeof t === 'string' && t.trim() !== '') {
-            t.split(',').map(x => x.trim()).filter(Boolean).forEach(x => tags.add(x.toLowerCase()));
-        }
-    };
-    if (item) {
-        collect(item.tags);
-        collect(item.customTags);
-    }
-    collect(data.tags);
-    return Array.from(tags);
-}
+// 🔎 超级搜索引擎辅助函数（extractCardSearchableText / extractCardTags）已移入 useSearch.js
 
 // ================= 渲染进程全局错误兜底 =================
 window.addEventListener('error', (event) => {
@@ -1117,16 +1033,18 @@ export default {
         const selectedIds = ref([]); // 存放被选中的卡片 ID
         const lastSelectedIndex = ref(-1); // 用于 Shift 连续多选记录
 
+        // 🧹 清除多选（共享工具：被 useBatch/useCardGroups/useTags 注入）
+        const clearSelection = () => {
+            selectedIds.value = [];
+            lastSelectedIndex.value = -1;
+        };
+
         // ================= [ 聊天测卡状态 ] =================
-        const chatHistory = ref([]); // 聊天记录
-        const chatInput = ref('');   // 用户输入
-        const isChatting = ref(false); // 加载状态
         // 默认地址：兼容 LM Studio 或 Oobabooga 的 OpenAI 格式接口（支持持久化，重启后自动恢复）
         const DEFAULT_API_ENDPOINT = 'http://127.0.0.1:1234/v1/chat/completions';
         let savedEndpoint = '';
         try { savedEndpoint = localStorage.getItem('stc-api-endpoint') || ''; } catch (e) { /* 忽略 */ }
         const apiEndpoint = ref(savedEndpoint || DEFAULT_API_ENDPOINT);
-        const chatContainer = ref(null); // 用于自动滚动
 
         // API 鉴权密钥（可配置，远端 API 需要真实 key；本地 API 可留空，主进程回退到 test-key）
         let savedApiKey = '';
@@ -1168,38 +1086,7 @@ export default {
             syncConfigToDisk();
         });
 
-        // 手动保存 API 配置（按钮触发，立即落盘 + 提示）
-        const saveApiConfig = () => {
-            try {
-                localStorage.setItem('stc-api-endpoint', apiEndpoint.value);
-                localStorage.setItem('stc-api-key', apiKey.value);
-                localStorage.setItem('stc-api-model', apiModel.value);
-                localStorage.setItem('stc-api-type', apiType.value);
-                syncConfigToDisk(); // 🛡️ 统一中枢立即落盘（生产 app:// 下 localStorage 不持久，物理文件才是权威）
-                nativeAlert('API 设置已成功保存！', 'info');
-            } catch (e) {
-                // 【修复】存储失败（配额超限/权限禁用）时必须如实告知，杜绝假成功
-                console.error('API 设置存储失败:', e);
-                nativeAlert('保存失败：可能是本地存储权限被禁用或存储空间已满。', 'error');
-            }
-        };
-
-        // 切换 API 类型时自动填充常用默认 Endpoint / Model
-        const handleApiTypeChange = () => {
-            if (apiType.value === 'anthropic') {
-                if (!apiEndpoint.value || apiEndpoint.value.includes('openai') || apiEndpoint.value.includes('1234')) {
-                    apiEndpoint.value = 'https://api.anthropic.com';
-                    apiModel.value = 'claude-3-5-sonnet-20241022';
-                }
-            } else {
-                if (!apiEndpoint.value || apiEndpoint.value.includes('anthropic')) {
-                    apiEndpoint.value = DEFAULT_API_ENDPOINT;
-                    apiModel.value = '';
-                }
-            }
-            saveApiConfig();
-        };
-
+        // ✨ 聊天测卡逻辑（sendMessage/initChat/clearChat）与 API 设置保存/切换 已拆分为组合式函数 useChat（见下文 setup 尾部调用）
         // ✅ [补丁] 引擎协议切换时强制清洗不兼容的模型名，防止把 local-model/gpt-* 发给 Claude 触发 400
         watch(apiType, (newType) => {
             const currentModel = (apiModel.value || '').trim();
@@ -1224,53 +1111,7 @@ export default {
         };
 
         // ================= [ API 模型列表拉取（GET /v1/models，经主进程转发绕过 CORS）] =================
-        const availableModels = ref([]);      // 拉取到的服务端模型列表
-        const isFetchingModels = ref(false);  // 是否正在拉取
-        const fetchModelStatus = ref('');     // 拉取状态提示
-
-        const fetchAvailableModels = async () => {
-            const ep = (apiEndpoint.value || '').trim();
-            if (!ep) {
-                nativeAlert('请先输入有效的 API Endpoint 地址！', 'warning');
-                return;
-            }
-            isFetchingModels.value = true;
-            fetchModelStatus.value = '⏳ 正在连接服务端拉取模型列表...';
-            availableModels.value = [];
-            try {
-                const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
-                const result = await window.electronAPI.fetchModels(ep, authKey, apiType.value);
-                if (!result || !result.success) {
-                    fetchModelStatus.value = `❌ 拉取失败: ${(result && result.error) || '未知错误'}`;
-                    return;
-                }
-                // 兼容 OpenAI / LM Studio 标准格式 { data: [{ id }] } 与裸数组
-                const raw = result.data;
-                let modelList = [];
-                if (Array.isArray(raw.data)) {
-                    modelList = raw.data.map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
-                } else if (Array.isArray(raw)) {
-                    modelList = raw.map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
-                }
-                if (modelList.length > 0) {
-                    availableModels.value = modelList;
-                    fetchModelStatus.value = `✅ 成功获取 ${modelList.length} 个模型！`;
-                    if (!modelList.includes(apiModel.value)) {
-                        apiModel.value = modelList[0]; // 当前模型不在列表中时自动选中第一个
-                    }
-                } else {
-                    fetchModelStatus.value = '⚠️ 接口已响应，但未抓取到有效模型列表';
-                }
-            } catch (err) {
-                console.error('拉取模型列表失败:', err);
-                fetchModelStatus.value = `❌ 拉取失败: ${err.message}`;
-            } finally {
-                isFetchingModels.value = false;
-            }
-        };
-
-        // 【新增】聊天界面的 渲染/代码 模式开关 (默认 false 为代码模式，true 为渲染模式)
-        const isChatRenderMode = ref(false);
+        // （已拆分为组合式函数 useChat）
 
         // 兼容不同数据结构的取值助手：优先取 data 字段
         const safeData = computed(() => {
@@ -1479,306 +1320,9 @@ export default {
         };
 
         // ================= [ 方法：聊天测卡逻辑 ] =================
-        // 构造系统提示词 (模拟 Tavern 的基础拼接逻辑)
-        const buildSystemPrompt = () => {
-            const d = safeData.value;
-            const charName = d.name || '角色';
-            const sysPrompt = d.system_prompt ? d.system_prompt + '\n\n' : '';
+        // （已拆分为组合式函数 useChat）
 
-            return `${sysPrompt}你要扮演 ${charName}。\n【角色描述】: ${d.description || ''}\n【性格特征】: ${d.personality || ''}\n【当前场景】: ${d.scenario || ''}\n\n请保持角色的设定，使用符合角色性格的语气与我对话。`;
-        };
-
-        // 初始化聊天 (点击进入测卡 Tab 时调用)
-        const initChat = () => {
-            if (chatHistory.value.length === 0 && safeData.value.first_mes) {
-                chatHistory.value = [
-                    { role: 'system', content: buildSystemPrompt() },
-                    { role: 'assistant', content: safeData.value.first_mes, name: safeData.value.name }
-                ];
-            }
-        };
-
-        // 发送消息
-        const sendMessage = async () => {
-            if (chatInput.value.trim() === '' || isChatting.value) return;
-
-            const userText = chatInput.value.trim();
-            chatHistory.value.push({ role: 'user', content: userText, name: '你' });
-            chatInput.value = '';
-            isChatting.value = true;
-
-            scrollToBottom();
-
-            // 【修复】记录发起请求时的卡片引用，防止在途请求期间切卡导致旧卡回复挂到新卡
-            const targetCard = cardData.value;
-
-            // 过滤掉 UI 用的 name 属性，只保留 OpenAI 标准的 role 和 content
-            const payload = {
-                model: resolveApiModel(), // 优先使用配置的模型名称，留空回退 local-model
-                messages: chatHistory.value.map(msg => ({ role: msg.role, content: msg.content })),
-                temperature: 0.7,
-                max_tokens: 500
-            };
-
-            try {
-                // 持久化 API Key（localStorage 可能不可用，做防御性写入）
-                try { localStorage.setItem('stc-api-key', apiKey.value); } catch (e) { /* 忽略 */ }
-                const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, apiKey.value, apiType.value);
-
-                // 【修复】在途请求期间用户切卡 → chatHistory 已被清空/重建，直接丢弃回复，不污染新卡
-                if (cardData.value !== targetCard) return;
-
-                const reply = extractReplyContent(result);
-                if (result.success && reply) {
-                    chatHistory.value.push({ role: 'assistant', content: reply, name: safeData.value.name });
-                } else {
-                    nativeAlert(result.error || "模型返回了空数据", "error", "API 请求失败");
-                    // 撤回用户的发送以便重试
-                    chatHistory.value.pop();
-                    chatInput.value = userText;
-                }
-            } catch (e) {
-                nativeAlert(`请求异常: ${e.message}`, "error");
-            } finally {
-                isChatting.value = false;
-                scrollToBottom();
-            }
-        };
-
-        const scrollToBottom = () => {
-            setTimeout(() => {
-                if (chatContainer.value) {
-                    chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
-                }
-            }, 100);
-        };
-
-        // 重置聊天
-        const clearChat = () => {
-            chatHistory.value = [];
-            initChat();
-        };
-
-        // ================= [ 关系图谱：生成与渲染 ] =================
-        const showGraph = ref(false);
-        let echartsInstance = null;
-
-        // ================= 升级版图谱状态与交互控制 =================
-        const graphLayoutMode = ref('force'); // 'force' 力引导布局 或 'circular' 环形布局
-        const graphSearchKeyword = ref(''); // 图谱内节点搜索
-        const minLinkWeight = ref(1); // 最小关联权重过滤（解决卡片多时的卡顿与视觉杂乱）
-
-        // ================= 终极版图谱状态与高阶控制 =================
-        const isolateCurrentGroup = ref(false); // 是否开启“仅显示当前分组”隔离模式
-        
-        // 关系图例过滤开关
-        const edgeFilters = reactive({
-            creator: true,  // 同作者连线
-            category: true, // 同分组连线
-            tags: true      // 共享标签连线
-        });
-
-        // 初始化图谱事件绑定（只需在 echarts 实例初始化后执行一次或在 openGraph 里绑定）
-        const initGraphEvents = () => {
-            if (!echartsInstance) return;
-            echartsInstance.off('dblclick'); // 防止重复绑定
-            // 【功能1】节点双击“一键穿梭”到右侧编辑器编辑
-            echartsInstance.on('dblclick', (params) => {
-                if (params.dataType === 'node') {
-                    const targetItem = library.value.find(i => i.id === params.data.id);
-                    if (targetItem) {
-                        cardData.value = targetItem.data;
-                        imgUrl.value = targetItem.avatar;
-                        currentTab.value = 'basic';
-                        chatHistory.value = []; // 清空旧聊天记录
-                        worldbookExpanded.value = {}; // 同步重置世界书折叠状态
-                        closeGraph(); // 自动关闭图谱弹窗
-                        nativeAlert(`已成功穿梭至角色：[${targetItem.name}]`, 'info');
-                    }
-                }
-            });
-        };
-
-        // 窗口尺寸变化时自适应图谱（避免拉伸畸变）
-        const handleGraphResize = () => {
-            if (echartsInstance) echartsInstance.resize();
-        };
-
-        const openGraph = () => {
-            if (library.value.length < 2) {
-                return nativeAlert('库中至少需要有 2 张卡片才能生成关系图谱。', 'warning');
-            }
-            showGraph.value = true;
-            window.addEventListener('resize', handleGraphResize); // 绑定窗口 resize 自适应
-
-            // 等待 DOM 渲染完成后初始化 ECharts（容器在 GraphModal 子组件内，用固定 id 全局查找）
-            nextTick(() => {
-                const graphEl = document.getElementById('app-graph-container');
-                if (!graphEl) return;
-                if (!echartsInstance) {
-                    echartsInstance = echarts.init(graphEl);
-                }
-                initGraphEvents(); // 绑定双击穿梭事件
-                renderGraph();
-            });
-        };
-
-        const closeGraph = () => {
-            showGraph.value = false;
-            window.removeEventListener('resize', handleGraphResize); // 解绑 resize，防止泄漏
-
-            // ✅ [补丁] 加入延迟销毁：给 Vue 移除 DOM 的过渡动画时间，
-            // 防止 dblclick 穿梭回调里 closeGraph 时 Canvas/WebGL 上下文未释放导致低配机内存溢出（OOM）
-            if (echartsInstance) {
-                const instanceToDestroy = echartsInstance;
-                echartsInstance = null;
-                setTimeout(() => {
-                    if (instanceToDestroy && !instanceToDestroy.isDisposed()) {
-                        instanceToDestroy.dispose();
-                    }
-                }, 300);
-            }
-        };
-
-        const renderGraph = () => {
-            if (!echartsInstance) return;
-            
-            const nodes = [];
-            const links = [];
-            const nodeMap = new Map();
-            const nodeDegree = new Map(); // 用于统计节点的连线度数（计算枢纽人物）
-
-            const activeCatObj = allCategories.value.find(c => c.key === currentCategoryKey.value);
-            const activeCatName = activeCatObj ? activeCatObj.cn : '';
-
-            // 1. 预处理节点
-            library.value.forEach(item => {
-                const tags = item.customTags || [];
-                const isCurrentGroup = currentCategoryKey.value === 'all' || 
-                                       item.category === activeCatName || 
-                                       item.category === activeCatObj?.en ||
-                                       item.category === currentCategoryKey.value;
-
-                // 【功能2】如果开启了“仅显示当前分组”，非本组节点直接跳过不渲染
-                if (isolateCurrentGroup.value && !isCurrentGroup) return;
-
-                const matchSearch = !graphSearchKeyword.value || 
-                                    item.name.toLowerCase().includes(graphSearchKeyword.value.toLowerCase()) ||
-                                    tags.some(t => t.toLowerCase().includes(graphSearchKeyword.value.toLowerCase()));
-
-                const node = {
-                    id: item.id,
-                    name: item.name,
-                    symbolSize: 35,
-                    symbol: item.avatar ? `image://${item.avatar}` : 'circle',
-                    itemStyle: {
-                        color: isCurrentGroup ? '#3b82f6' : '#374151',
-                        borderColor: isCurrentGroup ? '#60a5fa' : '#4b5563',
-                        borderWidth: isCurrentGroup ? 3 : 1,
-                        opacity: matchSearch ? 1 : 0.2
-                    },
-                    label: { 
-                        show: isCurrentGroup || matchSearch, 
-                        position: 'bottom', 
-                        color: isCurrentGroup ? '#ffffff' : '#9ca3af', 
-                        fontSize: isCurrentGroup ? 12 : 10,
-                        textBorderColor: '#000', 
-                        textBorderWidth: 2 
-                    }
-                };
-                nodes.push(node);
-                nodeMap.set(item.id, node);
-                nodeDegree.set(item.id, 0);
-            });
-
-            // 2. 构建连线与分类过滤
-            for (let i = 0; i < library.value.length; i++) {
-                for (let j = i + 1; j < library.value.length; j++) {
-                    const cardA = library.value[i];
-                    const cardB = library.value[j];
-
-                    // 如果节点因为隔离模式被过滤掉了，不处理其连线
-                    if (!nodeMap.has(cardA.id) || !nodeMap.has(cardB.id)) continue;
-
-                    // 分别计算不同维度的关联
-                    const isSameCreator = cardA.creator && cardA.creator !== '未知' && cardA.creator === cardB.creator;
-                    const isSameCategory = cardA.category && cardA.category !== '未分类' && cardA.category === cardB.category;
-                    const commonTags = (cardA.customTags || []).filter(t => (cardB.customTags || []).includes(t));
-                    const hasCommonTags = commonTags.length > 0;
-
-                    // 【功能4】根据顶部图例勾选状态过滤连线
-                    if (isSameCreator && edgeFilters.creator) {
-                        links.push({
-                            source: cardA.id, target: cardB.id,
-                            value: 3, categoryName: '同作者',
-                            lineStyle: { color: '#60a5fa', width: 3, opacity: 0.6 } // 蓝线：同作者
-                        });
-                        nodeDegree.set(cardA.id, nodeDegree.get(cardA.id) + 1);
-                        nodeDegree.set(cardB.id, nodeDegree.get(cardB.id) + 1);
-                    }
-                    if (isSameCategory && edgeFilters.category) {
-                        links.push({
-                            source: cardA.id, target: cardB.id,
-                            value: 2, categoryName: '同分组',
-                            lineStyle: { color: '#c084fc', width: 2, opacity: 0.5 } // 紫线：同分组
-                        });
-                        nodeDegree.set(cardA.id, nodeDegree.get(cardA.id) + 1);
-                        nodeDegree.set(cardB.id, nodeDegree.get(cardB.id) + 1);
-                    }
-                    if (hasCommonTags && edgeFilters.tags) {
-                        links.push({
-                            source: cardA.id, target: cardB.id,
-                            value: commonTags.length, categoryName: '共享标签',
-                            lineStyle: { color: '#34d399', width: Math.min(commonTags.length, 4), opacity: 0.4 } // 绿线：共享标签
-                        });
-                        nodeDegree.set(cardA.id, nodeDegree.get(cardA.id) + commonTags.length);
-                        nodeDegree.set(cardB.id, nodeDegree.get(cardB.id) + commonTags.length);
-                    }
-                }
-            }
-
-            // 【功能3】核心度/枢纽人物高亮：找出连线度数最高的前 3 名社交达人，赋予金色光环与更大尺寸
-            if (nodes.length > 0) {
-                const sortedNodes = [...nodes].sort((a, b) => (nodeDegree.get(b.id) || 0) - (nodeDegree.get(a.id) || 0));
-                const topHubs = sortedNodes.slice(0, 3); // 前三名枢纽
-                topHubs.forEach(hub => {
-                    const n = nodeMap.get(hub.id);
-                    if (n) {
-                        n.symbolSize = 55; // 超大尺寸
-                        n.itemStyle.borderColor = '#f59e0b'; // 金色光环
-                        n.itemStyle.borderWidth = 4;
-                        n.label.color = '#fde047'; // 金色字体
-                        n.name = `👑 ${hub.name.replace('👑 ', '')}`; // 加上皇冠标识
-                    }
-                });
-            }
-
-            const option = {
-                backgroundColor: 'transparent', // 【修复】不再写死深色背景，跟随外层主题容器（暗夜/青灰/白昼）
-                tooltip: {
-                    formatter: (params) => params.dataType === 'node' ? `<b>${params.data.name}</b><br>社交权重度: ${nodeDegree.get(params.data.id) || 0}` : `关联类型: ${params.data.categoryName}`
-                },
-                series: [{
-                    type: 'graph',
-                    layout: graphLayoutMode.value,
-                    data: nodes,
-                    links: links,
-                    roam: true,
-                    animation: false,
-                    force: { repulsion: 700, edgeLength: [90, 260], gravity: 0.15 },
-                    circular: { rotateLabel: true },
-                    lineStyle: { curveness: 0.2 }
-                }]
-            };
-
-            echartsInstance.setOption(option, true);
-        };
-
-        // 监听状态改变时实时刷新图谱
-        const updateGraphLayout = (mode) => {
-            graphLayoutMode.value = mode;
-            renderGraph();
-        };
+        // 🕸️ 关系图谱 已拆分为组合式函数 useGraph（见下文 setup 尾部调用）
 
         // ================= Token 消耗与上下文预估 =================
         // 简易 Token 估算算法：中文按 1.5 权重，英文单词按 1.2 权重计算
@@ -1907,158 +1451,7 @@ export default {
         });
 
         // ================= [ 性能优化：搜索防抖 ] =================
-        const searchQueryInput = ref(''); // 绑定给搜索框的输入值（实时更新）
-        const searchQuery = ref('');      // 用于实际过滤的内部值（300ms 防抖延迟更新）
-        let searchTimeout = null;
-
-        // 监听输入，300ms 后才更新实际的过滤词
-        watch(searchQueryInput, (newVal) => {
-            if (searchTimeout) clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                searchQuery.value = newVal;
-            }, 300);
-        });
-
-        // ================= 🚀 超级搜索引擎：全字段穿透 + 高级语法检索 + 全规范兼容 =================
-        // 支持：多词 AND（傲娇 女仆）/ -排除词 / tag:/t: / author:/a: / file:/f: / wb:/w:
-        const filteredLibrary = computed(() => {
-            // —— 分类/快捷筛选（含特殊快捷过滤：带世界书 / 带正则脚本）——
-            const passCategory = (card) => {
-                if (currentCategoryKey.value === 'all') return true;
-                if (currentCategoryKey.value === 'has_lorebook') {
-                    // 📖 带世界书：卡片内嵌世界书且有条目
-                    const d = card.data?.data || card.data || {};
-                    const book = d.character_book || card.data?.character_book || {};
-                    const entries = book.entries || (Array.isArray(book) ? book : []);
-                    return (entries || []).length > 0;
-                }
-                if (currentCategoryKey.value === 'has_regex') {
-                    // ⚡ 带正则脚本：卡片内嵌正则脚本
-                    const d = card.data?.data || card.data || {};
-                    const regex = d.extensions?.regex_scripts || d.regex_scripts || [];
-                    return (regex || []).length > 0;
-                }
-                const targetCat = allCategories.value.find(c => c.key === currentCategoryKey.value);
-                if (!targetCat) return true;
-                // 【加固】分组匹配兼容多种存储形态：预设 cn/en/key + 物理文件夹一级名（subFolder）
-                const subName = card.subFolder ? card.subFolder.split(/[\\/]/)[0] : '';
-                return card.category === targetCat.cn || card.category === targetCat.en || card.category === targetCat.key
-                    || (!!subName && (subName === targetCat.cn || subName === targetCat.en || subName === targetCat.key));
-            };
-
-            // —— 列表排序（在过滤结果上稳定排序，不修改原始 library）——
-            const sortCards = (a, b) => {
-                if (sortBy.value === 'name') {
-                    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
-                }
-                if (sortBy.value === 'time') {
-                    // 【修复 BUG-1】"最新"以物理文件时间为准（修改时间 > 创建时间），避免卡片内建 create_date
-                    // （作者创作日期可多年不变/同批卡相同）造成的排序混乱；
-                    // 物理时间缺失时才回退卡片内建 create_date（用于未落盘/特殊来源的卡）
-                    const pickTime = (card) => {
-                        const m = Number(card._mtime) || 0;
-                        const c = Number(card._ctime) || 0;
-                        if (m && c) return Math.max(m, c); // 修改与创建取较新（最近活动）
-                        if (m) return m;
-                        if (c) return c;
-                        return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
-                    };
-                    return pickTime(b) - pickTime(a); // 最新优先
-                }
-                if (sortBy.value === 'tokens') {
-                    return estimateCardTokens(b) - estimateCardTokens(a); // Token 多优先
-                }
-                return 0;
-            };
-
-            // 无关键词：仅按当前分类过滤 + 排序（浏览模式）
-            const query = (searchQuery.value || '').toLowerCase().trim();
-            if (!query) {
-                return library.value.filter(passCategory).sort(sortCards);
-            }
-
-            // —— 解析搜索表达式（拆分为多个 token，识别高级语法）——
-            const rules = { mustInclude: [], mustExclude: [], tagOnly: [], authorOnly: [], fileOnly: [], wbOnly: [] };
-            query.split(/\s+/).forEach(token => {
-                if (token.startsWith('-') && token.length > 1) rules.mustExclude.push(token.slice(1));
-                else if (token.startsWith('tag:') || token.startsWith('t:')) rules.tagOnly.push(token.replace(/^(tag:|t:)/, ''));
-                else if (token.startsWith('author:') || token.startsWith('a:')) rules.authorOnly.push(token.replace(/^(author:|a:)/, ''));
-                else if (token.startsWith('file:') || token.startsWith('f:')) rules.fileOnly.push(token.replace(/^(file:|f:)/, ''));
-                else if (token.startsWith('wb:') || token.startsWith('w:')) rules.wbOnly.push(token.replace(/^(wb:|w:)/, ''));
-                else rules.mustInclude.push(token);
-            });
-
-            return library.value.filter(card => {
-                try {
-                    // 1. 分类过滤（搜索也遵守当前分组/快捷筛选；选"全部"= 全局检索）
-                    if (!passCategory(card)) return false;
-
-                    const data = card.data?.data || card.data || {};
-
-                    // 2. 排除词校验（- 语法）
-                    if (rules.mustExclude.length > 0) {
-                        const fullText = extractCardSearchableText(card);
-                        if (rules.mustExclude.some(ex => fullText.includes(ex))) return false;
-                    }
-
-                    // 3. 标签特定筛选（tag:/t: 语法）
-                    if (rules.tagOnly.length > 0) {
-                        const cardTags = extractCardTags(card);
-                        if (!rules.tagOnly.every(target => cardTags.some(t => t.includes(target)))) return false;
-                    }
-
-                    // 4. 作者特定筛选（author:/a: 语法）
-                    if (rules.authorOnly.length > 0) {
-                        const author = String(data.creator || data.author || card.creator || '').toLowerCase();
-                        if (!rules.authorOnly.every(a => author.includes(a))) return false;
-                    }
-
-                    // 5. 物理文件名/路径筛选（file:/f: 语法）
-                    if (rules.fileOnly.length > 0) {
-                        const fileName = card.fileName || String(card.path || '').split(/[\\/]/).pop() || '';
-                        const filePath = `${fileName} ${card.subFolder || ''} ${card.path || ''}`.toLowerCase();
-                        if (!rules.fileOnly.every(f => filePath.includes(f))) return false;
-                    }
-
-                    // 6. 世界书专用筛选（wb:/w: 语法）
-                    if (rules.wbOnly.length > 0) {
-                        const book = data.character_book || card.data?.character_book || card.character_book;
-                        const entries = book ? (book.entries || (Array.isArray(book) ? book : [])) : [];
-                        const wbText = JSON.stringify(entries || []).toLowerCase();
-                        if (!rules.wbOnly.every(w => wbText.includes(w))) return false;
-                    }
-
-                    // 7. 全文本多词必含校验（AND 逻辑，穿透 100% 字段盲区）
-                    if (rules.mustInclude.length > 0) {
-                        const fullText = extractCardSearchableText(card);
-                        if (!rules.mustInclude.every(kw => fullText.includes(kw))) return false;
-                    }
-
-                    return true;
-                } catch (e) {
-                    // 🛡️ 异常卡片自动跳过，保证列表稳定渲染不白屏
-                    console.warn('⚠️ 检索卡片异常跳过:', card.fileName || card.name, e);
-                    return false;
-                }
-            }).sort(sortCards);
-        });
-
-        // 2. 计算总页数
-        const totalPages = computed(() => {
-            return Math.ceil(filteredLibrary.value.length / itemsPerPage.value) || 1;
-        });
-
-        // 3. 当前页展示的数据
-        const paginatedLibrary = computed(() => {
-            const start = (currentPage.value - 1) * itemsPerPage.value;
-            const end = start + itemsPerPage.value;
-            return filteredLibrary.value.slice(start, end);
-        });
-
-        // 过滤条件（搜索/分组）变化时重置回第一页，避免停留在超出范围的页面上
-        watch([searchQuery, currentCategoryKey], () => {
-            currentPage.value = 1;
-        });
+        // （搜索防抖/全字段过滤/分页计算已拆分为组合式函数 useSearch）
 
         // 正则作用域（placement）可读化
         const getRegexPlacement = (arr) => {
@@ -2549,173 +1942,7 @@ export default {
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
         };
 
-        // ================= [ 磁盘卡片扫描系统 ] =================
-        const isScanningDisk = ref(false);
-        const diskScanProgress = ref({ status: '准备就绪', count: 0 });
-        const useSizeFilter = ref(true); // 默认开启体积过滤（跳过 <40KB 的贴图/图标）
-        // 🛰️ 全盘深度检索引擎弹窗开关（新的独立 UI，替代旧 runDiskScan 进度蒙版）
-        const showDiskScanModal = ref(false);
-
-        // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库；并发受限批处理）
-        const importScanPaths = async (paths) => {
-            let added = 0;
-            const CONCURRENCY = 8;
-            for (let i = 0; i < paths.length; i += CONCURRENCY) {
-                const batch = paths.slice(i, i + CONCURRENCY);
-                const results = await Promise.all(batch.map(async (absPath) => {
-                    const name = absPath.split(/[\\/]/).pop() || absPath;
-                    const isImage = /\.(png|webp)$/i.test(name);
-                    const file = {
-                        name,
-                        path: absPath,
-                        url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null
-                    };
-                    return await parseAndAddCard(file);
-                }));
-                added += results.filter(Boolean).length;
-            }
-            return added;
-        };
-
-        // 核心扫描执行器
-        const runDiskScan = async (mode) => {
-            if (!window.electronAPI) {
-                return nativeAlert('该功能需要 Electron 桌面环境，请使用 npm start 启动应用。', 'warning');
-            }
-            isScanningDisk.value = true;
-            diskScanProgress.value = { status: '正在初始化扫描引擎...', count: 0 };
-
-            let foundFiles = [];
-
-            // 监听底层发来的扫描进度心跳
-            window.electronAPI.onScanProgress((data) => {
-                diskScanProgress.value = data;
-            });
-
-            try {
-                if (mode === 'specific') {
-                    // 1. 指定盘符/文件夹扫描（主进程弹出原生目录选择器），传递体积过滤开关
-                    const result = await window.electronAPI.scanTargetFolder(null, useSizeFilter.value);
-                    if (result && result.files) foundFiles = result.files;
-
-                } else if (mode === 'all') {
-                    // 2. 暴力全盘扫描
-                    const drives = await window.electronAPI.getWindowsDrives();
-                    diskScanProgress.value.status = `共检测到 ${drives.length} 个本地磁盘，准备遍历...`;
-
-                    for (const drive of drives) {
-                        diskScanProgress.value.status = `正在深度扫描磁盘: ${drive}`;
-                        const result = await window.electronAPI.scanTargetFolder(drive, useSizeFilter.value);
-                        if (result && result.files) {
-                            foundFiles = foundFiles.concat(result.files);
-                        }
-                    }
-                }
-
-                if (foundFiles.length === 0) {
-                    nativeAlert('扫描结束，未在指定区域发现新的 PNG 角色卡文件。', 'info');
-                } else {
-                    diskScanProgress.value.status = `✅ 扫描完成！共发现 ${foundFiles.length} 张卡片，准备导入...`;
-
-                    // 将扫描到的卡片路径逐个解析并追加进库（未识别的文件自动跳过）
-                    const addedCount = await importScanPaths(foundFiles);
-                    diskScanProgress.value.status = `✅ 已成功导入 ${addedCount} 张角色卡！`;
-
-                    nativeAlert(`全盘/指定扫描完成！\n共提取 ${foundFiles.length} 个角色卡文件，成功导入 ${addedCount} 张。\n（无法识别的文件已自动跳过）`, 'info');
-                }
-            } catch (err) {
-                console.error("扫描失败:", err);
-                nativeAlert('扫描过程中发生异常，详情请查看控制台。', 'error');
-            } finally {
-                isScanningDisk.value = false;
-            }
-        };
-
-        // 🛰️ 全盘检索收编回调：把复制到当前库的卡片精准追加入库（不清空现有库），并 Toast 反馈
-        const handleScanImported = async (copiedFiles) => {
-            if (!copiedFiles || copiedFiles.length === 0) return;
-            try {
-                const added = await importScanPaths(copiedFiles);
-                showToast(`🛰️ 已收编 ${added} 张卡片到当前库！`, 'success', 4000);
-            } catch (err) {
-                console.error('收编入库失败:', err);
-                nativeAlert('收编入库失败: ' + (err && err.message || err), 'error');
-            }
-        };
-
-        // 按钮绑定的点击事件：通过主进程弹出原生文件夹选择框
-        const selectFixedDirectory = async () => {
-            if (!window.electronAPI) {
-                return nativeAlert("该功能需要 Electron 桌面环境，请使用 npm start 启动应用。", 'warning');
-            }
-            const result = await window.electronAPI.selectFolder();
-            if (result) {
-                // 【修复】打开角色库目录后自动切换到角色卡模式，界面立即显示角色卡列表
-                appMode.value = 'characters';
-                await processElectronFiles(result);
-            }
-        };
-
-        // 🔄 重新扫描当前库目录（不弹目录选择框），解决"手动放入文件夹里的新卡不读取"问题
-        const refreshLibrary = async () => {
-            if (!window.electronAPI) {
-                return nativeAlert("该功能需要 Electron 桌面环境，请使用 npm start 启动应用。", 'warning');
-            }
-            if (!currentFolderPath.value) {
-                return nativeAlert("尚未打开角色库目录，请先点击「📂 打开本地库」。", 'warning');
-            }
-            if (typeof window.electronAPI.rescanLibrary !== 'function') {
-                return nativeAlert("当前版本不支持一键刷新目录，请更新到最新版。", 'warning');
-            }
-            const prevCardPath = cardData.value ? (library.value.find(i => i.data === cardData.value)?.path || null) : null;
-            const result = await window.electronAPI.rescanLibrary(currentFolderPath.value);
-            if (result && result.files) {
-                appMode.value = 'characters';
-                // 🚀 增量刷新（方案 B）：按 path+mtime 差分，复用未变化卡片对象（不重新读盘解析），
-                // 只对新增/修改的卡片走完整解析——千卡库刷新从全量重载降为增量，保留用户自定义标签/分类
-                const oldMap = new Map(library.value.map(c => [c.path, c]));
-                const toParse = [];
-                const next = [];
-                for (const f of result.files) {
-                    const old = oldMap.get(f.path);
-                    if (old && Number(old._mtime) === Number(f.mtime)) {
-                        next.push(old); // 未变化：直接复用内存对象（含用户自定义状态）
-                    } else {
-                        toParse.push(f); // 新增 / mtime 变化：走完整解析
-                    }
-                }
-                // 释放被物理删除卡片的 blob URL（不在 result.files 里 → 旧 blob 无人引用）
-                const keptPaths = new Set(next.map(c => c.path));
-                library.value.forEach(c => {
-                    if (!keptPaths.has(c.path) && c.avatar && typeof c.avatar === 'string' && c.avatar.startsWith('blob:')) {
-                        try { URL.revokeObjectURL(c.avatar); } catch (e) { /* 忽略 */ }
-                    }
-                });
-                library.value = next;
-                // 📁 物理子文件夹 = 分组：合并新增分组
-                if (Array.isArray(result.categories)) {
-                    result.categories.forEach(cat => {
-                        if (cat && cat.trim() !== '' && !customCategories.value.includes(cat) && !isCategoryKnown(cat)) {
-                            customCategories.value.push(cat);
-                        }
-                    });
-                }
-                // 并发受限批处理解析新增/变化文件
-                const CONCURRENCY = 8;
-                for (let i = 0; i < toParse.length; i += CONCURRENCY) {
-                    const batch = toParse.slice(i, i + CONCURRENCY);
-                    await Promise.all(batch.map(file => parseAndAddCard(file)));
-                }
-                // 刷新后尽量保持当前打开卡片的编辑状态（按路径重新绑定新解析出的对象）
-                if (prevCardPath && cardData.value) {
-                    const reopen = library.value.find(i => i.path === prevCardPath);
-                    if (reopen) openFromLibrary(reopen);
-                }
-                showToast(`目录已刷新，共加载 ${library.value.length} 张卡片。`, 'success');
-            } else if (result && result.error) {
-                nativeAlert(result.error, 'error');
-            }
-        };
+        // 💽 磁盘卡片扫描 已拆分为组合式函数 useDiskScan（见下文 setup 尾部调用）
 
         // 【关键】软件启动时，自动无感加载上次的文件夹（Electron 环境）
         // 🔧 全局监听引用（供 onUnmounted 清理，文档第 2 节轻微项：根组件全局监听无 onUnmounted 移除）
@@ -2964,14 +2191,7 @@ export default {
         };
 
         // 换页逻辑
-        const changePage = (page) => {
-            if (page >= 1 && page <= totalPages.value) {
-                currentPage.value = page;
-                // ✅ [补丁] 翻页时清理上一次点击索引，防止跨页 Shift 连选基于页内索引超界误选当页卡片
-                lastSelectedIndex.value = -1;
-            }
-        };
-
+        // （changePage 已拆分为组合式函数 useSearch）
         // ================= [ 方法：导出/导入 本地库文件 ] =================
 
         // 1. 导出数据库文件 (Backup Library)
@@ -3060,98 +2280,7 @@ export default {
             window.scrollTo({ top: 0, behavior: 'smooth' }); // 滚动到顶部查看
         };
 
-        // ================= [ 方法：选择逻辑 ] =================
-        const handleCardClick = (e, item, index) => {
-            // 按住 Ctrl / Cmd 键多选
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                toggleSelection(item.id);
-                lastSelectedIndex.value = index;
-            }
-            // 按住 Shift 键连续多选
-            else if (e.shiftKey && lastSelectedIndex.value !== -1) {
-                e.preventDefault();
-                const start = Math.min(lastSelectedIndex.value, index);
-                const end = Math.max(lastSelectedIndex.value, index);
-
-                // 🔴 修复 BUG：列表渲染用 paginatedLibrary（分页切片，index 为页内 0~N），
-                // 原先这里索引 filteredLibrary（全局过滤数组），导致第 2 页起 Shift 连选会
-                // 错选到第 1 页的卡片。必须改为与页面视图一致的 paginatedLibrary。
-                for (let i = start; i <= end; i++) {
-                    const currentItem = paginatedLibrary.value[i];
-                    if (currentItem && !selectedIds.value.includes(currentItem.id)) {
-                        selectedIds.value.push(currentItem.id);
-                    }
-                }
-                lastSelectedIndex.value = index;
-            }
-            // 普通点击：已处于选中模式则切换选择，否则打开卡片
-            else {
-                if (selectedIds.value.length > 0) {
-                    toggleSelection(item.id);
-                    lastSelectedIndex.value = index;
-                } else {
-                    openFromLibrary(item);
-                }
-            }
-        };
-
-        const toggleSelection = (id) => {
-            const idx = selectedIds.value.indexOf(id);
-            if (idx > -1) selectedIds.value.splice(idx, 1);
-            else selectedIds.value.push(id);
-        };
-
-        const clearSelection = () => {
-            selectedIds.value = [];
-            lastSelectedIndex.value = -1;
-        };
-
-        // ================= [ 批量操作悬浮控制台：可拖动定位（默认底部居中，拖动标题栏移动，双击复位） ] =================
-        const batchBarPos = ref(null); // { x, y } 拖动后的视口像素坐标；null = 默认底部居中
-        const batchBarStyle = computed(() => {
-            if (!batchBarPos.value) {
-                return { minWidth: '420px', maxWidth: '92vw', bottom: '1rem', left: '50%', transform: 'translateX(-50%)' };
-            }
-            return { minWidth: '420px', maxWidth: '92vw', left: batchBarPos.value.x + 'px', top: batchBarPos.value.y + 'px' };
-        });
-        let batchBarDrag = null; // 拖拽中的快照
-        const startBatchBarDrag = (e) => {
-            if (e.button !== 0) return; // 仅响应左键
-            if (e.target.closest('button')) return; // 不拦截按钮点击（取消选择等）
-            const panel = e.currentTarget.closest('.fixed');
-            if (!panel) return;
-            const rect = panel.getBoundingClientRect();
-            batchBarDrag = {
-                startX: e.clientX,
-                startY: e.clientY,
-                origLeft: rect.left,
-                origTop: rect.top,
-                width: rect.width,
-                height: rect.height,
-            };
-            document.body.classList.add('select-none'); // 拖拽期间禁用文本选中
-            document.addEventListener('mousemove', onBatchBarDragMove);
-            document.addEventListener('mouseup', endBatchBarDrag);
-            e.preventDefault();
-        };
-        const onBatchBarDragMove = (e) => {
-            if (!batchBarDrag) return;
-            const nx = batchBarDrag.origLeft + (e.clientX - batchBarDrag.startX);
-            const ny = batchBarDrag.origTop + (e.clientY - batchBarDrag.startY);
-            // 边界限制：不允许拖出视口
-            batchBarPos.value = {
-                x: Math.max(0, Math.min(nx, window.innerWidth - batchBarDrag.width)),
-                y: Math.max(0, Math.min(ny, window.innerHeight - batchBarDrag.height)),
-            };
-        };
-        const endBatchBarDrag = () => {
-            batchBarDrag = null;
-            document.body.classList.remove('select-none');
-            document.removeEventListener('mousemove', onBatchBarDragMove);
-            document.removeEventListener('mouseup', endBatchBarDrag);
-        };
-        const resetBatchBarPos = () => { batchBarPos.value = null; };
+        // ✅ 选择逻辑（handleCardClick/toggleSelection/clearSelection）与批量操作悬浮台已拆分为组合式函数 useBatch（见下文 setup 尾部调用）
 
         // ================= 交互优化：多选开关与右键菜单 =================
         const isMultiSelectMode = ref(false); // 默认隐藏批量复选框
@@ -3343,102 +2472,11 @@ export default {
 
         // 📁 批量移动分组（弹窗版）已拆分为组合式函数 useCardGroups（见下文 setup 尾部调用）
 
-        // 批量打包导出已选卡片
-        const batchExportSelected = async () => {
-            if (selectedIds.value.length === 0) return;
-            try {
-                // selectedIds 现在存的是前端唯一随机 ID，需映射回真实文件路径再交给主进程
-                const exportPaths = library.value
-                    .filter(item => selectedIds.value.includes(item.id))
-                    .map(item => item.path);
-                const res = await window.electronAPI.exportBatchPackage(exportPaths);
-                if (res.success) {
-                    nativeAlert(`批量导出成功！\n共导出 ${res.count} 张卡片至:\n${res.exportDir}`, 'info');
-                    clearSelection();
-                } else if (res.error !== "用户取消操作") {
-                    nativeAlert(`导出失败: ${res.error}`, 'error');
-                }
-            } catch (e) {
-                nativeAlert(`发生错误: ${e.message}`, 'error');
-            }
-        };
-
-        // 🗑️ 批量删除：将选中的卡片批量移入全局回收站（安全可找回，与 Delete 键逻辑一致）
-        const batchDeleteSelected = async () => {
-            if (selectedIds.value.length === 0) return;
-            const ok = await confirmDialog(
-                `确定要将选中的 ${selectedIds.value.length} 张卡片移入回收站吗？\n` +
-                `(文件将放入全局回收站 jsTavern_Trash，支持手动找回)`
-            );
-            if (!ok) return;
-            const items = library.value.filter(i => selectedIds.value.includes(i.id));
-            const paths = items.map(i => i.path);
-            if (paths.length === 0) return;
-            // 若当前打开的卡片也在删除列表中，删除后关闭编辑面板
-            const openCardInList = cardData.value && items.some(i => i.data === cardData.value);
-            if (!window.electronAPI || typeof window.electronAPI.trashFiles !== 'function') {
-                return nativeAlert('当前环境不支持批量删除，请使用 Electron 版。', 'warning');
-            }
-            const res = await window.electronAPI.trashFiles(paths);
-            if (res && res.success) {
-                library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
-                selectedIds.value = [];
-                if (openCardInList) reset();
-                await cleanupEmptyCategories(); // 🧹 自动清理空分组
-                nativeAlert(`✅ 已将 ${paths.length} 张卡片移入回收站！`, 'info');
-            } else {
-                nativeAlert(`批量删除失败: ${(res && res.error) || '未知错误'}`, 'error');
-            }
-        };
+        // ✅ 批量打包导出/批量删除/批量添加标签 已拆分为组合式函数 useBatch（见下文 setup 尾部调用）
 
         // 🧹 清理空分组已拆分为组合式函数 useCardGroups（见下文 setup 尾部调用）
 
-        // 批量添加标签（多张卡片：内存 customTags + 原生 data.tags 双写，并逐张物理落盘）
-        const batchAddTag = async () => {
-            if (selectedIds.value.length === 0) return;
-
-            const newTag = await appPrompt(`为选中的 ${selectedIds.value.length} 张卡片批量添加标签:\n(多个标签用逗号分隔)`, '');
-
-            if (newTag && newTag.trim() !== '') {
-                const tagsToAdd = newTag.split(',').map(t => t.trim()).filter(t => t);
-                let savedCount = 0;
-
-                for (const item of library.value) {
-                    if (!selectedIds.value.includes(item.id)) continue;
-                    let isModified = false;
-
-                    // 1. 内存 customTags
-                    const newCustom = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
-                    if (newCustom.length !== item.customTags?.length) {
-                        item.customTags = newCustom;
-                        isModified = true;
-                    }
-
-                    // 2. 原生 data.tags
-                    const dataLayer = item.data?.data || item.data || {};
-                    if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
-                    const newDataTags = Array.from(new Set([...dataLayer.tags, ...tagsToAdd]));
-                    if (newDataTags.length !== dataLayer.tags.length) {
-                        dataLayer.tags = newDataTags;
-                        isModified = true;
-                    }
-
-                    // 3. 统一持久化中枢：写覆盖层 + 物理落盘
-                    if (isModified) {
-                        await persistCardUpdate(item, { tags: item.customTags, category: item.category });
-                        savedCount++;
-                    }
-                }
-
-                await nativeAlert(`批量打标签成功！并成功物理保存了 ${savedCount} 张`, 'info');
-                clearSelection();
-            }
-        };
-
-        // ================= 批量标签与预设系统 =================
-        const showBatchTagModal = ref(false);
-        const batchInputTags = ref('');
-        const batchMode = ref('append'); // 'append' 追加 或 'overwrite' 覆盖
+        // ✅ 批量添加标签（batchAddTag）已拆分为组合式函数 useBatch（见下文 setup 尾部调用）
 
         // ================= [ 系统级常用标签池 (超级扩充版) ] =================
         // 统一数据源：批量设置弹窗与 AI 打标候选池共享（点击即加，无需手动输入）
@@ -3510,384 +2548,7 @@ export default {
             saveUiSettingsToDisk(); // 内部已走统一中枢 syncConfigToDisk
         });
 
-        const toggleTagLangMode = () => {
-            if (tagLangMode.value === 'both') tagLangMode.value = 'cn';
-            else if (tagLangMode.value === 'cn') tagLangMode.value = 'en';
-            else tagLangMode.value = 'both';
-            // 统一中枢物理落盘（watch 也会触发，这里显式调用一次确保立即保存）
-            syncConfigToDisk();
-        };
-
-        // 系统自带的酒馆标签预设库（结构化中英文）
-        const presetTagsLibrary = [
-            { cn: '奇幻', en: 'Fantasy' },
-            { cn: '科幻', en: 'Sci-Fi' },
-            { cn: '现代', en: 'Modern' },
-            { cn: '末日', en: 'Post-Apocalyptic' },
-            { cn: '限制级', en: 'NSFW' },
-            { cn: '恋爱', en: 'Romance' },
-            { cn: '病娇', en: 'Yandere' },
-            { cn: '傲娇', en: 'Tsundere' },
-            { cn: '精灵', en: 'Elf' },
-            { cn: '魔物娘', en: 'Monster Girl' },
-            { cn: '巨龙', en: 'Dragon' },
-            { cn: '吸血鬼', en: 'Vampire' },
-            { cn: '恶魔', en: 'Demon' },
-            { cn: '天使', en: 'Angel' },
-            { cn: '兽耳', en: 'Kemonomimi' },
-            { cn: '机甲', en: 'Mecha' },
-            { cn: '魔法', en: 'Magic' },
-            { cn: '系统流', en: 'System' },
-            { cn: '异世界', en: 'Isekai' },
-            { cn: '暗黑', en: 'Dark' },
-            { cn: '喜剧', en: 'Comedy' },
-            { cn: '虐心', en: 'Angst' },
-            { cn: '日常', en: 'Slice of Life' },
-            { cn: '动作', en: 'Action' },
-            { cn: '原创', en: 'Original' },
-            { cn: '动漫', en: 'Anime' },
-            { cn: '游戏', en: 'Game' },
-            { cn: '小说', en: 'Novel' }
-        ];
-
-        // 根据当前模式获取预设标签显示的文本
-        const getPresetTagText = (preset) => {
-            if (tagLangMode.value === 'cn') return preset.cn;
-            if (tagLangMode.value === 'en') return preset.en;
-            return `${preset.en} (${preset.cn})`;
-        };
-
-        // 点击预设标签时，根据当前语言模式注入对应的文本
-        const togglePresetTag = (preset) => {
-            const tagToAdd = tagLangMode.value === 'cn' ? preset.cn : (tagLangMode.value === 'en' ? preset.en : preset.en);
-            let current = batchInputTags.value.split(',').map(t => t.trim()).filter(t => t);
-            if (current.includes(tagToAdd)) {
-                current = current.filter(t => t !== tagToAdd);
-            } else {
-                current.push(tagToAdd);
-            }
-            batchInputTags.value = current.join(', ');
-        };
-
-        // 当前批量输入框中的标签（逗号分隔 → 数组，用于芯片展示与点击移除）
-        const batchTagChips = computed(() =>
-            batchInputTags.value.split(',').map(t => t.trim()).filter(t => t)
-        );
-
-        // 从统一系统/常用标签库快速切换添加/移除标签到批量输入框
-        const toggleBatchCommonTag = (tag) => {
-            const current = batchTagChips.value;
-            if (current.includes(tag)) {
-                batchInputTags.value = current.filter(t => t !== tag).join(', ');
-            } else {
-                current.push(tag);
-                batchInputTags.value = current.join(', ');
-            }
-        };
-
-        // 点击芯片 ✕ 移除某个待添加标签
-        const removeBatchTag = (idx) => {
-            const current = batchTagChips.value;
-            current.splice(idx, 1);
-            batchInputTags.value = current.join(', ');
-        };
-
-        // 根据当前语言模式显示任意已存储标签（未知标签原样返回，兼容中英/双语存储格式）
-        const displayTagText = (tag) => {
-            if (!tag) return tag;
-            const preset = presetTagsLibrary.find(p => p.cn === tag || p.en === tag || tag.startsWith(`${p.en} (`));
-            if (!preset) return tag;
-            if (tagLangMode.value === 'cn') return preset.cn;
-            if (tagLangMode.value === 'en') return preset.en;
-            return `${preset.en} (${preset.cn})`;
-        };
-
-        // ================= 系统/全局标签库支持 =================
-        // ⚠️ 统一数据源：全部增删操作基于 systemCommonTags（已内置 watch deep 持久化到 localStorage `customSystemTags`）
-        //    彻底废弃内存级 defaultSystemTags（不持久化，重启丢失且与弹窗数据源分裂）
-        const newGlobalTagInput = ref(''); // 用于绑定直接新增标签的输入框
-
-        // 2. 动态计算：从当前所有已导入的卡片中聚合提取出所有的标签（基于 systemCommonTags + 全库标签）
-        const globalAvailableTags = computed(() => {
-            const tagSet = new Set(systemCommonTags.value);
-            library.value.forEach(item => {
-                // 提取自定义标签（用户主动打的，始终保留）
-                if (item.customTags && Array.isArray(item.customTags)) {
-                    // 🔧 修复：只聚合「非空字符串」标签，杜绝空白 chip
-                    item.customTags.forEach(t => {
-                        if (typeof t === 'string' && t.trim() !== '') tagSet.add(t);
-                    });
-                }
-                // 【修复 BUG-2】卡片原生自带标签：仅在"导入时忽略卡片自带标签"开关关闭时透出
-                // （开启 = 忽略他人卡片的杂乱标签，不再混入全局标签池）
-                if (!sanitizeImportedTags.value) {
-                    const d = item.data?.data || item.data || {};
-                    if (d.tags) {
-                        if (Array.isArray(d.tags)) {
-                            // 🔧 修复：同上
-                            d.tags.forEach(t => {
-                                if (typeof t === 'string' && t.trim() !== '') tagSet.add(t);
-                            });
-                        } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
-                            d.tags.split(',').forEach(t => { if (t.trim() !== '') tagSet.add(t.trim()); });
-                        }
-                    }
-                }
-            });
-            return Array.from(tagSet);
-        });
-
-        // 3. 允许在系统/常用标签栏直接添加新标签（写入统一池，watch deep 自动持久化）
-        const addTagToGlobalPool = () => {
-            const val = newGlobalTagInput.value.trim();
-            if (val && !systemCommonTags.value.includes(val)) {
-                systemCommonTags.value.push(val);
-                newGlobalTagInput.value = '';
-            }
-        };
-
-        // 4. 彻底清洗：点击 × 删除系统标签，从统一池移除（自动持久化）并清洗所有卡片，将受影响的卡片物理落盘
-        const removeTagFromGlobalPool = async (tagToRemove) => {
-            // 确认（Electron 中 window.confirm 静默返回 null，必须用 confirmDialog）
-            const ok = await confirmDialog(`确定要从系统常用标签库中彻底删除 [${tagToRemove}] 吗？\n（这也会清洗掉所有卡片中残留的该标签！）`);
-            if (!ok) return;
-
-            // 从统一预设池移除（watch deep 自动持久化）
-            systemCommonTags.value = systemCommonTags.value.filter(t => t !== tagToRemove);
-
-            // 深度清洗库中所有卡片的该标签，并记录被修改的卡片
-            const modifiedItems = [];
-            library.value.forEach(item => {
-                let isModified = false;
-
-                if (Array.isArray(item.customTags)) {
-                    const filtered = item.customTags.filter(t => t !== tagToRemove);
-                    if (filtered.length !== item.customTags.length) { item.customTags = filtered; isModified = true; }
-                }
-
-                const d = item.data?.data || item.data || {};
-                if (Array.isArray(d.tags)) {
-                    const filtered = d.tags.filter(t => t !== tagToRemove);
-                    if (filtered.length !== d.tags.length) { d.tags = filtered; isModified = true; }
-                } else if (typeof d.tags === 'string') {
-                    const cleaned = d.tags.split(',').map(t => t.trim()).filter(t => t && t !== tagToRemove).join(', ');
-                    if (cleaned !== d.tags) { d.tags = cleaned; isModified = true; }
-                }
-
-                if (isModified) modifiedItems.push(item);
-            });
-
-            // 将受影响的卡片物理保存到本地（防止重启/重新扫描后脏标签复活），并同步覆盖层
-            let savedCount = 0;
-            for (const item of modifiedItems) {
-                try {
-                    // 统一持久化中枢：写覆盖层 + 物理落盘
-                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
-                    savedCount++;
-                } catch (e) {
-                    console.error(`清洗标签后物理保存失败 [${item.name}]:`, e);
-                }
-            }
-
-            nativeAlert(`已从系统库彻底清洗标签：[${tagToRemove}]\n${savedCount > 0 ? `并已将 ${savedCount} 张受影响卡片物理保存到本地！` : '（库中未发现残留该标签的卡片）'}`, 'info');
-        };
-
-        // 🧹 一键清空：彻底清空系统常用标签库 + 清洗全库所有卡片上的全部标签（物理落盘，不可撤销）
-        const clearAllTagsFromPool = async () => {
-            const poolCount = systemCommonTags.value.length;
-            const cardCount = library.value.length;
-            if (poolCount === 0 && cardCount === 0) {
-                return nativeAlert('当前没有可清空的标签。', 'info');
-            }
-            const ok = await confirmDialog(
-                `确定要一键清空所有标签吗？\n\n` +
-                `· 系统常用标签库：${poolCount} 个\n` +
-                `· 全库 ${cardCount} 张卡片上的全部标签（含原生 data.tags）\n\n` +
-                `⚠️ 此操作将物理落盘且不可撤销，请谨慎确认！`
-            );
-            if (!ok) return;
-
-            // 1. 清空系统标签池（watch deep 自动持久化）
-            systemCommonTags.value = [];
-
-            // 2. 清洗全库所有卡片的 customTags 与原生 data.tags
-            const modifiedItems = [];
-            library.value.forEach(item => {
-                let isModified = false;
-                if (Array.isArray(item.customTags) && item.customTags.length > 0) {
-                    item.customTags = [];
-                    isModified = true;
-                }
-                const d = item.data?.data || item.data || {};
-                if (Array.isArray(d.tags) && d.tags.length > 0) {
-                    d.tags = [];
-                    isModified = true;
-                } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
-                    d.tags = '';
-                    isModified = true;
-                }
-                if (isModified) modifiedItems.push(item);
-            });
-
-            // 3. 物理落盘（覆盖层写空数组 = 记录"用户已清空"，重扫不自动补标签）
-            let savedCount = 0;
-            for (const item of modifiedItems) {
-                try {
-                    await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
-                    savedCount++;
-                } catch (e) {
-                    console.error(`一键清空标签后物理保存失败 [${item.name}]:`, e);
-                }
-            }
-
-            // 4. 刷新当前卡片展示
-            if (cardData.value) triggerRef(cardData);
-
-            nativeAlert(`✅ 已一键清空全部标签！\n系统标签库 ${poolCount} 个已清空，全库 ${modifiedItems.length} 张卡片标签已清除，物理保存 ${savedCount} 张。`, 'info');
-        };
-
-        // 🗑️ 批量删除标签：从系统标签库移除多个标签 + 清洗全库卡片残留（一次确认，批量落盘）
-        // @returns {number} 成功删除的标签数
-        const batchRemoveTags = async (tagList) => {
-            const tags = (tagList || []).filter(t => t && t.trim() !== '');
-            if (tags.length === 0) return 0;
-            const ok = await confirmDialog(
-                `确定要批量删除选中的 ${tags.length} 个标签吗？\n\n` +
-                `· 从系统常用标签库移除：${tags.slice(0, 6).join('、')}${tags.length > 6 ? ` 等 ${tags.length} 个` : ''}\n` +
-                `· 清洗全库卡片中残留的以上标签（物理落盘）`
-            );
-            if (!ok) return 0;
-
-            const tagSet = new Set(tags);
-            // 1. 从系统标签池移除（watch deep 自动持久化）
-            systemCommonTags.value = systemCommonTags.value.filter(t => !tagSet.has(t));
-
-            // 2. 清洗全库所有卡片的这些标签
-            const modifiedItems = [];
-            library.value.forEach(item => {
-                let isModified = false;
-                if (Array.isArray(item.customTags)) {
-                    const filtered = item.customTags.filter(t => !tagSet.has(t));
-                    if (filtered.length !== item.customTags.length) { item.customTags = filtered; isModified = true; }
-                }
-                const d = item.data?.data || item.data || {};
-                if (Array.isArray(d.tags)) {
-                    const filtered = d.tags.filter(t => !tagSet.has(t));
-                    if (filtered.length !== d.tags.length) { d.tags = filtered; isModified = true; }
-                } else if (typeof d.tags === 'string' && d.tags.trim() !== '') {
-                    const cleaned = d.tags.split(',').map(t => t.trim()).filter(t => t && !tagSet.has(t)).join(', ');
-                    if (cleaned !== d.tags) { d.tags = cleaned; isModified = true; }
-                }
-                if (isModified) modifiedItems.push(item);
-            });
-
-            // 3. 物理落盘 + 覆盖层同步
-            let savedCount = 0;
-            for (const item of modifiedItems) {
-                try {
-                    await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
-                    savedCount++;
-                } catch (e) {
-                    console.error(`批量删除标签后物理保存失败 [${item.name}]:`, e);
-                }
-            }
-            if (cardData.value) triggerRef(cardData);
-
-            nativeAlert(`🗑️ 已批量删除 ${tags.length} 个标签\n并清洗全库 ${modifiedItems.length} 张卡片，物理保存 ${savedCount} 张。`, 'info');
-            return tags.length;
-        };
-
-        // 5. 搜索快捷追加：点击搜索栏下方的快捷标签，直接填入搜索框并立即过滤
-        const appendTagToSearch = (tag) => {
-            if (!searchQueryInput.value) {
-                searchQueryInput.value = tag;
-            } else if (!searchQueryInput.value.includes(tag)) {
-                searchQueryInput.value = searchQueryInput.value + ' ' + tag;
-            }
-        };
-
-        // 标签快捷栏展开状态（点击展开/收起系统标签面板）
-        const isEditingSystemTags = ref(false);
-
-        // 点击系统/全局标签快速添加到当前卡片（内存 customTags + 原生 data.tags 双写，并物理落盘）
-        const addGlobalTag = async (tag) => {
-            const libItem = library.value.find(item => item.data === cardData.value);
-            if (!libItem) return;
-
-            let isModified = false;
-
-            // 1. 内存层
-            if (!libItem.customTags?.includes(tag)) {
-                libItem.customTags = Array.from(new Set([...(libItem.customTags || []), tag]));
-                isModified = true;
-            }
-
-            // 2. 原生数据层（兼容 V1/V2：data?.data || data）
-            const dataLayer = libItem.data?.data || libItem.data || {};
-            if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
-            if (!dataLayer.tags.includes(tag)) {
-                dataLayer.tags.push(tag);
-                isModified = true;
-            }
-
-            // 3. 统一持久化中枢：写覆盖层 + 物理落盘
-            if (isModified) {
-                await persistCardUpdate(libItem, { tags: libItem.customTags, category: libItem.category });
-            }
-        };
-
-        // 批量贴标签（多张卡片：内存 customTags + 原生 data.tags 双写，并逐张物理落盘）
-        const executeBatchTagSave = async () => {
-            if (selectedIds.value.length === 0) return;
-            const tagsToAdd = batchInputTags.value.split(',').map(t => t.trim()).filter(t => t);
-
-            let savedCount = 0;
-
-            for (const item of library.value) {
-                if (!selectedIds.value.includes(item.id)) continue;
-
-                let isModified = false;
-
-                // 1. 同步内存 customTags
-                if (batchMode.value === 'overwrite') {
-                    item.customTags = [...tagsToAdd];
-                    isModified = true;
-                } else {
-                    const newTags = Array.from(new Set([...(item.customTags || []), ...tagsToAdd]));
-                    if (newTags.length !== item.customTags?.length) {
-                        item.customTags = newTags;
-                        isModified = true;
-                    }
-                }
-
-                // 2. 同步原生数据 tags
-                const dataLayer = item.data?.data || item.data || {};
-                if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
-
-                if (batchMode.value === 'overwrite') {
-                    dataLayer.tags = [...tagsToAdd];
-                    isModified = true;
-                } else {
-                    const newDataTags = Array.from(new Set([...dataLayer.tags, ...tagsToAdd]));
-                    if (newDataTags.length !== dataLayer.tags.length) {
-                        dataLayer.tags = newDataTags;
-                        isModified = true;
-                    }
-                }
-
-                // 3. 统一持久化中枢：写覆盖层 + 物理落盘
-                if (isModified) {
-                    await persistCardUpdate(item, { tags: item.customTags, category: item.category });
-                    savedCount++;
-                }
-            }
-
-            nativeAlert(`成功为 ${selectedIds.value.length} 张卡片更新标签，并成功物理保存了 ${savedCount} 张！`, 'info');
-            showBatchTagModal.value = false;
-            batchInputTags.value = '';
-            clearSelection();
-        };
-
+        // 🏷️ 批量标签/预设标签/标签中英文切换/全局标签库 已拆分为组合式函数 useTags（见下文 setup 尾部调用）
         // 🧠 系统提示词预设（跨模块共享状态：被 syncConfigToDisk / 集中 watch 引用，保留在 App.vue；打标相关操作方法见 useAITools）
         const systemPromptPresets = ref((() => {
             try {
@@ -4926,6 +3587,19 @@ export default {
             cleanAllSnapshots, cleanOrphanSnapshots
         } = useSnapshots({ snapshotConfig, library, cardData, currentFolderPath, nativeAlert, confirmDialog, addLog, showToast, refreshCardData });
 
+        // 💽 磁盘卡片扫描：组合式函数注入（共享创库基础设施 parseAndAddCard/processElectronFiles 与共享状态保留在 App.vue）
+        const {
+            isScanningDisk, diskScanProgress, useSizeFilter, showDiskScanModal,
+            runDiskScan, handleScanImported, selectFixedDirectory, refreshLibrary
+        } = useDiskScan({ library, currentFolderPath, cardData, customCategories, appMode, nativeAlert, showToast, isCategoryKnown, openFromLibrary, parseAndAddCard, processElectronFiles });
+
+        // 🔎 超级搜索引擎：组合式函数注入（共享状态 library/currentCategoryKey/allCategories/sortBy/currentPage/itemsPerPage/lastSelectedIndex 保留在 App.vue）
+        const {
+            searchQueryInput, searchQuery,
+            filteredLibrary, totalPages, paginatedLibrary,
+            changePage
+        } = useSearch({ library, currentCategoryKey, allCategories, sortBy, currentPage, itemsPerPage, lastSelectedIndex, estimateCardTokens });
+
         // 📁 角色卡分组/分类：组合式函数注入（状态仍在 App.vue，此处仅注入操作逻辑）
         const {
             addNewCategory, currentCategoryDeletable, currentCategoryRenamable,
@@ -4933,6 +3607,13 @@ export default {
             currentCardCategory, handleCardCategoryChange, migrateOverlayKey, moveCardToGroup,
             quickMoveGroup, batchChangeCategory, batchChangeCategoryModal, cleanupEmptyCategories
         } = useCardGroups({ library, cardData, currentFolderPath, appConfig, selectedIds, customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown, nativeAlert, confirmDialog, appPrompt, addLog, persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk });
+
+        // ✅ 批量操作：组合式函数注入（共享状态 selectedIds/lastSelectedIndex 与工具 clearSelection/cleanupEmptyCategories/paginatedLibrary 等保留或来自其他组合式函数）
+        const {
+            handleCardClick, toggleSelection,
+            batchBarStyle, startBatchBarDrag, resetBatchBarPos,
+            batchExportSelected, batchDeleteSelected, batchAddTag
+        } = useBatch({ selectedIds, lastSelectedIndex, library, cardData, openFromLibrary, paginatedLibrary, reset, cleanupEmptyCategories, persistCardUpdate, nativeAlert, confirmDialog, appPrompt, clearSelection });
 
         // � 换角色卡图：选择新立绘替换，成功后刷新路径/立绘，并展示校验校准结果
         // （item 为空时自动定位当前打开的卡片；PNG 卡原地替换，WebP / JSON 卡升级为标准 PNG 卡）
@@ -5005,6 +3686,34 @@ export default {
             useJailbreak, jailbreakPrompt, jailbreakPresets,
             isTranslating, translateCardContent, isRefactoring, refactorCardFormat
         } = useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey, apiType, resolveApiModel, extractReplyContent, persistCardUpdate, refreshCardData, nativeAlert, confirmDialog, showToast, systemPromptPresets });
+
+        // 💬 聊天测卡：组合式函数注入（共享状态 apiEndpoint/apiKey/apiModel/apiType 与工具 resolveApiModel/extractReplyContent 保留在 App.vue）
+        const {
+            chatHistory, chatInput, isChatting, chatContainer,
+            saveApiConfig, handleApiTypeChange,
+            availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
+            isChatRenderMode,
+            initChat, sendMessage, clearChat
+        } = useChat({ apiEndpoint, apiKey, apiModel, apiType, resolveApiModel, extractReplyContent, DEFAULT_API_ENDPOINT, syncConfigToDisk, nativeAlert, safeData, cardData });
+
+        // 🕸️ 关系图谱：组合式函数注入（共享状态 library/cardData/imgUrl/currentTab/chatHistory/worldbookExpanded/allCategories/currentCategoryKey 保留或来自其他组合式函数）
+        const {
+            showGraph,
+            graphLayoutMode, graphSearchKeyword, minLinkWeight,
+            isolateCurrentGroup, edgeFilters,
+            openGraph, closeGraph, renderGraph, updateGraphLayout
+        } = useGraph({ library, cardData, imgUrl, currentTab, chatHistory, worldbookExpanded, nativeAlert, allCategories, currentCategoryKey });
+
+        // 🏷️ 标签系统：组合式函数注入（共享状态 systemCommonTags/tagLangMode 保留在 App.vue，此处注入操作逻辑与局部状态）
+        const {
+            showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
+            batchTagChips, toggleBatchCommonTag, removeBatchTag,
+            toggleTagLangMode, getPresetTagText, displayTagText,
+            togglePresetTag, executeBatchTagSave,
+            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool,
+            removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags,
+            appendTagToSearch, isEditingSystemTags, addGlobalTag
+        } = useTags({ systemCommonTags, tagLangMode, library, sanitizeImportedTags, confirmDialog, nativeAlert, persistCardUpdate, cardData, searchQueryInput, selectedIds, clearSelection, syncConfigToDisk });
 
         // ===== SFC 化：构建全局上下文对象（provide 给 HeaderBar/SidebarPanel/EditorPanel 子组件共享） =====
         const ctx = {
