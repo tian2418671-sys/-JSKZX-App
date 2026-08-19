@@ -1214,6 +1214,55 @@ export default {
             }
         };
 
+        // 🖼️ 更换当前角色卡的封面图（全格式：PNG/JSON/WebP 卡 → 统一生成 PNG 卡）
+        const changeCardCover = async () => {
+            if (!cardData.value) return nativeAlert('请先打开一张角色卡。', 'warning');
+            const libItem = library.value.find(item => item.data === cardData.value);
+            const cardPath = libItem ? libItem.path : null;
+            if (!cardPath) return nativeAlert('无法获取当前卡片路径，请先打开本地库中的卡片。', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.selectImageFile !== 'function' || typeof window.electronAPI.changeCardCover !== 'function') {
+                return nativeAlert('当前环境不支持换图功能。', 'warning');
+            }
+            const newImagePath = await window.electronAPI.selectImageFile();
+            if (!newImagePath) return; // 用户取消选择
+            const plain = getPlainCardData();
+            const res = await window.electronAPI.changeCardCover({ cardPath, newImagePath, cardData: plain });
+            if (res && res.success) {
+                const oldPath = libItem.path;
+                libItem.path = res.newFilePath;
+                libItem.fileName = res.fileName;
+                libItem.avatar = 'local-file://img/?path=' + encodeURIComponent(res.newFilePath);
+                imgUrl.value = libItem.avatar;
+                migrateOverlayKey(oldPath, res.newFilePath);
+                persistCardCategory(libItem);
+                const checks = (res.report && Array.isArray(res.report.checks)) ? '\n' + res.report.checks.join('\n') : '';
+                addLog(`🖼️ 已更换卡图: ${libItem.name}`, 'success');
+                nativeAlert(`✅ 卡图更换成功！${checks}`, 'info');
+            } else {
+                nativeAlert('换图失败: ' + ((res && res.error) || '未知错误'), 'error');
+            }
+        };
+
+        // 🔧 对当前角色卡执行校验 + 自动校准（CRC/IEND/chara 数据/尺寸体积）
+        const validateCalibrateCard = async () => {
+            if (!cardData.value) return nativeAlert('请先打开一张角色卡。', 'warning');
+            if (!window.electronAPI || typeof window.electronAPI.validateCard !== 'function') {
+                return nativeAlert('当前环境不支持校验校准。', 'warning');
+            }
+            const libItem = library.value.find(item => item.data === cardData.value);
+            const cardPath = libItem ? libItem.path : null;
+            if (!cardPath) return nativeAlert('无法获取当前卡片路径。', 'warning');
+            const plain = getPlainCardData();
+            const res = await window.electronAPI.validateCard({ cardPath, cardData: plain });
+            if (res && res.success) {
+                const checks = (res.report && Array.isArray(res.report.checks)) ? '\n' + res.report.checks.join('\n') : '';
+                const tail = (res.report && res.report.calibrated) ? '\n\n🔧 已自动校准。' : '';
+                nativeAlert(`🔍 校验结果：${checks}${tail}`, 'info');
+            } else {
+                nativeAlert('校验失败: ' + ((res && res.error) || '未知错误'), 'error');
+            }
+        };
+
         // ================= [ 📸 历史快照：查看与一键恢复（第 10 节） ] =================
         const showSnapshotModal = ref(false);
         const snapshotList = ref([]);
