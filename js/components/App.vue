@@ -359,6 +359,7 @@ import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
 import { useSnapshots } from '../composables/useSnapshots.js'; // 📸 历史快照功能（拆分出的组合式函数）
 import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色卡分组/分类功能（拆分出的组合式函数）
+import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 
 /** 用户可读的错误提示映射 */
 const ERROR_MESSAGES = {
@@ -5338,11 +5339,7 @@ export default {
             refreshCardData();
         };
 
-        // =========================================================
-        // 🔍 智能查重与版本清洗系统
-        // =========================================================
-        const showDedupeModal = ref(false);
-        const duplicateGroups = ref([]);
+        // 🔍 角色卡查重弹窗状态与方法已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // 计算单张卡片的设定丰度（与 cardTokenStats 口径对齐：叠加描述/首句/示例/性格/场景 + 世界书正文与触发词）
         const estimateCardTokens = (card) => {
@@ -5359,145 +5356,14 @@ export default {
             return total;
         };
 
-        // 提取核心描述以便于对比差异
-        const getCoreDescription = (card) => {
-            const d = card.data?.data || card.data || {};
-            return d.description || '';
-        };
-
-        // 启动全库查重扫描（升级版：综合 Token 丰度 + 物理文件修改时间判定；整体 try-catch 防静默崩溃）
-        const startDedupeScan = async () => {
-            try {
-                if (library.value.length === 0) {
-                    nativeAlert('卡片库为空，无法查重！', 'warning');
-                    return;
-                }
-
-                // 【防崩溃检查】底层 API 是否真的连接上了
-                if (!window.electronAPI || typeof window.electronAPI.getFileStats !== 'function') {
-                    nativeAlert('❌ 查重引擎启动失败：preload.js 中未找到 getFileStats 接口！', 'error');
-                    return;
-                }
-
-                const groups = {};
-                // 1. 聚类：按角色名称分组
-                library.value.forEach(card => {
-                    const name = (card.name || '未命名').trim();
-                    if (!groups[name]) groups[name] = [];
-                    groups[name].push(card);
-                });
-
-                const potentialGroups = Object.entries(groups).filter(([name, cards]) => cards.length > 1);
-
-                if (potentialGroups.length === 0) {
-                    nativeAlert('🎉 恭喜！当前库中极为整洁，未发现同名重复的角色卡！', 'info');
-                    return;
-                }
-
-                // 2. 收集所有需要获取 stats 的文件路径
-                const pathsToStat = [];
-                potentialGroups.forEach(([name, cards]) => cards.forEach(c => pathsToStat.push(c.path)));
-
-                // 3. 批量获取文件物理状态 (修改时间/大小)；失败时降级为仅 Token 判定
-                let fileStats = {};
-                try {
-                    const statsRes = await window.electronAPI.getFileStats(pathsToStat);
-                    if (statsRes && statsRes.success) fileStats = statsRes.data || {};
-                } catch (e) {
-                    console.warn('获取文件信息失败，将仅依据 Token 判定:', e);
-                }
-
-                // 4. 组装查重分组并综合排序
-                duplicateGroups.value = potentialGroups.map(([name, cards]) => {
-                    cards.forEach(c => {
-                        c._tokens = estimateCardTokens(c);
-                        c._desc = getCoreDescription(c);
-                        // 优先使用物理文件修改时间（可空链保护），兜底使用内部数据时间
-                        const fallback = (c.data && c.data.create_date) ? new Date(c.data.create_date).getTime() : 0;
-                        c._mtime = fileStats?.[c.path]?.mtimeMs || fallback || Date.now();
-                        c._dateStr = new Date(c._mtime).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-                    });
-
-                    // 【综合排序策略】Token 差异 > 5% 视为有实质差异，Token 多者优先；相近则比较物理修改时间，越新越优先
-                    cards.sort((a, b) => {
-                        const tokenDiff = b._tokens - a._tokens;
-                        const tokenRatio = Math.abs(tokenDiff) / Math.max(a._tokens, b._tokens, 1);
-                        if (tokenRatio > 0.05) {
-                            return tokenDiff;
-                        } else {
-                            return b._mtime - a._mtime;
-                        }
-                    });
-
-                    // 【差异计算】将第一张（推荐保留）与其他卡片对比描述长度差异
-                    cards.forEach((c, idx) => {
-                        if (idx === 0) {
-                            c._diffType = '推荐版';
-                            return;
-                        }
-                        const diffLen = c._desc.length - cards[0]._desc.length;
-                        if (diffLen > 100) c._diffType = '可能包含更多设定';
-                        else if (diffLen < -100) c._diffType = '设定可能有缺失';
-                        else if (c._desc !== cards[0]._desc) c._diffType = '设定细节不同';
-                        else c._diffType = '设定完全一致';
-                    });
-
-                    return { name, cards };
-                });
-
-                // 只要逻辑没报错，就一定能打开弹窗！
-                showDedupeModal.value = true;
-            } catch (err) {
-                console.error('查重引擎崩溃:', err);
-                nativeAlert(`❌ 查重系统发生异常: ${err.message}`, 'error');
-            }
-        };
-
-        // 一键清理：保留指定卡片，其余送入回收站
-        const resolveDedupeGroup = async (groupIndex, keepCardPath) => {
-            const group = duplicateGroups.value[groupIndex];
-            if (!group) return;
-
-            // 选出所有不等于 keepCardPath 的卡片路径（即准备扔掉的冗余版本）
-            const pathsToTrash = group.cards
-                .filter(c => c.path !== keepCardPath)
-                .map(c => c.path);
-
-            if (pathsToTrash.length === 0) return;
-
-            // ⚠️ 必须用 confirmDialog（window.confirm 在 Electron 中静默返回 null）
-            const ok = await confirmDialog(`确定要将另外 ${pathsToTrash.length} 个历史版本/重复卡移入回收站吗？`);
-            if (!ok) return;
-
-            const res = await window.electronAPI.trashFiles(pathsToTrash);
-            if (res && res.success) {
-                // 3. 先记录当前正在编辑的卡片是否会被清理
-                const currentLibItem = library.value.find(item => item.data === cardData.value);
-                const currentTrashed = !!(currentLibItem && pathsToTrash.includes(currentLibItem.path));
-
-                // 2. 从内存库中物理踢出已清理的卡片
-                library.value = library.value.filter(c => !pathsToTrash.includes(c.path));
-
-                // 1. 从查重视图中移除该组
-                duplicateGroups.value.splice(groupIndex, 1);
-
-                // 3. 若当前编辑卡片被清理，关闭编辑器
-                if (currentTrashed) reset();
-
-                await cleanupEmptyCategories(); // 🧹 自动清理空分组
-                nativeAlert(`清理成功！已将 ${res.count} 张冗余卡片移入回收站。`, 'info');
-            } else {
-                nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
-            }
-        };
+        // 🔍 角色卡查重扫描与清理方法已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // =========================================================
         // 🌍 世界书库筛选与智能对比查重引擎
         // =========================================================
         const wbSearchQuery = ref('');         // 世界书侧边栏搜索框
         const wbFilterType = ref('all');        // 词条数筛选: 'all' | 'empty' | 'small' | 'large'
-        const showWbDedupeModal = ref(false);  // 世界书对比查重弹窗开关
-        const wbDuplicateGroups = ref([]);     // 世界书查重分组
+        // 🔍 世界书查重弹窗状态与方法已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // =========================================================
         // 📁 世界书库：分组功能（Set 动态搜集 + localStorage 持久化）
@@ -5603,264 +5469,9 @@ export default {
             });
         });
 
-        // 提取世界书的所有触发词集合（用于计算重合度）
-        const getWorldbookKeysSet = (wb) => {
-            const keys = new Set();
-            const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
-            entries.forEach(e => {
-                if (!e || typeof e !== 'object') return; // 脏数据条目防护
-                const kArr = Array.isArray(e.key) ? e.key : (typeof e.key === 'string' ? e.key.split(/[,，]/) : []);
-                kArr.forEach(k => {
-                    const clean = String(k).trim().toLowerCase();
-                    if (clean) keys.add(clean);
-                });
-            });
-            return keys;
-        };
+        // 🔍 世界书查重扫描与清理方法已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
-        // 启动世界书智能查重扫描
-        const startWorldbookDedupeScan = async () => {
-            try {
-                if (worldbooks.value.length === 0) {
-                    nativeAlert('世界书库为空，无法进行查重！', 'warning');
-                    return;
-                }
-
-                // 【防崩溃检查】底层 API 是否真的连接上了
-                if (!window.electronAPI || typeof window.electronAPI.getFileStats !== 'function') {
-                    nativeAlert('❌ 世界书查重引擎启动失败：preload.js 中未找到 getFileStats 接口！', 'error');
-                    return;
-                }
-
-                const groups = {};
-                // 1. 按书名或文件名聚类
-                worldbooks.value.forEach(wb => {
-                    const name = ((wb.data && wb.data.name) || (wb.name || '').replace(/\.json$/i, '') || '未命名世界书').trim();
-                    if (!groups[name]) groups[name] = [];
-                    groups[name].push(wb);
-                });
-
-                const potentialGroups = Object.entries(groups).filter(([_, list]) => list.length > 1);
-
-                if (potentialGroups.length === 0) {
-                    nativeAlert('🎉 恭喜！当前库中未发现同名的重复世界书！', 'info');
-                    return;
-                }
-
-                // 2. 收集物理文件状态（带空安全保护）
-                const pathsToStat = [];
-                potentialGroups.forEach(([_, list]) => list.forEach(wb => pathsToStat.push(wb.path)));
-                let fileStats = {};
-                try {
-                    const statsRes = await window.electronAPI.getFileStats(pathsToStat);
-                    if (statsRes && statsRes.success) fileStats = statsRes.data || {};
-                } catch (e) {
-                    console.warn('获取世界书文件信息失败:', e);
-                }
-
-                wbDuplicateGroups.value = potentialGroups.map(([name, list]) => {
-                    list.forEach(wb => {
-                        const entries = (wb.data && Array.isArray(wb.data.entries)) ? wb.data.entries : [];
-                        wb._entryCount = entries.length;
-                        wb._keysSet = getWorldbookKeysSet(wb);
-                        wb._mtime = fileStats?.[wb.path]?.mtimeMs || Date.now();
-                        wb._dateStr = new Date(wb._mtime).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-                        wb._sizeKb = ((fileStats?.[wb.path]?.size || 0) / 1024).toFixed(1);
-                    });
-
-                    // 排序：词条数多的排前面，词条数相近则新的排前面
-                    list.sort((a, b) => {
-                        if (b._entryCount !== a._entryCount) return b._entryCount - a._entryCount;
-                        return b._mtime - a._mtime;
-                    });
-
-                    // 计算相对第一本（推荐版本）的差异与触发词交集
-                    const masterKeys = list[0]._keysSet;
-                    list.forEach((wb, idx) => {
-                        if (idx === 0) {
-                            wb._diffInfo = '👑 建议保留 (词条最全/最新)';
-                        } else {
-                            let overlapCount = 0;
-                            wb._keysSet.forEach(k => { if (masterKeys.has(k)) overlapCount++; });
-                            const ratio = wb._keysSet.size > 0 ? Math.round((overlapCount / wb._keysSet.size) * 100) : 0;
-
-                            if (wb._entryCount === list[0]._entryCount && ratio === 100) {
-                                wb._diffInfo = '⚠️ 词条内容完全重合 (可安全清理)';
-                            } else {
-                                wb._diffInfo = `🔍 触发词重合度: ${ratio}% (${wb._entryCount}条)`;
-                            }
-                        }
-                    });
-
-                    return { name, list };
-                });
-
-                // 只要逻辑没报错，就一定能打开弹窗！
-                showWbDedupeModal.value = true;
-            } catch (err) {
-                console.error('世界书查重引擎崩溃:', err);
-                nativeAlert(`❌ 世界书查重系统发生异常: ${err.message}`, 'error');
-            }
-        };
-
-        // 一键清理重复世界书
-        const resolveWbDedupeGroup = async (groupIndex, keepPath) => {
-            const group = wbDuplicateGroups.value[groupIndex];
-            if (!group) return;
-            const pathsToTrash = group.list.filter(wb => wb.path !== keepPath).map(wb => wb.path);
-            if (pathsToTrash.length === 0) return;
-
-            // ⚠️ confirm 在 Electron 中静默返回 null，必须用 confirmDialog
-            const ok = await confirmDialog(`确定要将另外 ${pathsToTrash.length} 本冗余/旧版世界书放入回收站吗？`);
-            if (!ok) return;
-
-            const res = await window.electronAPI.trashFiles(pathsToTrash);
-            if (res && res.success) {
-                wbDuplicateGroups.value.splice(groupIndex, 1);
-                worldbooks.value = worldbooks.value.filter(wb => !pathsToTrash.includes(wb.path));
-                if (activeWorldbook.value && pathsToTrash.includes(activeWorldbook.value.path)) {
-                    activeWorldbook.value = worldbooks.value[0] || null;
-                }
-                addLog(`🗑️ 已清理 ${res.count} 本冗余世界书`, 'warning');
-                nativeAlert(`清理完成！已移入回收站 ${res.count} 本世界书。`, 'info');
-            } else {
-                nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
-            }
-        };
-
-        // =========================================================
-        // 🔍 查重双屏差异比对器 (Diff Inspector) 终极修复版
-        // =========================================================
-        const showDiffDetailModal = ref(false);
-        const diffMasterItem = ref(null);
-        const diffCompareItem = ref(null);
-        const diffFieldResults = ref([]);
-
-        // 智能句级切块算法 (取代简陋的段落比对，精确到每一个标点符号)
-        const chunkTextForDiff = (text) => {
-            if (!text) return [];
-            try {
-                // 按标点或换行进行精细分句，保留标点，极大提升长段落对比体验
-                return text.split(/(?<=[。！？.!?\n]+)/).map(s => s.trim()).filter(Boolean);
-            } catch (e) {
-                // 兜底降级
-                return text.split('\n').map(s => s.trim()).filter(Boolean);
-            }
-        };
-
-        const computeTextDiffLines = (str1 = '', str2 = '') => {
-            const chunks1 = chunkTextForDiff(str1);
-            const chunks2 = chunkTextForDiff(str2);
-
-            const set1 = new Set(chunks1);
-            const set2 = new Set(chunks2);
-
-            const res1 = chunks1.map(chunk => ({
-                text: chunk,
-                type: set2.has(chunk) ? 'same' : 'removed'
-            }));
-
-            const res2 = chunks2.map(chunk => ({
-                text: chunk,
-                type: set1.has(chunk) ? 'same' : 'added'
-            }));
-
-            return { masterLines: res1, compareLines: res2 };
-        };
-
-        // 全能通用比对唤起 (自动识别世界书 / 角色卡)
-        const openDiffDetailModal = (masterItem, compareItem) => {
-            if (!masterItem || !compareItem) return;
-
-            diffMasterItem.value = masterItem;
-            diffCompareItem.value = compareItem;
-            diffFieldResults.value = [];
-
-            // 智能识别：当前是在查重世界书还是角色卡？
-            const isWorldbook = !!(masterItem.data && Array.isArray(masterItem.data.entries));
-
-            const masterData = (masterItem.data && (masterItem.data.data || masterItem.data)) || {};
-            const compareData = (compareItem.data && (compareItem.data.data || compareItem.data)) || {};
-
-            if (isWorldbook) {
-                // ---------- 🌍 世界书对比逻辑 ----------
-                const entries1 = masterItem.data.entries || [];
-                const entries2 = compareItem.data.entries || [];
-
-                diffFieldResults.value.push({
-                    label: '📚 世界书词条总数 (Entries Count)',
-                    isSame: entries1.length === entries2.length,
-                    len1: `${entries1.length} 条`,
-                    len2: `${entries2.length} 条`,
-                    diffText: null
-                });
-
-                // 提取所有触发词 Key
-                const getKeys = (entries) => entries.map(e => (Array.isArray(e.key) ? e.key.join(', ') : e.key)).filter(Boolean);
-                const keys1 = new Set(getKeys(entries1));
-                const keys2 = new Set(getKeys(entries2));
-
-                diffFieldResults.value.push({
-                    label: '🔑 触发词池覆盖差异 (Trigger Keys)',
-                    isSame: keys1.size === keys2.size && [...keys1].every(k => keys2.has(k)),
-                    isTags: true,
-                    commonTags: [...keys1].filter(k => keys2.has(k)),
-                    onlyMasterTags: [...keys1].filter(k => !keys2.has(k)),
-                    onlyCompareTags: [...keys2].filter(k => !keys1.has(k))
-                });
-
-                // 将所有词条内容拼接起来进行宏观文本对比（【加固】entry 判空 + String 强转，防脏数据崩溃）
-                const text1 = entries1.map(e => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
-                const text2 = entries2.map(e => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
-                const isTextSame = text1 === text2;
-
-                diffFieldResults.value.push({
-                    label: '📝 词条正文总集比对 (All Content Diff)',
-                    isSame: isTextSame,
-                    len1: `${text1.length} 字`,
-                    len2: `${text2.length} 字`,
-                    diffText: isTextSame ? null : computeTextDiffLines(text1, text2)
-                });
-
-            } else {
-                // ---------- 🎴 角色卡对比逻辑 ----------
-                const fieldsToCompare = [
-                    { key: 'description', label: '📝 角色描述 (Description)' },
-                    { key: 'personality', label: '🎭 性格设定 (Personality)' },
-                    { key: 'scenario', label: '🎬 当前场景 (Scenario)' }, // ✅ 补上漏掉的场景字段（此前场景改动在查重面板上不显示，可能误删新版本）
-                    { key: 'first_mes', label: '💬 开场首句 (First Message)' },
-                    { key: 'mes_example', label: '🗣️ 示例对话 (Mes Example)' }
-                ];
-
-                diffFieldResults.value = fieldsToCompare.map(f => {
-                    const val1 = String(masterData[f.key] || masterItem[f.key] || '');
-                    const val2 = String(compareData[f.key] || compareItem[f.key] || '');
-                    const isSame = val1.trim() === val2.trim();
-                    return {
-                        label: f.label,
-                        isSame,
-                        len1: `${val1.length} 字`,
-                        len2: `${val2.length} 字`,
-                        diffText: isSame ? null : computeTextDiffLines(val1, val2)
-                    };
-                });
-
-                // 标签对比
-                const tags1 = new Set([...(masterItem.customTags || []), ...((masterData && masterData.tags) || [])]);
-                const tags2 = new Set([...(compareItem.customTags || []), ...((compareData && compareData.tags) || [])]);
-
-                diffFieldResults.value.push({
-                    label: '🏷️ 自定义/系统标签 (Tags)',
-                    isSame: tags1.size === tags2.size && [...tags1].every(t => tags2.has(t)),
-                    isTags: true,
-                    commonTags: [...tags1].filter(t => tags2.has(t)),
-                    onlyMasterTags: [...tags1].filter(t => !tags2.has(t)),
-                    onlyCompareTags: [...tags2].filter(t => !tags1.has(t))
-                });
-            }
-
-            showDiffDetailModal.value = true;
-        };
+        // 🔍 双屏差异比对器（Diff Inspector）已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // =========================================================
         // 🌐 世界书可视化关系图谱 (ECharts Graph)
@@ -6237,6 +5848,13 @@ export default {
             currentCardCategory, handleCardCategoryChange, migrateOverlayKey, moveCardToGroup,
             quickMoveGroup, batchChangeCategory, batchChangeCategoryModal, cleanupEmptyCategories
         } = useCardGroups({ library, cardData, currentFolderPath, appConfig, selectedIds, customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown, nativeAlert, confirmDialog, appPrompt, addLog, persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk });
+
+        // 🔍 查重与差异比对：组合式函数注入（estimateCardTokens 为共享工具，保留在 App.vue）
+        const {
+            showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup,
+            showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
+            showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal
+        } = useDedupe({ library, worldbooks, activeWorldbook, cardData, estimateCardTokens, nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories });
 
         // ===== SFC 化：构建全局上下文对象（provide 给 HeaderBar/SidebarPanel/EditorPanel 子组件共享） =====
         const ctx = {
