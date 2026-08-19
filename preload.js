@@ -94,6 +94,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveWorldbook: (params) => ipcRenderer.invoke('wb:save', params),
     // 🌍 世界书专属通道：从网络拉取世界书 JSON（主进程转发，绕开渲染层 CORS）
     fetchWbUrl: (url) => ipcRenderer.invoke('wb:fetchUrl', url),
+    downloadCardFromUrl: (data) => ipcRenderer.invoke('card:downloadFromUrl', data),
     // 🌍 世界书专属通道：新建世界书文件（网址导入落盘）
     createWorldbook: (params) => ipcRenderer.invoke('wb:create', params),
     // 🌍 世界书专属通道：重命名世界书物理文件

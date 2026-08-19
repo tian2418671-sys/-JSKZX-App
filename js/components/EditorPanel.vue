@@ -26,30 +26,14 @@
                         <span class="font-bold">{{ cardTokenStats.total }}</span>
                     </div>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                    <button @click="translateCardContent" :disabled="isTranslating" class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-600 disabled:cursor-not-allowed text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap" title="调用 AI 翻译角色设定/首条消息/场景/对话示例">
-                        <span v-if="!isTranslating">🌐 一键汉化</span>
-                        <span v-else class="animate-pulse">⏳ AI 翻译中...</span>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <!-- ⚙️ 操作下拉菜单开关（菜单本体经 <Teleport to="body"> 渲染到 body 顶层 + fixed 定位，物理上不可能被编辑器内任何元素遮挡或裁剪） -->
+                    <button ref="toolbarMenuBtn" @click="toggleToolbarMenu"
+                            :title="isToolbarMenuOpen ? '收起操作菜单' : '展开操作菜单'"
+                            class="tb-btn bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white">
+                        <span class="ico">⚙️</span>{{ isToolbarMenuOpen ? '收起' : '菜单' }}
                     </button>
-                    <button @click="refactorCardFormat" :disabled="isRefactoring" class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-600 disabled:cursor-not-allowed text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap" title="将旧格式（W++/JSON）设定重构为高密度 Markdown，大幅降低 Token 占用">
-                        <span v-if="!isRefactoring">✨ 格式升维 (降 Token)</span>
-                        <span v-else class="animate-pulse">⏳ AI 正在重构中...</span>
-                    </button>
-                    <button @click="triggerManualSnapshot" title="绕过冷却机制，立即将当前卡片状态备份至历史目录" class="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
-                        📸 快照
-                    </button>
-                    <button @click="replaceCardImage()" title="选择新立绘替换当前卡片（PNG 卡原地替换；WebP/JSON 卡转为标准 PNG 卡）" class="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
-                        🖼️ 换卡图
-                    </button>
-                    <button @click="saveToLocalDisk" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap">
-                        💾 覆盖保存
-                    </button>
-                    <button @click="exportPackage" class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded shadow-sm transition text-xs font-bold whitespace-nowrap" title="一键打包卡片、独立世界书与正则脚本">
-                        📦 导出整合包
-                    </button>
-                    <button @click="deleteCard" class="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded shadow-sm transition text-xs font-bold ml-2 whitespace-nowrap">
-                        🗑️ 删除
-                    </button>
+
                     <div class="w-px h-4 bg-zinc-700 mx-1"></div>
                     <button @click="reset" class="px-2 py-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 rounded transition" title="关闭卡片">✕</button>
                 </div>
@@ -139,7 +123,7 @@
             <div class="flex-1 overflow-y-auto bg-zinc-950 p-4 pb-10 custom-scrollbar text-zinc-200">
 
                 <!-- 1. 基础设定 (Basic) -->
-                <div v-if="currentTab === 'basic'" class="space-y-4 max-w-5xl">
+                <div v-if="currentTab === 'basic'" class="space-y-4">
                     <div class="grid grid-cols-2 gap-4">
                         <div class="flex flex-col gap-1">
                             <div class="flex justify-between items-center mb-1">
@@ -189,7 +173,7 @@
                 </div>
 
                 <!-- 进阶设定 -->
-                <div v-if="currentTab === 'advanced'" class="space-y-4 max-w-5xl">
+                <div v-if="currentTab === 'advanced'" class="space-y-4">
                     <div class="flex flex-col gap-1">
                         <div class="flex justify-between items-center mb-1">
                             <label class="text-xs font-bold text-zinc-400 uppercase">系统提示词 (System Prompt)</label>
@@ -223,7 +207,7 @@
                 </div>
 
                 <!-- 2. 世界书 (Worldbook) —— 增强版：搜索过滤 + 词条增删/克隆/排序 + 启用/常驻/条件开关 + 标签化触发词 -->
-                <div v-if="currentTab === 'worldbook'" class="max-w-5xl">
+                <div v-if="currentTab === 'worldbook'">
                     <div v-if="worldbookEntries.length > 0">
 
                         <!-- 工具栏：计数 + 搜索 + 新增 + 折叠 -->
@@ -353,7 +337,7 @@
                 </div>
 
                 <!-- 正则脚本：兼容 V2/V3 的可视化编辑器 -->
-                <div v-if="currentTab === 'regex'" class="max-w-5xl">
+                <div v-if="currentTab === 'regex'">
                     <div class="bg-zinc-900/90 border border-zinc-800 rounded-lg p-4 mb-4 shadow-sm">
                         <div class="flex items-center justify-between mb-3 pb-2 border-b border-zinc-800">
                             <div class="flex items-center gap-2">
@@ -656,6 +640,36 @@
             </div>
         </div>
     </main>
+
+    <!-- ⚙️ 操作下拉菜单：<Teleport> 渲染到 body 顶层，fixed 定位在按钮正下方；外层全屏透明遮罩，点击任意处关闭 -->
+    <Teleport to="body">
+        <div v-if="isToolbarMenuOpen" class="fixed inset-0 z-[9999]" @click="isToolbarMenuOpen = false">
+            <div class="fixed w-48 max-h-[70vh] overflow-y-auto flex flex-col gap-1 p-1.5 bg-zinc-900/95 backdrop-blur border border-zinc-700 rounded-lg shadow-2xl custom-scrollbar"
+                 :style="{ left: toolbarMenuPos.x + 'px', top: toolbarMenuPos.y + 'px' }" @click.stop>
+                <button @click="translateCardContent; isToolbarMenuOpen = false" :disabled="isTranslating" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-500 text-white" title="调用 AI 翻译角色设定/首条消息/场景/对话示例">
+                    <span class="ico">🌐</span><span v-if="!isTranslating">一键汉化</span><span v-else class="animate-pulse">翻译中...</span>
+                </button>
+                <button @click="refactorCardFormat; isToolbarMenuOpen = false" :disabled="isRefactoring" class="tb-btn w-full bg-emerald-600 hover:bg-emerald-500 text-white" title="将旧格式（W++/JSON）设定重构为高密度 Markdown，大幅降低 Token 占用">
+                    <span class="ico">✨</span><span v-if="!isRefactoring">格式升维</span><span v-else class="animate-pulse">重构中...</span>
+                </button>
+                <button @click="triggerManualSnapshot; isToolbarMenuOpen = false" class="tb-btn w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white" title="绕过冷却机制，立即将当前卡片状态备份至历史目录">
+                    <span class="ico">📸</span>快照
+                </button>
+                <button @click="replaceCardImage(); isToolbarMenuOpen = false" class="tb-btn w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white" title="选择新立绘替换当前卡片（PNG 卡原地替换；WebP/JSON 卡转为标准 PNG 卡）">
+                    <span class="ico">🖼️</span>换卡图
+                </button>
+                <button @click="saveToLocalDisk; isToolbarMenuOpen = false" class="tb-btn w-full bg-blue-600 hover:bg-blue-700 text-white">
+                    <span class="ico">💾</span>覆盖保存
+                </button>
+                <button @click="exportPackage; isToolbarMenuOpen = false" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-700 text-white" title="一键打包卡片、独立世界书与正则脚本">
+                    <span class="ico">📦</span>导出
+                </button>
+                <button @click="deleteCard; isToolbarMenuOpen = false" class="tb-btn w-full bg-red-600 hover:bg-red-700 text-white">
+                    <span class="ico">🗑️</span>删除
+                </button>
+            </div>
+        </div>
+    </Teleport>
 </template>
 
 <script>
@@ -665,6 +679,20 @@ export default {
     name: 'EditorPanel',
     setup() {
         const ctx = inject('appCtx');
+
+        // ✅ [工具栏下拉菜单] 操作菜单开关（本地视觉状态，不落盘；菜单 <Teleport to="body"> 渲染到顶层，fixed 定位在按钮下方，永不被遮挡/裁剪）
+        const isToolbarMenuOpen = ref(false);
+        const toolbarMenuBtn = ref(null);          // ⚙ 按钮 DOM（取定位坐标）
+        const toolbarMenuPos = ref({ x: 0, y: 0 }); // 菜单 fixed 坐标
+        const toggleToolbarMenu = () => {
+            if (isToolbarMenuOpen.value) { isToolbarMenuOpen.value = false; return; }
+            const rect = toolbarMenuBtn.value.getBoundingClientRect();
+            const PANEL_W = 192; // w-48 = 192px
+            let x = rect.right - PANEL_W; // 菜单右对齐按钮
+            if (x < 8) x = 8; // 防左溢出屏幕
+            toolbarMenuPos.value = { x, y: rect.bottom + 6 }; // 出现在按钮正下方
+            isToolbarMenuOpen.value = true;
+        };
 
         // ✅ [批量删除标签] 标签云批量勾选删除模式（本组件本地状态）
         const isBatchDeleteTags = ref(false); // 是否处于批量删除标签模式
@@ -732,6 +760,10 @@ export default {
         });
         return {
             isWbSidebarCollapsed,
+            isToolbarMenuOpen,
+            toolbarMenuBtn,
+            toolbarMenuPos,
+            toggleToolbarMenu,
             currentEntry,
             selectEntry,
             formatKeys,
@@ -850,3 +882,36 @@ export default {
     }
 };
 </script>
+
+<style scoped>
+/* ================= 统一工具栏按钮外壳 =================
+   所有操作按钮：同高 / 同最小宽 / 同圆角 / 同边框 / 同字体 / 同图标尺寸，仅颜色不同。 */
+.tb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;            /* 统一高度 */
+    min-width: 84px;         /* 统一最小宽度（文字居中，短按钮也同宽） */
+    padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.tb-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+.tb-btn .ico {
+    font-size: 13px;         /* 统一图标尺寸 */
+    line-height: 1;
+}
+</style>

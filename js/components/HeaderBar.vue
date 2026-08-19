@@ -26,6 +26,7 @@
                         <button @click="loadWorldbooks" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex justify-between">🌍 打开世界书目录...</button>
                         <div class="h-px bg-zinc-700 my-1"></div>
                         <button @click="importCards" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">➕ 导入角色卡 <span>Ctrl+I</span></button>
+                        <button @click="downloadCardFromUrl" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between">🌐 从链接导入角色卡...</button>
                         <button @click="saveCurrentAsset" :disabled="!cardData && !activeWorldbook" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">💾 物理保存修改 <span>Ctrl+S</span></button>
                         <div class="h-px bg-zinc-700 my-1"></div>
                         <button @click="batchExportSelected" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📦 导出选中卡片...</button>
@@ -197,6 +198,7 @@
             </span>
             <div class="h-4 w-px bg-zinc-700 shrink-0"></div>
             <button @click="selectFixedDirectory" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">📂 打开本地库</button>
+            <button @click="downloadCardFromUrl" title="从 URL 直链下载导入角色卡（Discord/GitHub 等 CDN）" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">🌐 链接导入</button>
             <button @click="openGraph" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">🌌 关系图谱</button>
             <button @click="showGlobalAssetModal = true" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0" title="查看全库收集的世界书与正则脚本">
                 📚 全局资产库
@@ -229,6 +231,7 @@ export default {
             selectFixedDirectory: ctx.selectFixedDirectory,
             loadWorldbooks: ctx.loadWorldbooks,
             importCards: ctx.importCards,
+            downloadCardFromUrl: ctx.downloadCardFromUrl,
             saveCurrentAsset: ctx.saveCurrentAsset,
             cardData: ctx.cardData,
             activeWorldbook: ctx.activeWorldbook,

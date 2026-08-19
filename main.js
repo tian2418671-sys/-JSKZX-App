@@ -1729,6 +1729,70 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🌐 从 URL 直链下载角色卡并导入到卡片库（支持 PNG 卡 / JSON 卡，Discord/GitHub 等 CDN 直链均可）
+  ipcMain.handle('card:downloadFromUrl', async (event, { url, destFolder } = {}) => {
+    try {
+      if (!url || !/^https?:\/\//i.test(url)) {
+        return { success: false, error: '非法网址：仅支持 http/https 直链。' };
+      }
+      // 【安全加固】目标目录必须是白名单内的卡片库
+      if (!destFolder || !isPathAllowed(destFolder) || !fs.existsSync(destFolder) || !fs.statSync(destFolder).isDirectory()) {
+        return { success: false, error: '目标卡片库目录无效（未设置或不在合法范围内）。' };
+      }
+
+      // 1. 下载二进制内容（角色卡是 PNG，必须按字节取，不能用 text）
+      const response = await net.fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (JSK-Manager; compatible)' },
+        redirect: 'follow'
+      });
+      if (!response.ok) {
+        return { success: false, error: `网络请求失败 (状态码: ${response.status})` };
+      }
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (!buf || buf.length === 0) return { success: false, error: '下载内容为空。' };
+      if (buf.length > 20 * 1024 * 1024) {
+        return { success: false, error: '文件过大（超过 20MB），已中止下载。' };
+      }
+
+      // 2. 校验并识别卡片类型（PNG 内嵌 chara/ccv3 块 或 标准 JSON 卡）
+      const urlName = decodeURIComponent((String(url).split('/').pop() || '').split(/[?#]/)[0] || '');
+      const safeName = (n) => String(n || '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').replace(/\s+/g, ' ').trim() || 'character';
+      let card = null;
+      let fileName = '';
+
+      if (isPNGBuffer(buf)) {
+        card = readTavernPNGChunk(buf);
+        if (!card) return { success: false, error: 'PNG 内未找到角色卡数据 (chara/ccv3)，请确认是角色卡图片。' };
+        const base = getCardName(card) || urlName.replace(/\.(png|webp|jpe?g)$/i, '') || 'character';
+        fileName = safeName(base) + '.png';
+      } else {
+        // 按 JSON 卡处理
+        try {
+          card = JSON.parse(buf.toString('utf-8').replace(/^\uFEFF/, ''));
+        } catch (e) {
+          return { success: false, error: '无法识别的文件：既不是有效的 PNG 角色卡，也不是 JSON 角色卡。' };
+        }
+        if (!card || typeof card !== 'object' || (!card.data && !card.name)) {
+          return { success: false, error: 'JSON 不是有效的角色卡数据（缺少 name/data 字段）。' };
+        }
+        const base = getCardName(card) || urlName.replace(/\.json$/i, '') || 'character';
+        fileName = safeName(base) + '.json';
+      }
+
+      // 3. 同名跳过（绝不覆盖用户已有卡片）+ 落盘
+      const destPath = path.join(destFolder, fileName);
+      if (fs.existsSync(destPath)) {
+        return { success: false, error: `已存在同名卡片「${fileName}」，已跳过（不覆盖）。`, skipped: true };
+      }
+      fs.writeFileSync(destPath, buf);
+
+      return { success: true, filePath: destPath, fileName, name: getCardName(card) || fileName };
+    } catch (err) {
+      console.error('从链接下载角色卡失败:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
   // 新建世界书文件（网址导入落盘用；自动创建父目录，剔除 _ 前缀与 uid 临时字段防污染）
   ipcMain.handle('wb:create', async (event, { filePath, data }) => {
     try {

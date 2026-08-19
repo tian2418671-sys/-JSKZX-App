@@ -2241,6 +2241,42 @@ export default {
             e.target.value = ''; // 重置输入框，允许重复选择同一文件
         };
 
+        // 🌐 从 URL 直链下载角色卡并导入（PNG/JSON 卡，支持 Discord/GitHub 等 CDN 直链）
+        const downloadCardFromUrl = async () => {
+            if (!currentFolderPath.value) {
+                return nativeAlert('请先在顶部【选择固定文件夹读取】，设定你的卡片库目录，然后再从链接导入。', 'warning');
+            }
+            const url = await appPrompt('🌐 从链接下载导入角色卡\n请输入角色卡直链（支持 PNG / JSON 卡，Discord/GitHub 等 CDN 均可）：');
+            if (!url || !url.trim()) return;
+            // ⚠️ 进度提示必须用非阻塞的 showToast：nativeAlert 是模态框（等用户点确定才返回），
+            // 会把窗口整个挡住，导致下载完成的"成功/失败"弹窗也无法显示（表现为"下载中"一直卡住）
+            showToast('⏳ 正在从链接下载并导入角色卡，请稍候...', 'info', 6000);
+            try {
+                const res = await window.electronAPI.downloadCardFromUrl({ url: url.trim(), destFolder: currentFolderPath.value });
+                if (res && res.success) {
+                    const isImg = /\.png$/i.test(res.fileName);
+                    const added = await parseAndAddCard({
+                        name: res.fileName,
+                        path: res.filePath,
+                        url: isImg ? 'local-file://img/?path=' + encodeURIComponent(res.filePath) : null,
+                        mtime: Date.now()
+                    });
+                    if (added) {
+                        nativeAlert(`✅ 已从链接导入「${res.name}」到卡片库！`, 'success');
+                    } else {
+                        nativeAlert('卡片已下载到库中，但未入库（可能已在库中）。', 'warning');
+                    }
+                } else if (res && res.skipped) {
+                    nativeAlert(res.error, 'warning');
+                } else {
+                    nativeAlert(res?.error || '下载导入失败，请检查链接是否有效。', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                nativeAlert('下载导入失败: ' + (err.message || err), 'error');
+            }
+        };
+
         // 导出 JSON
         const downloadJson = () => {
             if (!cardData.value) return;
@@ -4974,7 +5010,7 @@ export default {
         const ctx = {
             theme, toggleTheme, appSettings, showApiModal, resetPersonalizationSettings, resetApiSettings,
             showExperimentalMenu, pushToTavern,
-            viewOptions, importFileInput, handleImportFiles, importCards, selectAllCards, cleanGlobalTagsPrompt, sanitizeImportedTags,
+            viewOptions, importFileInput, handleImportFiles, importCards, downloadCardFromUrl, selectAllCards, cleanGlobalTagsPrompt, sanitizeImportedTags,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan, showDiskScanModal,
             currentFolderPath, handleScanImported, refreshLibrary,
