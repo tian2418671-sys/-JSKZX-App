@@ -115,10 +115,15 @@
             :isolate-current-group="isolateCurrentGroup"
             :edge-filters="edgeFilters"
             :graph-search-keyword="graphSearchKeyword"
+            :min-link-weight="minLinkWeight"
+            :graph-stats="graphStats"
+            :building="graphBuilding"
             @update-graph-layout="updateGraphLayout"
             @update:isolateCurrentGroup="isolateCurrentGroup = $event"
             @update:graphSearchKeyword="graphSearchKeyword = $event"
+            @update:minLinkWeight="minLinkWeight = $event"
             @render="renderGraph"
+            @export="exportGraph"
             @close="closeGraph"
         />
 
@@ -189,6 +194,7 @@
             :card-path="snapshotCardPath"
             @close="closeSnapshotModal"
             @restore="restoreSnapshot"
+            @delete="deleteSnapshot"
             @open-folder="openSnapshotFolder"
         />
 
@@ -229,6 +235,7 @@
         <disk-scan-modal
             :show="showDiskScanModal"
             :current-library-path="currentFolderPath"
+            :open-library="selectFixedDirectory"
             @close="showDiskScanModal = false"
             @imported="handleScanImported"
         />
@@ -261,7 +268,21 @@
         />
 
     <!-- ================= [ 🌐 世界书词条逻辑关联图谱（子组件 WbGraphModal） ] ================= -->
-    <wb-graph-modal :show="showWbGraphModal" @close="showWbGraphModal = false" />
+    <wb-graph-modal
+        :show="showWbGraphModal"
+        :layout="wbGraphLayout"
+        :search="wbGraphSearch"
+        :filters="wbGraphFilters"
+        :min-weight="wbGraphMinWeight"
+        :stats="wbGraphStats"
+        :building="wbGraphBuilding"
+        @update-layout="updateWbGraphLayout"
+        @update:search="wbGraphSearch = $event"
+        @update:minWeight="wbGraphMinWeight = $event"
+        @render="renderWbGraph"
+        @export="exportWbGraph"
+        @close="closeWbGraphModal"
+    />
 
     <!-- ================= [ 🔗 多本世界书智能合并（子组件 WbMergeModal） ] ================= -->
     <wb-merge-modal
@@ -285,6 +306,25 @@
         @pick-source="pickImportSource"
         @update:selectedEntries="selectedImportEntries = $event"
         @confirm-import="confirmImportEntries"
+    />
+
+    <!-- ================= [ 🔎 全库词条搜索与反向引用（子组件 GlobalEntrySearchModal） ] ================= -->
+    <global-entry-search-modal
+        :show="showGlobalEntrySearchModal"
+        v-model:query="globalEntrySearchQuery"
+        :results="globalEntrySearchResults"
+        :index-count="globalEntryIndex.length"
+        @close="closeGlobalEntrySearch"
+        @jump="jumpToEntrySource"
+    />
+
+    <!-- ================= [ 🕒 世界书快照历史与回滚（子组件 WbSnapshotModal） ] ================= -->
+    <wb-snapshot-modal
+        :show="showWbSnapshotModal"
+        :target-name="(wbSnapshotTarget && wbSnapshotTarget.data && wbSnapshotTarget.data.name) || (wbSnapshotTarget && wbSnapshotTarget.name) || '未命名'"
+        :snapshots="wbSnapshotList"
+        @close="closeWbSnapshotModal"
+        @restore="restoreWbSnapshot"
     />
 
     <!-- ================= [ 弹窗：版本更新检测（子组件 UpdateModal） ] ================= -->
@@ -348,6 +388,8 @@ import WbDedupeModal from './WbDedupeModal.vue'; // 世界书智能版本对比�
 import DiffModal from './DiffModal.vue'; // 数据版本差异深度比对弹窗
 import WbMergeModal from './WbMergeModal.vue'; // 多本世界书智能合并弹窗
 import WbImportModal from './WbImportModal.vue'; // 条目级导入合并弹窗
+import GlobalEntrySearchModal from './GlobalEntrySearchModal.vue'; // 🔎 全库词条搜索弹窗
+import WbSnapshotModal from './WbSnapshotModal.vue'; // 🕒 世界书快照历史弹窗
 import ContextMenu from './ContextMenu.vue'; // 角色卡右键快捷菜单
 import WbContextMenu from './WbContextMenu.vue'; // 世界书右键快捷菜单
 import AiTagModal from './AITagModal.vue'; // AI 智能批量打标弹窗（⚠️ 注册名须用 AiTagModal，kebab 标签 ai-tag-modal 解析为 AiTagModal 而非 AITagModal）
@@ -363,6 +405,8 @@ import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色�
 import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
 import { useWorldbookEntries } from '../composables/useWorldbookEntries.js'; // 📚 世界书词条深度编辑（Entry IDE）组合式函数
+import { useGlobalEntrySearch } from '../composables/useGlobalEntrySearch.js'; // 🔎 全库词条搜索与反向引用组合式函数
+import { useWorldbookExtras } from '../composables/useWorldbookExtras.js'; // 📤 世界书扩展：提取/JSONL导入/批量导出/快照/统计
 import { useAITools } from '../composables/useAITools.js'; // ✨ AI 打标/翻译/格式升维功能（拆分出的组合式函数）
 import { useTags } from '../composables/useTags.js'; // 🏷️ 标签系统（批量标签/预设标签/系统标签池/中英切换/全局标签库）组合式函数
 import { useChat } from '../composables/useChat.js'; // 💬 聊天测卡（聊天历史/发送/API 设置/模型拉取）组合式函数
@@ -393,7 +437,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -420,6 +464,25 @@ export default {
                 const index = toasts.value.findIndex(t => t.id === id);
                 if (index !== -1) toasts.value.splice(index, 1);
             }, duration);
+        };
+
+        // 🔧 每次批量操作创建独立进度 Toast 句柄（并发安全，不再共享单例）
+        const createProgressToast = () => {
+            const id = toastIdCounter++;
+            toasts.value.push({ id, message: '...', type: 'info' });
+            const update = (msg) => {
+                const t = toasts.value.find(x => x.id === id);
+                if (t) t.message = msg;
+            };
+            const finish = (msg, type = 'success', duration = 3000) => {
+                const t = toasts.value.find(x => x.id === id);
+                if (t) { t.message = msg; t.type = type; }
+                setTimeout(() => {
+                    const i = toasts.value.findIndex(x => x.id === id);
+                    if (i !== -1) toasts.value.splice(i, 1);
+                }, duration);
+            };
+            return { update, finish };
         };
 
         // =========================================================
@@ -572,7 +635,11 @@ export default {
                 const res = await window.electronAPI.pushToSillyTavernDir(pathsToPush, stRoot);
 
                 if (res && res.success) {
-                    nativeAlert(`🎉 推送完成！共将 ${res.count} 张角色卡成功发送至酒馆！\n请前往酒馆刷新角色列表查看。`, 'info');
+                    nativeAlert(
+                        `🎉 推送完成！共 ${res.count} 张角色卡已发送至酒馆！` +
+                        ((res.overwritten && res.overwritten.length > 0)
+                            ? `\n其中 ${res.overwritten.length} 张同名卡已更新，旧版已存入回收站。` : '') +
+                        `\n请前往酒馆刷新角色列表查看。`, 'info');
                     clearSelection();
                 } else {
                     // 路径可能错误或版本不兼容，清空错误路径让用户下次重选
@@ -637,9 +704,15 @@ export default {
                             if (copied && copied.length > 0) {
                                 finalPath = copied[0];
                                 finalUrl = isImage ? 'local-file://img/?path=' + encodeURIComponent(copied[0]) : null;
+                            } else {
+                                // 🔧 库内已有同名：跳过本文件并计数，继续处理后续文件
+                                // （切勿 return——那会中止整个批量导入并吞掉汇总提示）
+                                skippedExisting++;
+                                continue;
                             }
                         } catch (copyErr) {
-                            console.warn(`复制到库目录失败，回退原始路径: ${f.name}`, copyErr);
+                            console.warn(`复制到库目录失败，跳过该文件: ${f.name}`, copyErr);
+                            continue; // IPC 异常同样只跳过本文件
                         }
                     }
 
@@ -685,7 +758,12 @@ export default {
 
                     if (await parseAndAddCard(file)) added++;
                     else if (file._skippedExisting) skippedExisting++;
-                    else console.warn(`未能解析为角色卡: ${f.name}（rawBuffer=${file.rawBuffer ? '有' : '无'}, path=${file.path}）`);
+                    else {
+                        // 🔧 解析失败时回收兜底 blob URL（此时无人接管该 URL，
+                        // 批量导入失败场景下大图 blob 会持续占用内存）
+                        if (file.url && file.url.startsWith('blob:')) URL.revokeObjectURL(file.url);
+                        console.warn(`未能解析为角色卡: ${f.name}（rawBuffer=${file.rawBuffer ? '有' : '无'}, path=${file.path}）`);
+                    }
                 } catch (err) {
                     console.warn(`导入失败 ${f.name}`, err);
                 }
@@ -995,6 +1073,27 @@ export default {
             window.electronAPI.saveAppConfig(payload).catch(() => { });
         };
 
+        // 🔧 落盘防抖：批量操作（清空标签/批量删除/批量加标签等）会对每张卡
+        // 调 persistCardUpdate → syncConfigToDisk（全量序列化 + 加密 IPC + 写盘），
+        // 几千张卡 = 几千次写放大。500ms 内的变更合并为一次落盘。
+        let syncTimer = null;
+        const syncConfigToDiskDebounced = () => {
+            if (isRestoringConfig) return;
+            if (syncTimer) clearTimeout(syncTimer);
+            syncTimer = setTimeout(() => {
+                syncTimer = null;
+                syncConfigToDisk();
+            }, 500);
+        };
+        // 窗口关闭前冲刷最后一次挂起的落盘（尽力而为：IPC 为异步，极端情况可能来不及）
+        window.addEventListener('beforeunload', () => {
+            if (syncTimer) {
+                clearTimeout(syncTimer);
+                syncTimer = null;
+                syncConfigToDisk();
+            }
+        });
+
         // 卡片变更持久化中枢：只要卡片数据发生变化（标签/分类/名字等），统一经过此函数
         // 三保险：① 更新内存状态 ② 写入 AppData 物理覆盖层（即使 PNG 重写失败也能记住）③ 物理重写文件
         const persistCardUpdate = async (cardItem, updatePayload = {}) => {
@@ -1003,11 +1102,21 @@ export default {
             // 1. 更新内存状态
             if (updatePayload.category !== undefined) cardItem.category = updatePayload.category;
             if (updatePayload.tags !== undefined) {
+                // 🔧 契约加固：updatePayload.tags 视为该卡自定义标签的【权威完整列表】。
+                // 旧实现 union(data.tags, customTags) 只增不减——调用方若传入
+                // "比旧 customTags 少"的列表（如未来的标签编辑器），被移除的标签会从
+                // 原生 data.tags 复活。现改为：旧 customTags 中被移除的标签同步从
+                // data.tags 清除（与 removeSingleTag 双清语义对齐），
+                // 卡片原生自带且从未进入 customTags 的标签不受影响。
+                const oldCustom = Array.isArray(cardItem.customTags) ? [...cardItem.customTags] : [];
                 cardItem.customTags = Array.isArray(updatePayload.tags) ? [...updatePayload.tags] : [];
-                // 同步到酒馆原生 data.tags 层（兼容 V1/V2）：合并去重，保留卡片原生自带标签
+
                 const dataLayer = cardItem.data?.data || cardItem.data || {};
                 if (!dataLayer.tags || typeof dataLayer.tags === 'string') dataLayer.tags = [];
-                dataLayer.tags = Array.from(new Set([...(dataLayer.tags || []), ...cardItem.customTags]));
+                const newCustomSet = new Set(cardItem.customTags);
+                const removedSet = new Set(oldCustom.filter(t => !newCustomSet.has(t)));
+                const kept = (Array.isArray(dataLayer.tags) ? dataLayer.tags : []).filter(t => !removedSet.has(t));
+                dataLayer.tags = Array.from(new Set([...kept, ...cardItem.customTags]));
             }
 
             // 2. 写入 AppData 物理覆盖层（双重保险：即使 PNG 重写失败，配置库也能记住数据）
@@ -1016,7 +1125,7 @@ export default {
                 category: cardItem.category || '未分类',
                 tags: Array.isArray(cardItem.customTags) ? [...cardItem.customTags] : []
             };
-            syncConfigToDisk();
+            syncConfigToDiskDebounced();
 
             // 3. 物理重写文件（PNG 的 tEXt 元数据块 / JSON 覆写），剥离 Proxy 后经 IPC
             if (window.electronAPI && typeof window.electronAPI.saveCard === 'function' && cardItem.path && cardItem.data) {
@@ -1026,6 +1135,20 @@ export default {
                     console.error('卡片文件物理覆盖失败，已用物理配置文件兜底:', err);
                 }
             }
+        };
+
+        // 🔧 删除卡片后清理覆盖层 key：防止 app_config.json 的 cardOverlays 随删除操作无限膨胀
+        // ⚠️ 行为取舍：清理后若从 .trash/jsTavern_Trash 手动找回同名卡，分类会回退为
+        // 「未分类」（分类只存覆盖层；标签已随 persistCardUpdate 物理写回 PNG，不受影响）。
+        // 若更看重找回后的状态完整性，可不接入本函数（膨胀速度极慢，每条几十字节）
+        const deleteCardOverlays = (paths) => {
+            if (!Array.isArray(paths) || paths.length === 0) return;
+            const overlays = appConfig.value.cardOverlays || {};
+            let removed = false;
+            for (const p of paths) {
+                if (p && overlays[p]) { delete overlays[p]; removed = true; }
+            }
+            if (removed) syncConfigToDisk();
         };
 
         // 【兼容保留】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
@@ -1808,9 +1931,12 @@ export default {
             // 🚫 绝对拦截①：聊天记录（酒馆聊天导出常为数组，或含 messages / chat_metadata 字段）
             if (data.messages || data.chat_metadata) return false;
 
-            // 🚫 绝对拦截②：独立世界书（顶层 entries 数组即世界书特征，无论是否带 name/data）
-            // 角色卡的世界书永远在 data.character_book / data.data.character_book 内，顶层 entries 只属于世界书文件
-            if (data.entries && Array.isArray(data.entries)) return false;
+            // 🚫 绝对拦截②：独立世界书 —— 任何形态的 entries 都是世界书特征（数组 / 对象字典 / 字符串），
+            //    以及 data.entries 嵌套结构（非 character_book），一律拦截。
+            //    角色卡的世界书永远只在 data.character_book / data.data.character_book 内，绝不会是顶层或 data.entries。
+            if (data.entries !== undefined) return false;
+            if (data.data && typeof data.data === 'object' &&
+                'entries' in data.data && !data.data.character_book) return false;
 
             // 🚫 绝对拦截③：酒馆 UI 主题 / 界面配置 JSON
             if (data.colors || data.user_settings) return false;
@@ -2691,6 +2817,7 @@ export default {
                 const res = await window.electronAPI.deleteFile(libItem.path);
                 if (res.success) {
                     library.value = library.value.filter(item => item.id !== libItem.id);
+                    deleteCardOverlays([libItem.path]); // 🔧 同步清理覆盖层，防配置膨胀
                     reset();
                     nativeAlert("卡片已安全移入本地回收站。", "info");
                 } else {
@@ -2777,6 +2904,12 @@ export default {
 
         // 打开通用输入弹窗，返回 Promise<string|null>（取消返回 null）
         const appPrompt = (title, defaultValue = '') => {
+            // 🔧 重入保护：上一个弹窗未关闭时先结清其 Promise（按取消处理），
+            // 避免回调被覆盖导致第一个 await 永久挂起 + 闭包内存泄漏
+            if (promptModalResolve) {
+                promptModalResolve(null);
+                promptModalResolve = null;
+            }
             promptModalTitle.value = title;
             promptModalDefault.value = defaultValue;
             promptInput.value = defaultValue;
@@ -3262,10 +3395,271 @@ export default {
         // 🔍 双屏差异比对器（Diff Inspector）已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // =========================================================
-        // 🌐 世界书可视化关系图谱 (ECharts Graph)
+        // 🌐 世界书可视化关系图谱 (ECharts Graph) —— v2 性能与功能升级
+        // - 索引化构建：key→词条 倒排索引 + 权重聚合，替代旧版 O(n²) 双循环逐对
+        //   keys.some(content.includes)（300+ 词条大书卡顿主因）；过滤 <2 字符噪音 key；
+        // - 构建/渲染分离：打开时构建一次全量缓存，过滤/搜索/阈值只做轻量重渲；
+        // - 新增：布局切换 / 词条类型过滤(常驻/触发/禁用) / 搜索高亮 / 连线权重阈值 /
+        //   孤立词条统计 / PNG 导出 / resize 自适应 / 关闭时销毁实例防泄漏；
+        // - 大书同步构建会阻塞主线程 → 先绘制弹窗与 loading 遮罩，再后台构建
         // =========================================================
         const showWbGraphModal = ref(false);
+        const wbGraphBuilding = ref(false);
         let wbChartInstance = null;
+        let wbGraphNodesCache = [];   // 全量节点（打开时构建一次）
+        let wbGraphLinksCache = [];   // 全量连线（打开时构建一次，含 weight）
+        let wbGraphSearchTimer = null;
+
+        const wbGraphLayout = ref('force');
+        const wbGraphSearch = ref('');
+        const wbGraphMinWeight = ref(1);
+        const wbGraphFilters = reactive({ constant: true, triggered: true, disabled: false });
+        const wbGraphStats = reactive({ nodes: 0, links: 0, orphans: 0 });
+
+        const handleWbGraphResize = () => {
+            if (wbChartInstance) wbChartInstance.resize();
+        };
+
+        // 构建全量节点与连线（仅打开时执行一次；分批让出主线程，loading 转圈不冻结）
+        const buildWbGraphData = async () => {
+            const entries = activeWorldbook.value.data.entries || [];
+            const nodes = [];
+
+            // 构建节点 —— 300+ 节点需调小球体（按内容长度微调区分大小，范围 10-22）
+            entries.forEach((e, idx) => {
+                const label = e.comment || (Array.isArray(e.key) ? e.key.join('/') : e.key) || `词条 #${idx + 1}`;
+                nodes.push({
+                    id: String(e.uid || idx),
+                    name: label,
+                    symbolSize: Math.max(10, Math.min(22, 8 + String(e.content || '').length / 40)),
+                    entryIndex: idx,
+                    isConstant: !!e.constant,
+                    isDisabled: e.enabled === false,
+                    itemStyle: {
+                        color: e.enabled === false ? '#71717a' : (e.constant ? '#6366f1' : '#d97706')
+                    }
+                });
+            });
+
+            // 倒排索引：触发词 → 目标词条列表（去重 + 过滤 <2 字符的噪音 key，
+            // 单字 key 如「你」会造成连线风暴且多为误命中）
+            const keyIndex = new Map();
+            entries.forEach((e, idx) => {
+                const keys = Array.isArray(e.key) ? e.key : (e.key ? [e.key] : []);
+                keys.forEach(k => {
+                    const kk = String(k || '').trim().toLowerCase();
+                    if (kk.length < 2) return;
+                    if (!keyIndex.has(kk)) keyIndex.set(kk, new Set());
+                    keyIndex.get(kk).add(String(e.uid || idx));
+                });
+            });
+
+            // 权重聚合：同一 (source→target) 的多个 key 命中合并为一条线，线宽随权重增长
+            // 🔧 分批处理：每批之间让出主线程一帧——旧版一次性同步聚合曾把 UI 冻结数秒，
+            //    分批后 loading 转圈（CSS 合成器动画）保持流畅
+            // 🔧 bigram 预过滤：key 命中判断从「每个 key 全文 includes」降为 O(1) Set 查询——
+            //    只有 key 的首两字确实相邻出现在正文中时才回退全文校验。
+            //    大书(2000 词条 × 5000 key)从 ~千万次全文扫描降至 ~千万次 Set 命中，提速 10-100 倍
+            const getBigrams = (content) => {
+                const s = new Set();
+                for (let i = 0; i + 1 < content.length; i++) s.add(content.slice(i, i + 2));
+                return s;
+            };
+            const linkAgg = new Map();
+            const CHUNK = 80;
+            for (let base = 0; base < entries.length; base += CHUNK) {
+                const end = Math.min(base + CHUNK, entries.length);
+                for (let idxA = base; idxA < end; idxA++) {
+                    const eA = entries[idxA];
+                    const content = String(eA.content || '').toLowerCase();
+                    if (!content) continue;
+                    const bg = getBigrams(content);
+                    const srcId = String(eA.uid || idxA);
+                    keyIndex.forEach((targetIds, kk) => {
+                        if (!bg.has(kk.slice(0, 2))) return;          // 首二字未相邻出现 → 必不命中，跳过
+                        if (kk.length > 2 && !content.includes(kk)) return; // 长词回退全文精确校验
+                        targetIds.forEach(tgtId => {
+                            if (tgtId === srcId) return;
+                            const key = srcId + '→' + tgtId;
+                            linkAgg.set(key, (linkAgg.get(key) || 0) + 1);
+                        });
+                    });
+                }
+                await new Promise(r => setTimeout(r, 0)); // 让出主线程
+            }
+
+            // 🔧 连线预算：极端常见的通用词会产生数万条连线，直接卡死力导向模拟器；
+            // 按权重降序保留前 4000 条（权重=命中触发词数，泛化连线先被裁掉）
+            let aggList = Array.from(linkAgg, ([key, w]) => ({ key, w }));
+            const WB_MAX_LINKS = 4000;
+            if (aggList.length > WB_MAX_LINKS) {
+                aggList.sort((x, y) => y.w - x.w);
+                aggList = aggList.slice(0, WB_MAX_LINKS);
+            }
+
+            const links = aggList.map(({ key, w }) => {
+                const sep = key.indexOf('→');
+                return {
+                    source: key.slice(0, sep),
+                    target: key.slice(sep + 1),
+                    weight: w,
+                    lineStyle: { curveness: 0.1, opacity: 0.5, width: Math.min(1 + w * 0.4, 4) }
+                };
+            });
+
+            wbGraphNodesCache = nodes;
+            wbGraphLinksCache = links;
+        };
+
+        // 🔧 捕获世界书图谱当前布局坐标（半内部 API，失败静默降级）
+        // 作为下次渲染的位置种子：过滤/搜索/阈值切换后整图不再重新洗牌
+        const captureWbGraphPositions = () => {
+            const pos = new Map();
+            try {
+                const model = wbChartInstance.getModel && wbChartInstance.getModel();
+                const seriesModel = model && model.getSeriesByIndex && model.getSeriesByIndex(0);
+                const graph = seriesModel && seriesModel.getGraph && seriesModel.getGraph();
+                if (graph && graph.eachNode) {
+                    graph.eachNode((node) => {
+                        const layout = node.getLayout && node.getLayout();
+                        if (layout && layout.length >= 2) pos.set(String(node.id), [layout[0], layout[1]]);
+                    });
+                }
+            } catch (e) { return new Map(); }
+            return pos;
+        };
+
+        // 轻量重渲：应用 类型过滤 / 权重阈值 / 搜索高亮 / 布局（不重建缓存）
+        const renderWbGraph = () => {
+            if (!wbChartInstance) return;
+
+            const seedPos = wbGraphLayout.value === 'force' ? captureWbGraphPositions() : null;
+            const kw = wbGraphSearch.value.trim().toLowerCase();
+            const visibleNodes = [];
+            const visibleIds = new Set();
+
+            wbGraphNodesCache.forEach(n => {
+                const passFilter = (n.isDisabled && wbGraphFilters.disabled) ||
+                                   (!n.isDisabled && n.isConstant && wbGraphFilters.constant) ||
+                                   (!n.isDisabled && !n.isConstant && wbGraphFilters.triggered);
+                if (!passFilter) return;
+                const hit = !kw || n.name.toLowerCase().includes(kw);
+                const node = {
+                    ...n,
+                    itemStyle: { ...n.itemStyle, opacity: kw ? (hit ? 1 : 0.15) : 1 },
+                    symbolSize: hit && kw ? Math.min(n.symbolSize * 1.5, 36) : n.symbolSize,
+                    label: { show: !!kw && hit, position: 'right' }
+                };
+                if (seedPos) {
+                    const p = seedPos.get(n.id);
+                    if (p) { node.x = p[0]; node.y = p[1]; }
+                }
+                visibleNodes.push(node);
+                visibleIds.add(n.id);
+            });
+
+            const visibleLinks = wbGraphLinksCache.filter(l =>
+                l.weight >= wbGraphMinWeight.value && visibleIds.has(l.source) && visibleIds.has(l.target)
+            );
+
+            // 统计徽标：词条 / 连线 / 孤立词条（无任何连线的词条，常为死词条线索）
+            const deg = new Map();
+            visibleLinks.forEach(l => {
+                deg.set(l.source, (deg.get(l.source) || 0) + 1);
+                deg.set(l.target, (deg.get(l.target) || 0) + 1);
+            });
+            wbGraphStats.nodes = visibleNodes.length;
+            wbGraphStats.links = visibleLinks.length;
+            wbGraphStats.orphans = visibleNodes.reduce((acc, n) => acc + (deg.get(n.id) ? 0 : 1), 0);
+
+            // 🔧 标签封顶：宽泛搜索词可能命中数百词条，全开标签会每帧渲染数百文本掉帧；
+            // 仅保留度数 Top80 的命中标签（聚光灯悬浮时仍能看到任意节点名）
+            if (kw) {
+                const hits = visibleNodes.filter(n => n.label && n.label.show);
+                if (hits.length > 80) {
+                    hits.sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0));
+                    hits.forEach((hn, i) => { if (i >= 80) hn.label.show = false; });
+                }
+            }
+
+            // 规模自适应物理参数：大书收缩斥力 + 高摩擦快速收敛
+            // ⚠️ 不设 layoutAnimation:false —— 同步跑完全部物理迭代会冻结 UI 数秒（v2 回归，已移除）
+            const n = visibleNodes.length;
+            const forceParams = n > 200
+                ? { repulsion: 120, edgeLength: [15, 60], gravity: 0.15, friction: 0.8 }
+                : { repulsion: 150, edgeLength: [20, 70], gravity: 0.15, friction: 0.6 };
+
+            const option = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    formatter: (params) => {
+                        if (params.dataType === 'node') {
+                            return `<b>${params.name}</b><br/>关联度: ${deg.get(params.data.id) || 0} 条连线<br/>👉 点击节点可跳转直达词条`;
+                        }
+                        return `<b>关联引用</b>: ${params.data.source} ➔ ${params.data.target}<br/>命中 ${params.data.weight} 个触发词`;
+                    }
+                },
+                series: [{
+                    type: 'graph',
+                    layout: wbGraphLayout.value,
+                    data: visibleNodes,
+                    links: visibleLinks,
+                    roam: true,        // 滚轮缩放 + 鼠标平移
+                    draggable: true,   // 允许单独拖拽球体
+
+                    symbolSize: 12,
+                    label: { show: false, position: 'right' },
+
+                    // ✨ 聚光灯效应：悬浮只高亮当前节点与邻居，其余全部变暗沉寂
+                    emphasis: {
+                        focus: 'adjacency',
+                        lineStyle: { width: 3 },
+                        label: {
+                            show: true,
+                            fontSize: 13,
+                            color: '#34d399',
+                            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                            padding: [4, 8],
+                            borderRadius: 4
+                        }
+                    },
+
+                    force: forceParams,
+                    edgeSymbol: ['none', 'arrow'],
+                    edgeSymbolSize: [4, 7],
+                    lineStyle: { color: '#a1a1aa', width: 1.2 }
+                }]
+            };
+
+            wbChartInstance.setOption(option, true);
+        };
+
+        // 绑定节点点击事件：关闭图谱，展开并平滑滚动定位 + 高亮闪烁目标词条
+        const bindWbGraphEvents = () => {
+            if (!wbChartInstance) return;
+            wbChartInstance.off('click');
+            wbChartInstance.on('click', (params) => {
+                if (params.dataType === 'node' && params.data.entryIndex !== undefined) {
+                    closeWbGraphModal();
+                    const targetEntry = activeWorldbook.value.data.entries[params.data.entryIndex];
+                    if (!targetEntry) return;
+                    targetEntry._collapsed = false; // 自动展开
+
+                    // ✅ 增强：平滑滚动到词条卡片并高亮闪烁（用 getEntryUid 做稳定锚点，不受搜索过滤影响）
+                    nextTick(() => {
+                        const dom = document.getElementById('wb-entry-' + getEntryUid(targetEntry));
+                        if (dom) {
+                            dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            dom.classList.add('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
+                            setTimeout(() => {
+                                dom.classList.remove('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
+                            }, 1800);
+                        }
+                    });
+                    addLog(`📍 通过图谱定位到词条: #${params.data.entryIndex + 1}`, 'info');
+                }
+            });
+        };
 
         const openWbGraphModal = () => {
             if (!activeWorldbook.value || !activeWorldbook.value.data || !activeWorldbook.value.data.entries || activeWorldbook.value.data.entries.length === 0) {
@@ -3273,130 +3667,71 @@ export default {
                 return;
             }
             showWbGraphModal.value = true;
+            wbGraphBuilding.value = true;
+            window.addEventListener('resize', handleWbGraphResize);
 
-            // 待 DOM 挂载后渲染 ECharts
+            // 待 DOM 挂载后初始化 ECharts
             nextTick(() => {
                 const chartDom = document.getElementById('wb-graph-container');
-                if (!chartDom) return;
+                if (!chartDom) { wbGraphBuilding.value = false; return; }
 
                 if (wbChartInstance) wbChartInstance.dispose();
                 wbChartInstance = echarts.init(chartDom, theme.value === 'light' ? 'light' : 'dark');
+                bindWbGraphEvents();
 
-                const entries = activeWorldbook.value.data.entries;
-                const nodes = [];
-                const links = [];
-
-                // 构建节点 (Nodes) —— 300+ 节点需调小球体（按内容长度微调区分大小，范围 10-22）
-                entries.forEach((e, idx) => {
-                    const label = e.comment || (Array.isArray(e.key) ? e.key.join('/') : e.key) || `词条 #${idx + 1}`;
-                    nodes.push({
-                        id: String(e.uid || idx),
-                        name: label,
-                        symbolSize: Math.max(10, Math.min(22, 8 + String(e.content || '').length / 40)),
-                        entryIndex: idx,
-                        itemStyle: {
-                            color: e.enabled === false ? '#71717a' : (e.constant ? '#6366f1' : '#d97706')
-                        }
-                    });
-                });
-
-                // 构建引用连线 (Edges: 当 eA 的 content 包含 eB 的 trigger key 时拉线)
-                entries.forEach((eA, idxA) => {
-                    const contentA = (eA.content || '').toLowerCase();
-                    if (!contentA) return;
-
-                    entries.forEach((eB, idxB) => {
-                        if (idxA === idxB) return;
-                        const keysB = Array.isArray(eB.key) ? eB.key : (eB.key ? [eB.key] : []);
-                        const hit = keysB.some(k => k && k.trim() && contentA.includes(k.trim().toLowerCase()));
-                        if (hit) {
-                            links.push({
-                                source: String(eA.uid || idxA),
-                                target: String(eB.uid || idxB),
-                                lineStyle: { curveness: 0.1, opacity: 0.5 }
-                            });
-                        }
-                    });
-                });
-
-                const option = {
-                    backgroundColor: 'transparent',
-                    tooltip: {
-                        formatter: (params) => {
-                            if (params.dataType === 'node') {
-                                return `<b>${params.name}</b><br/>👉 点击节点可跳转直达词条`;
-                            }
-                            return `<b>关联引用</b>: ${params.data.source} ➔ ${params.data.target}`;
-                        }
-                    },
-                    series: [{
-                        type: 'graph',
-                        layout: 'force',
-                        data: nodes,
-                        links: links,
-                        roam: true,        // 滚轮缩放 + 鼠标平移
-                        draggable: true,   // 允许单独拖拽球体
-
-                        // 1. 🎛️ 尺寸控制：300 节点球体调小（series 级默认；节点级按内容长度微调区分）
-                        symbolSize: 12,
-
-                        // 2. 👁️ 视觉降噪：默认不显示文字，避免 300 个名字糊成黑影
-                        label: { show: false, position: 'right' },
-
-                        // 3. ✨ 聚光灯效应：悬浮只高亮当前节点与邻居，其余全部变暗沉寂
-                        emphasis: {
-                            focus: 'adjacency',
-                            lineStyle: { width: 3 },
-                            label: {
-                                show: true,
-                                fontSize: 13,
-                                color: '#34d399',
-                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                                padding: [4, 8],
-                                borderRadius: 4
-                            }
-                        },
-
-                        // 4. ⚙️ 物理引擎镇定剂：friction 0.6 让 300 节点迅速冷静停稳，杜绝鬼畜抖动
-                        force: {
-                            repulsion: 150,
-                            edgeLength: [20, 70],
-                            gravity: 0.15,
-                            layoutAnimation: true,
-                            friction: 0.6
-                        },
-                        edgeSymbol: ['none', 'arrow'],
-                        edgeSymbolSize: [4, 7],
-                        lineStyle: { color: '#a1a1aa', width: 1.2 }
-                    }]
-                };
-
-                wbChartInstance.setOption(option);
-
-                // 点击节点事件：关闭图谱，展开并平滑滚动定位 + 高亮闪烁目标词条
-                wbChartInstance.off('click');
-                wbChartInstance.on('click', (params) => {
-                    if (params.dataType === 'node' && params.data.entryIndex !== undefined) {
+                // 大书同步构建会阻塞主线程：先让弹窗与 loading 遮罩完成绘制，再分批后台构建
+                setTimeout(async () => {
+                    try {
+                        await buildWbGraphData();
+                        renderWbGraph();
+                    } catch (e) {
+                        console.error('世界书图谱构建失败:', e);
+                        nativeAlert('图谱构建失败: ' + e.message, 'error');
                         showWbGraphModal.value = false;
-                        const targetEntry = activeWorldbook.value.data.entries[params.data.entryIndex];
-                        if (!targetEntry) return;
-                        targetEntry._collapsed = false; // 自动展开
-
-                        // ✅ 增强：平滑滚动到词条卡片并高亮闪烁（用 getEntryUid 做稳定锚点，不受搜索过滤影响）
-                        nextTick(() => {
-                            const dom = document.getElementById('wb-entry-' + getEntryUid(targetEntry));
-                            if (dom) {
-                                dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                dom.classList.add('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
-                                setTimeout(() => {
-                                    dom.classList.remove('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
-                                }, 1800);
-                            }
-                        });
-                        addLog(`📍 通过图谱定位到词条: #${params.data.entryIndex + 1}`, 'info');
+                    } finally {
+                        wbGraphBuilding.value = false;
                     }
-                });
+                }, 50);
             });
+        };
+
+        const closeWbGraphModal = () => {
+            showWbGraphModal.value = false;
+            window.removeEventListener('resize', handleWbGraphResize);
+            // 延迟销毁：给过渡动画时间，防 Canvas 上下文未释放导致低配机内存溢出
+            if (wbChartInstance) {
+                const inst = wbChartInstance;
+                wbChartInstance = null;
+                setTimeout(() => {
+                    if (inst && !inst.isDisposed()) inst.dispose();
+                }, 300);
+            }
+        };
+
+        const updateWbGraphLayout = (mode) => {
+            wbGraphLayout.value = mode;
+            renderWbGraph();
+        };
+
+        // 搜索防抖：停止输入 300ms 后才重渲（过滤走缓存，成本极低）
+        watch(wbGraphSearch, () => {
+            clearTimeout(wbGraphSearchTimer);
+            wbGraphSearchTimer = setTimeout(() => renderWbGraph(), 300);
+        });
+
+        // 📷 导出当前世界书图谱为 PNG（2x 分辨率，跟随主题底色）
+        const exportWbGraph = () => {
+            if (!wbChartInstance) return;
+            try {
+                const url = wbChartInstance.getDataURL({ pixelRatio: 2, backgroundColor: theme.value === 'light' ? '#ffffff' : '#09090b' });
+                const bookName = ((activeWorldbook.value && activeWorldbook.value.name) || 'worldbook').replace(/\.json$/i, '');
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `世界书图谱_${bookName}_${new Date().toISOString().slice(0, 10)}.png`;
+                a.click();
+            } catch (e) {
+                nativeAlert('图谱导出失败: ' + e.message, 'error');
+            }
         };
 
         // =========================================================
@@ -3626,7 +3961,7 @@ export default {
         const {
             saveSnapshotSettings, triggerManualSnapshot,
             showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
-            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,
+            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, deleteSnapshot,
             cleanAllSnapshots, cleanOrphanSnapshots
         } = useSnapshots({ snapshotConfig, library, cardData, currentFolderPath, nativeAlert, confirmDialog, addLog, showToast, refreshCardData });
 
@@ -3656,7 +3991,7 @@ export default {
             handleCardClick, toggleSelection,
             batchBarStyle, startBatchBarDrag, resetBatchBarPos,
             batchExportSelected, batchDeleteSelected, batchAddTag
-        } = useBatch({ selectedIds, lastSelectedIndex, library, cardData, openFromLibrary, paginatedLibrary, reset, cleanupEmptyCategories, persistCardUpdate, nativeAlert, confirmDialog, appPrompt, clearSelection });
+        } = useBatch({ selectedIds, lastSelectedIndex, library, cardData, openFromLibrary, paginatedLibrary, reset, cleanupEmptyCategories, persistCardUpdate, deleteCardOverlays, nativeAlert, confirmDialog, appPrompt, clearSelection });
 
         // � 换角色卡图：选择新立绘替换，成功后刷新路径/立绘，并展示校验校准结果
         // （item 为空时自动定位当前打开的卡片；PNG 卡原地替换，WebP / JSON 卡升级为标准 PNG 卡）
@@ -3702,7 +4037,7 @@ export default {
             showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup,
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal
-        } = useDedupe({ library, worldbooks, activeWorldbook, cardData, estimateCardTokens, nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories });
+        } = useDedupe({ library, worldbooks, activeWorldbook, cardData, estimateCardTokens, nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories, deleteCardOverlays });
 
         // 🌍 世界书库与分组：组合式函数注入（共享状态 worldbooks/wbCategoryMap 等保留在 App.vue）
         const {
@@ -3715,9 +4050,27 @@ export default {
 
         // 📚 世界书词条深度编辑 (Entry IDE)：组合式函数注入（activeWorldbook 等共享状态保留在 App.vue）
         const {
-            addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
-            entrySearchQuery, filteredWorldbookEntries
-        } = useWorldbookEntries({ activeWorldbook, addLog, confirmDialog });
+            ensureUid,
+            addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry, moveEntry,
+            entrySearchQuery, entryFilterState, entrySortBy, filteredWorldbookEntries,
+            // ⚠️ 重命名：与 useTags 的标签批量模式 batchMode 区分（词条批量模式为布尔开关）
+            batchMode: entryBatchMode, batchSelected, toggleBatchMode: toggleEntryBatchMode, toggleBatchSelect, selectAllEntries, clearBatchSelection,
+            batchToggleEnabled, batchDeleteEntries,
+            entryHealthReport, runEntryHealthCheck
+        } = useWorldbookEntries({ activeWorldbook, addLog, confirmDialog, nativeAlert });
+
+        // 🔎 全库词条搜索与反向引用：组合式函数注入
+        const {
+            globalEntryIndex, globalEntrySearchQuery, globalEntrySearchResults,
+            showGlobalEntrySearchModal, openGlobalEntrySearch, closeGlobalEntrySearch, jumpToEntrySource
+        } = useGlobalEntrySearch({ worldbooks, library, appMode, activeWorldbook, openFromLibrary });
+
+        // 📤 世界书扩展：提取/JSONL导入/批量导出/快照/统计
+        const {
+            extractWorldbookFromCard, importWbFromJsonl, exportWorldbooksBatch,
+            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot,
+            wbStats
+        } = useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookDirPath, nativeAlert, addLog, confirmDialog });
 
         // ✨ AI 打标 / 翻译 / 格式升维：组合式函数注入（共享状态与 API 配置保留在 App.vue）
         const {
@@ -3743,9 +4096,17 @@ export default {
         const {
             showGraph,
             graphLayoutMode, graphSearchKeyword, minLinkWeight,
-            isolateCurrentGroup, edgeFilters,
-            openGraph, closeGraph, renderGraph, updateGraphLayout
+            isolateCurrentGroup, edgeFilters, graphStats, graphBuilding,
+            openGraph, closeGraph, renderGraph, updateGraphLayout, exportGraph
         } = useGraph({ library, cardData, imgUrl, currentTab, chatHistory, worldbookExpanded, nativeAlert, allCategories, currentCategoryKey });
+
+        // 🌌 统一图谱入口：按当前模式智能分流——
+        // 角色卡模式 → 角色宇宙关系图谱；世界书模式 → 当前世界书词条关联图谱
+        // （顶栏唯一全局入口；世界书 IDE 编辑区另有「🌐 关系图谱」上下文快捷键）
+        const openGraphSmart = () => {
+            if (appMode.value === 'worldbooks') return openWbGraphModal();
+            return openGraph();
+        };
 
         // 🏷️ 标签系统：组合式函数注入（共享状态 systemCommonTags/tagLangMode 保留在 App.vue，此处注入操作逻辑与局部状态）
         const {
@@ -3756,7 +4117,7 @@ export default {
             globalAvailableTags, newGlobalTagInput, addTagToGlobalPool,
             removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags,
             appendTagToSearch, isEditingSystemTags, addGlobalTag
-        } = useTags({ systemCommonTags, tagLangMode, library, sanitizeImportedTags, confirmDialog, nativeAlert, persistCardUpdate, cardData, searchQueryInput, selectedIds, clearSelection, syncConfigToDisk });
+        } = useTags({ systemCommonTags, tagLangMode, library, sanitizeImportedTags, confirmDialog, nativeAlert, persistCardUpdate, cardData, searchQueryInput, selectedIds, clearSelection, syncConfigToDisk, createProgressToast });
 
         // ===== SFC 化：构建全局上下文对象（provide 给 HeaderBar/SidebarPanel/EditorPanel 子组件共享） =====
         const ctx = {
@@ -3780,7 +4141,7 @@ export default {
             snapshotConfig, saveSnapshotSettings,
             // 📸 历史快照查看与一键恢复
             showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
-            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, cleanAllSnapshots, cleanOrphanSnapshots,
+            openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, deleteSnapshot, cleanAllSnapshots, cleanOrphanSnapshots,
             currentPage, totalPages,
             searchQuery, searchQueryInput, filteredLibrary, paginatedLibrary,
             selectFixedDirectory, addManualTag, changePage,
@@ -3814,10 +4175,10 @@ export default {
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
             isChatRenderMode, // 【新增暴露】渲染/代码模式开关
             sendMessage, clearChat,
-            showGraph, openGraph, closeGraph,
+            showGraph, graphBuilding, openGraph, closeGraph,
             graphLayoutMode, graphSearchKeyword, minLinkWeight,
-            isolateCurrentGroup, edgeFilters,
-            updateGraphLayout, renderGraph,
+            isolateCurrentGroup, edgeFilters, graphStats,
+            updateGraphLayout, renderGraph, exportGraph,
             estimateTokens, cardTokenStats, estimateCardTokens,
             showTextModal, textModalTitle, textModalContent, textModalFontSize, openTextModal, saveTextModal,
             showImageModal, previewImageUrl, openImageModal,
@@ -3841,8 +4202,19 @@ export default {
             // 💾 统一 IPC 落盘
             syncWorldbooksToDisk,
             // 🌍 世界书词条深度编辑 (Entry IDE)
-            addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry,
-            entrySearchQuery, filteredWorldbookEntries,
+            ensureUid,
+            addWorldbookEntry, deleteWorldbookEntry, duplicateWorldbookEntry, moveEntry,
+            entrySearchQuery, entryFilterState, entrySortBy, filteredWorldbookEntries,
+            entryBatchMode, batchSelected, toggleEntryBatchMode, toggleBatchSelect, selectAllEntries, clearBatchSelection,
+            batchToggleEnabled, batchDeleteEntries,
+            entryHealthReport, runEntryHealthCheck,
+            // 🔎 全库词条搜索与反向引用
+            globalEntryIndex, globalEntrySearchQuery, globalEntrySearchResults,
+            showGlobalEntrySearchModal, openGlobalEntrySearch, closeGlobalEntrySearch, jumpToEntrySource,
+            // 📤 世界书扩展
+            extractWorldbookFromCard, importWbFromJsonl, exportWorldbooksBatch,
+            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot,
+            wbStats,
             // 🎛️ 角色卡内嵌世界书细化操作（词条增删/克隆/排序/搜索/标签化触发词）
             characterWorldbookSearchQuery, filteredCharacterWorldbookEntries,
             addCharacterWorldbookEntry, deleteCharacterWorldbookEntry,
@@ -3861,8 +4233,12 @@ export default {
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
             // ⚖️ 双屏差异比对器 (Diff Inspector)
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal,
-            // 🌐 世界书关系图谱 + 🔗 多书合并 + 🔀 条目导入
-            showWbGraphModal, openWbGraphModal, showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge,
+            // 🌐 世界书关系图谱 v2（过滤/搜索/布局/统计/导出）+ 🔗 多书合并 + 🔀 条目导入
+            showWbGraphModal, openWbGraphModal, closeWbGraphModal,
+            wbGraphLayout, wbGraphSearch, wbGraphFilters, wbGraphMinWeight, wbGraphStats, wbGraphBuilding,
+            updateWbGraphLayout, renderWbGraph, exportWbGraph,
+            openGraphSmart,
+            showWbMergeModal, selectedWbMergePaths, openWbMergeModal, executeWorldbookMerge,
             showWbImportModal, importSourceBook, importCandidates, selectedImportEntries, importableSourceBooks,
             openWbImportModal, pickImportSource, confirmImportEntries,
             // 🚀 系统版本更新检测

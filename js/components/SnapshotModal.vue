@@ -39,6 +39,7 @@
                         </div>
                         <span class="text-[10px] text-zinc-500 font-mono shrink-0">{{ formatSize(snap.size) }}</span>
                         <button @click="$emit('restore', snap)" class="shrink-0 px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded transition" title="把当前卡片恢复为该快照内容">↩️ 恢复</button>
+                        <button @click="$emit('delete', snap)" class="shrink-0 px-2.5 py-1 bg-zinc-700 hover:bg-rose-600 hover:text-white text-[11px] text-zinc-400 rounded transition" title="删除这条快照（不可恢复）">🗑️</button>
                     </div>
                 </div>
 
@@ -65,7 +66,7 @@ export default {
         cardName: { type: String, default: '' },
         cardPath: { type: String, default: '' }
     },
-    emits: ['close', 'restore', 'open-folder'],
+    emits: ['close', 'restore', 'delete', 'open-folder'],
     methods: {
         formatTime(ms) {
             if (!ms) return '未知时间';

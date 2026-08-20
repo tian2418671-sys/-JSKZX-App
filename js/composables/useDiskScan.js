@@ -27,13 +27,16 @@ export function useDiskScan({
     // 🛰️ 全盘深度检索引擎弹窗开关（新的独立 UI，替代旧 runDiskScan 进度蒙版）
     const showDiskScanModal = ref(false);
 
-    // 将扫描到的绝对路径列表导入到库中（追加模式，不清空现有库；并发受限批处理）
+    // 将扫描结果导入到库中（追加模式，不清空现有库；并发受限批处理）
+    // 🔧 V3 兼容两种形态：主进程验证后的真卡对象 [{path,...}] 或收编后的目标路径字符串数组
     const importScanPaths = async (paths) => {
         let added = 0;
         const CONCURRENCY = 8;
         for (let i = 0; i < paths.length; i += CONCURRENCY) {
             const batch = paths.slice(i, i + CONCURRENCY);
-            const results = await Promise.all(batch.map(async (absPath) => {
+            const results = await Promise.all(batch.map(async (entry) => {
+                const absPath = (typeof entry === 'string') ? entry : (entry && entry.path);
+                if (!absPath) return false;
                 const name = absPath.split(/[\\/]/).pop() || absPath;
                 const isImage = /\.(png|webp)$/i.test(name);
                 const file = {
@@ -65,18 +68,18 @@ export function useDiskScan({
 
         try {
             if (mode === 'specific') {
-                // 1. 指定盘符/文件夹扫描（主进程弹出原生目录选择器），传递体积过滤开关
-                const result = await window.electronAPI.scanTargetFolder(null, useSizeFilter.value);
+                // 1. 指定盘符/文件夹扫描（主进程弹出原生目录选择器），传递体积过滤开关 + 当前库排除
+                const result = await window.electronAPI.scanTargetFolder(null, useSizeFilter.value, currentFolderPath.value || null);
                 if (result && result.files) foundFiles = result.files;
 
             } else if (mode === 'all') {
-                // 2. 暴力全盘扫描
+                // 2. 暴力全盘扫描（同样排除当前库，杜绝"扫出一堆自家卡"）
                 const drives = await window.electronAPI.getWindowsDrives();
                 diskScanProgress.value.status = `共检测到 ${drives.length} 个本地磁盘，准备遍历...`;
 
                 for (const drive of drives) {
                     diskScanProgress.value.status = `正在深度扫描磁盘: ${drive}`;
-                    const result = await window.electronAPI.scanTargetFolder(drive, useSizeFilter.value);
+                    const result = await window.electronAPI.scanTargetFolder(drive, useSizeFilter.value, currentFolderPath.value || null);
                     if (result && result.files) {
                         foundFiles = foundFiles.concat(result.files);
                     }
@@ -84,15 +87,33 @@ export function useDiskScan({
             }
 
             if (foundFiles.length === 0) {
-                nativeAlert('扫描结束，未在指定区域发现新的 PNG 角色卡文件。', 'info');
+                nativeAlert('扫描结束，未发现库外的新角色卡文件。\n（库内卡片与同名副本已自动跳过）', 'info');
             } else {
-                diskScanProgress.value.status = `✅ 扫描完成！共发现 ${foundFiles.length} 张卡片，准备导入...`;
+                diskScanProgress.value.status = `✅ 扫描完成！共发现 ${foundFiles.length} 张库外新卡，准备导入...`;
 
-                // 将扫描到的卡片路径逐个解析并追加进库（未识别的文件自动跳过）
-                const addedCount = await importScanPaths(foundFiles);
+                // 🔧 安全收编：扫描结束后主进程已撤销盘符级白名单，
+                // 不能再 readBuffer 直读磁盘角落原路径——先复制进当前库
+                // （sys:importExternalCards 源路径不校验白名单、同名跳过不覆盖），
+                // 再解析库内副本（库根目录在白名单内，稳定可读）
+                if (!currentFolderPath.value) {
+                    nativeAlert('尚未打开角色库目录，无法导入扫描结果。\n请先通过「打开角色库」选择一个文件夹。', 'warning');
+                    return; // finally 会复位 isScanningDisk
+                }
+                const res = await window.electronAPI.importExternalCards(foundFiles, currentFolderPath.value);
+                if (!res || !res.success) {
+                    nativeAlert(`收编外部卡片失败: ${(res && res.error) || '未知错误'}`, 'error');
+                    return;
+                }
+                const addedCount = await importScanPaths(res.copied || []);
+                const skipped = (res.skipped || []).length;
+
                 diskScanProgress.value.status = `✅ 已成功导入 ${addedCount} 张角色卡！`;
-
-                nativeAlert(`全盘/指定扫描完成！\n共提取 ${foundFiles.length} 个角色卡文件，成功导入 ${addedCount} 张。\n（无法识别的文件已自动跳过）`, 'info');
+                nativeAlert(
+                    `全盘/指定扫描完成！\n共提取 ${foundFiles.length} 个角色卡文件，成功导入 ${addedCount} 张。` +
+                    (skipped > 0 ? `\n${skipped} 张与库内卡片同名，已跳过（不覆盖）。` : '') +
+                    `\n（无法识别的文件已自动跳过）`,
+                    'info'
+                );
             }
         } catch (err) {
             console.error("扫描失败:", err);

@@ -217,6 +217,7 @@
                                 <div class="flex gap-2">
                                     <button @click="expandAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部展开</button>
                                     <button @click="collapseAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部折叠</button>
+                                    <button @click="extractWorldbookFromCard(cardData, safeData.name)" class="text-xs px-2.5 py-1 bg-amber-600/80 hover:bg-amber-500 border border-amber-500/30 rounded text-amber-100 transition whitespace-nowrap" title="把该卡片内嵌世界书提取为独立世界书">📤 提取为世界书</button>
                                 </div>
                             </div>
                             <div class="flex gap-2 items-center">
@@ -467,6 +468,7 @@
                     </div>
 
                     <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                        <button @click="openWbSnapshots(activeWorldbook)" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="查看当前世界书的历史快照并回滚">🕒 快照</button>
                         <button @click="openWbGraphModal" class="px-2 py-1 theme-element hover:border-amber-500 border rounded text-[11px] font-medium transition whitespace-nowrap" title="查看当前世界书的词条关联图谱">
                             🌐 关系图谱
                         </button>
@@ -502,10 +504,10 @@
                             <span class="text-[10px] font-mono font-bold writing-vertical-rl">{{ (activeWorldbook.data && activeWorldbook.data.entries) ? activeWorldbook.data.entries.length : 0 }} 词条</span>
                         </div>
 
-                        <!-- 展开态：搜索 + 词条列表 -->
+                        <!-- 展开态：搜索 + 筛选/排序 + 批量 + 词条列表 -->
                         <div v-else class="flex-1 flex flex-col overflow-hidden">
-                            <div class="p-2 border-b border-zinc-800 flex gap-1 items-center shrink-0 bg-zinc-900">
-                                <div class="relative flex-1">
+                            <div class="p-2 border-b border-zinc-800 flex gap-1 items-center shrink-0 bg-zinc-900 flex-wrap">
+                                <div class="relative flex-1 min-w-[120px]">
                                     <span class="absolute left-2 top-1.5 text-zinc-500 text-xs">🔍</span>
                                     <input v-model="entrySearchQuery" type="text" placeholder="搜索触发词或备注..."
                                            class="w-full h-7 bg-zinc-800/80 border border-zinc-700 rounded pl-7 pr-2 text-xs text-zinc-200 focus:border-emerald-500 focus:outline-none transition">
@@ -513,14 +515,52 @@
                                 <button @click="addWorldbookEntry" title="新建词条" class="h-7 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs shrink-0 transition flex items-center justify-center">➕</button>
                             </div>
 
+                            <!-- 筛选 / 排序 / 批量 / 体检 工具行 -->
+                            <div class="px-2 py-1.5 border-b border-zinc-800 flex flex-wrap gap-1.5 items-center shrink-0 bg-zinc-900/60">
+                                <select v-model="entryFilterState" class="h-6 bg-zinc-800 border border-zinc-700 rounded px-1 text-[10px] text-zinc-300 focus:outline-none">
+                                    <option value="all">全部状态</option>
+                                    <option value="enabled">仅启用</option>
+                                    <option value="disabled">仅停用</option>
+                                    <option value="constant">仅常驻</option>
+                                    <option value="selective">仅条件触发</option>
+                                </select>
+                                <select v-model="entrySortBy" class="h-6 bg-zinc-800 border border-zinc-700 rounded px-1 text-[10px] text-zinc-300 focus:outline-none">
+                                    <option value="default">默认顺序</option>
+                                    <option value="orderAsc">权重升序</option>
+                                    <option value="orderDesc">权重降序</option>
+                                    <option value="name">按名称</option>
+                                    <option value="contentLen">按正文长度</option>
+                                </select>
+                                <button @click="toggleBatchMode"
+                                        :class="batchMode ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'"
+                                        class="h-6 px-1.5 border rounded text-[10px] transition shrink-0">☑️ 批量</button>
+                                <button @click="runEntryHealthCheck" title="查重 + 空词条/孤儿触发词体检"
+                                        class="h-6 px-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-amber-400 transition shrink-0">🩺 体检</button>
+                            </div>
+
+                            <!-- 批量操作栏（仅批量模式显示） -->
+                            <div v-if="batchMode" class="px-2 py-1.5 border-b border-zinc-800 flex flex-wrap gap-1.5 items-center shrink-0 bg-emerald-500/10">
+                                <span class="text-[10px] text-emerald-400 font-bold">已选 {{ batchSelected.size }} 条</span>
+                                <button @click="selectAllEntries" class="h-6 px-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">全选</button>
+                                <button @click="clearBatchSelection" class="h-6 px-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">清空</button>
+                                <div class="flex-1"></div>
+                                <button @click="batchToggleEnabled(true)" class="h-6 px-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-600 rounded text-[10px] transition">启用</button>
+                                <button @click="batchToggleEnabled(false)" class="h-6 px-1.5 bg-zinc-700 hover:bg-zinc-600 text-white border border-zinc-600 rounded text-[10px] transition">停用</button>
+                                <button @click="batchDeleteEntries" class="h-6 px-1.5 bg-rose-600 hover:bg-rose-500 text-white border border-rose-600 rounded text-[10px] transition">删除</button>
+                            </div>
+
                             <div class="flex-1 overflow-y-auto pt-1 px-1 custom-scrollbar" :class="showEditorLogs ? 'pb-40' : 'pb-8'">
                                 <div v-for="(entry, index) in filteredWorldbookEntries" :key="entry.uid || index"
-                                     :id="'wb-entry-' + getEntryUid(entry)"
-                                     @click="selectEntry(entry)"
+                                     :id="'wb-entry-' + ensureUid(entry)"
+                                     @click="batchMode ? toggleBatchSelect(entry) : selectEntry(entry)"
                                      class="group relative flex items-center gap-1.5 p-1.5 mb-0.5 rounded cursor-pointer border border-transparent hover:bg-zinc-800/80 transition"
                                      :class="currentEntry === entry ? 'bg-zinc-800 border-emerald-500/50' : ''">
 
-                                    <button @click.stop="toggleEntryState(entry)" class="shrink-0 w-2 h-2 rounded-full transition"
+                                    <input v-if="batchMode" type="checkbox" :checked="batchSelected.has(ensureUid(entry))"
+                                           @click.stop @change="toggleBatchSelect(entry)"
+                                           class="shrink-0 rounded accent-emerald-500">
+
+                                    <button v-else @click.stop="toggleEntryState(entry)" class="shrink-0 w-2 h-2 rounded-full transition"
                                             :title="entry.enabled === false ? '已停用，点击启用' : '已启用，点击停用'"
                                             :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></button>
 
@@ -529,9 +569,12 @@
                                             {{ formatKeys(entry.key) }}
                                         </span>
                                         <span v-if="entry.comment" class="text-[9px] text-zinc-500 truncate mt-0.5">{{ entry.comment }}</span>
+                                        <span class="text-[9px] text-amber-500/70 font-mono mt-0.5">⚡ {{ entryTokens(entry) }}</span>
                                     </div>
 
                                     <div class="hidden group-hover:flex items-center gap-1 absolute right-1 bg-zinc-800/95 backdrop-blur px-1 py-0.5 rounded border border-zinc-700 shadow-sm z-10">
+                                        <button @click.stop="moveEntry(entry, -1)" class="text-[10px] hover:text-white" title="上移">↑</button>
+                                        <button @click.stop="moveEntry(entry, 1)" class="text-[10px] hover:text-white" title="下移">↓</button>
                                         <button @click.stop="duplicateWorldbookEntry(entry)" class="text-[10px] hover:text-blue-400" title="复制词条">📋</button>
                                         <button @click.stop="deleteWorldbookEntry(entry)" class="text-[10px] hover:text-rose-400" title="删除词条">🗑️</button>
                                     </div>
@@ -646,25 +689,25 @@
         <div v-if="isToolbarMenuOpen" class="fixed inset-0 z-[9999]" @click="isToolbarMenuOpen = false">
             <div class="fixed w-48 max-h-[70vh] overflow-y-auto flex flex-col gap-1 p-1.5 bg-zinc-900/95 backdrop-blur border border-zinc-700 rounded-lg shadow-2xl custom-scrollbar"
                  :style="{ left: toolbarMenuPos.x + 'px', top: toolbarMenuPos.y + 'px' }" @click.stop>
-                <button @click="translateCardContent; isToolbarMenuOpen = false" :disabled="isTranslating" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-500 text-white" title="调用 AI 翻译角色设定/首条消息/场景/对话示例">
+                <button @click="translateCardContent(); isToolbarMenuOpen = false" :disabled="isTranslating" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-500 text-white" title="调用 AI 翻译角色设定/首条消息/场景/对话示例">
                     <span class="ico">🌐</span><span v-if="!isTranslating">一键汉化</span><span v-else class="animate-pulse">翻译中...</span>
                 </button>
-                <button @click="refactorCardFormat; isToolbarMenuOpen = false" :disabled="isRefactoring" class="tb-btn w-full bg-emerald-600 hover:bg-emerald-500 text-white" title="将旧格式（W++/JSON）设定重构为高密度 Markdown，大幅降低 Token 占用">
+                <button @click="refactorCardFormat(); isToolbarMenuOpen = false" :disabled="isRefactoring" class="tb-btn w-full bg-emerald-600 hover:bg-emerald-500 text-white" title="将旧格式（W++/JSON）设定重构为高密度 Markdown，大幅降低 Token 占用">
                     <span class="ico">✨</span><span v-if="!isRefactoring">格式升维</span><span v-else class="animate-pulse">重构中...</span>
                 </button>
-                <button @click="triggerManualSnapshot; isToolbarMenuOpen = false" class="tb-btn w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white" title="绕过冷却机制，立即将当前卡片状态备份至历史目录">
+                <button @click="triggerManualSnapshot(); isToolbarMenuOpen = false" class="tb-btn w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white" title="绕过冷却机制，立即将当前卡片状态备份至历史目录">
                     <span class="ico">📸</span>快照
                 </button>
                 <button @click="replaceCardImage(); isToolbarMenuOpen = false" class="tb-btn w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white" title="选择新立绘替换当前卡片（PNG 卡原地替换；WebP/JSON 卡转为标准 PNG 卡）">
                     <span class="ico">🖼️</span>换卡图
                 </button>
-                <button @click="saveToLocalDisk; isToolbarMenuOpen = false" class="tb-btn w-full bg-blue-600 hover:bg-blue-700 text-white">
+                <button @click="saveToLocalDisk(); isToolbarMenuOpen = false" class="tb-btn w-full bg-blue-600 hover:bg-blue-700 text-white">
                     <span class="ico">💾</span>覆盖保存
                 </button>
-                <button @click="exportPackage; isToolbarMenuOpen = false" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-700 text-white" title="一键打包卡片、独立世界书与正则脚本">
+                <button @click="exportPackage(); isToolbarMenuOpen = false" class="tb-btn w-full bg-indigo-600 hover:bg-indigo-700 text-white" title="一键打包卡片、独立世界书与正则脚本">
                     <span class="ico">📦</span>导出
                 </button>
-                <button @click="deleteCard; isToolbarMenuOpen = false" class="tb-btn w-full bg-red-600 hover:bg-red-700 text-white">
+                <button @click="deleteCard(); isToolbarMenuOpen = false" class="tb-btn w-full bg-red-600 hover:bg-red-700 text-white">
                     <span class="ico">🗑️</span>删除
                 </button>
             </div>
@@ -674,6 +717,7 @@
 
 <script>
 import { inject, ref, computed, watch } from 'vue';
+import { estimateTokens } from '../utils/tokenEstimate.js';
 
 export default {
     name: 'EditorPanel',
@@ -735,6 +779,13 @@ export default {
         const formatKeys = (keys) => {
             if (!keys || keys.length === 0) return '无触发词';
             return Array.isArray(keys) ? keys.join(', ') : String(keys);
+        };
+        // ✅ [世界书编辑器] 单条词条 Token 估算（触发词 + 次级触发词 + 正文）
+        const entryTokens = (entry) => {
+            if (!entry) return 0;
+            const keyText = Array.isArray(entry.key) ? entry.key.join(' ') : String(entry.key || '');
+            const secText = Array.isArray(entry.keysecondary) ? entry.keysecondary.join(' ') : '';
+            return estimateTokens([keyText, secText, entry.content || ''].join(' '));
         };
         // ✅ [世界书编辑器] 主触发词 key 逗号分隔双向绑定（原生字段映射，不污染 JSON）
         const primaryKeysStr = computed({
@@ -867,6 +918,23 @@ export default {
             formattedJson: ctx.formattedJson,
             activeWorldbook: ctx.activeWorldbook,
             entrySearchQuery: ctx.entrySearchQuery,
+            entryFilterState: ctx.entryFilterState,
+            entrySortBy: ctx.entrySortBy,
+            batchMode: ctx.entryBatchMode,
+            batchSelected: ctx.batchSelected,
+            toggleBatchMode: ctx.toggleEntryBatchMode,
+            toggleBatchSelect: ctx.toggleBatchSelect,
+            selectAllEntries: ctx.selectAllEntries,
+            clearBatchSelection: ctx.clearBatchSelection,
+            batchToggleEnabled: ctx.batchToggleEnabled,
+            batchDeleteEntries: ctx.batchDeleteEntries,
+            moveEntry: ctx.moveEntry,
+            entryHealthReport: ctx.entryHealthReport,
+            runEntryHealthCheck: ctx.runEntryHealthCheck,
+            ensureUid: ctx.ensureUid,
+            entryTokens,
+            extractWorldbookFromCard: ctx.extractWorldbookFromCard,
+            openWbSnapshots: ctx.openWbSnapshots,
             openWbGraphModal: ctx.openWbGraphModal,
             openWbImportModal: ctx.openWbImportModal,
             exportFilteredWorldbook: ctx.exportFilteredWorldbook,

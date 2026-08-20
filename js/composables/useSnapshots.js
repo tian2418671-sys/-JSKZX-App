@@ -168,11 +168,28 @@ export function useSnapshots({
         }
     };
 
+    // 🗑️ 删除单条历史快照（确认后调主进程删除，并从当前列表移除；仅删 .bak_history 内的快照文件）
+    const deleteSnapshot = async (snap) => {
+        if (!snap || !snap.path) return;
+        if (!window.electronAPI || typeof window.electronAPI.deleteCardSnapshot !== 'function') {
+            return nativeAlert('当前版本不支持删除快照，请更新应用。', 'warning');
+        }
+        const ok = await confirmDialog(`确定要删除这条历史快照吗？\n\n${snap.fileName}\n\n⚠️ 删除后不可恢复。`);
+        if (!ok) return;
+        const res = await window.electronAPI.deleteCardSnapshot(snap.path);
+        if (res && res.success) {
+            snapshotList.value = snapshotList.value.filter(s => s.path !== snap.path);
+            nativeAlert('已删除该历史快照。', 'info');
+        } else {
+            nativeAlert(`删除快照失败: ${(res && res.error) || '未知错误'}`, 'error');
+        }
+    };
+
     return {
         saveSnapshotSettings, // snapshotConfig 由 App.vue 持有，不返回（避免重复声明）
         triggerManualSnapshot,
         showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
-        openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal,
+        openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, deleteSnapshot,
         cleanAllSnapshots, cleanOrphanSnapshots
     };
 }

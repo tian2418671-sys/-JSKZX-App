@@ -9,45 +9,45 @@
            ref="sidebarEl"
            class="bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 relative"
            :style="sidebarStyle">
-        <!-- ⚡ 双引擎模式切换（紧凑） -->
-        <div class="px-2 py-2 border-b border-zinc-800 bg-zinc-900 flex gap-1.5 select-none">
+        <!-- ⚡ 双引擎模式切换 -->
+        <div class="px-3 py-2.5 border-b border-zinc-800 bg-zinc-900 flex gap-2 select-none">
             <button @click="appMode = 'characters'"
-                    :class="appMode === 'characters' ? 'bg-indigo-600 text-white shadow' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-                    class="flex-1 py-1 text-xs font-bold rounded shadow transition">
-                🎎 角色卡库 ({{ library.length }})
+                    :class="appMode === 'characters' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                    class="flex-1 py-1.5 text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5">
+                🎎 角色卡库 <span class="opacity-70 font-normal">({{ library.length }})</span>
             </button>
             <button @click="appMode = 'worldbooks'"
-                    :class="appMode === 'worldbooks' ? 'bg-amber-600 text-white shadow' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-                    class="flex-1 py-1 text-xs font-bold rounded shadow transition">
-                🌍 世界书库 ({{ worldbooks.length }})
+                    :class="appMode === 'worldbooks' ? 'bg-amber-600 text-white shadow-md shadow-amber-900/30' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                    class="flex-1 py-1.5 text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5">
+                🌍 世界书库 <span class="opacity-70 font-normal">({{ worldbooks.length }})</span>
             </button>
         </div>
 
         <!-- ============ 角色卡模式 ============ -->
         <template v-if="appMode === 'characters'">
-        <!-- ✅ [UI 方案1] 顶部两行紧凑：行1=搜索+多选+扫描+漏斗，行2=分类+排序 -->
-        <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-1.5 shrink-0 z-10">
+        <!-- ✅ [UI 方案1] 顶部搜索区：行1=搜索+多选+扫描+漏斗，行2=分类+排序 -->
+        <div class="px-3 py-2.5 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-2 shrink-0 z-10">
             <!-- 行1：搜索 + 多选 + 扫描 + 高级筛选漏斗 -->
-            <div class="flex items-center gap-1">
+            <div class="flex items-center gap-1.5">
                 <div class="relative flex-1">
-                    <span class="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
                     <input id="global-search-input" v-model="searchQueryInput" type="text"
                            placeholder="搜索名称/标签/世界书 (Ctrl+F)"
                            title="全局搜索名称、标签、世界书、关键词 (Ctrl+F 快速聚焦)"
-                           class="w-full h-7 bg-zinc-800/80 border border-zinc-700/60 rounded pl-7 pr-6 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500/80 transition">
-                    <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
+                           class="w-full h-8 bg-zinc-800/80 border border-zinc-700/60 rounded-lg pl-8 pr-6 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500/80 transition">
+                    <button v-if="searchQueryInput" @click="searchQueryInput = ''; searchQuery = ''" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs leading-none">✕</button>
                 </div>
                 <button @click="isMultiSelectMode = !isMultiSelectMode"
                         :title="isMultiSelectMode ? '退出批量多选' : '开启批量多选'"
-                        class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0"
+                        class="h-8 w-8 flex items-center justify-center rounded-lg text-xs transition shrink-0"
                         :class="isMultiSelectMode ? 'bg-amber-600 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50'">
                     ☑️
                 </button>
-                <button @click="refreshLibrary" title="重新扫描当前库目录（读取新放入的卡片）" class="h-7 px-2 flex items-center justify-center rounded text-xs transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50">
+                <button @click="refreshLibrary" title="重新扫描当前库目录（读取新放入的卡片）" class="h-8 w-8 flex items-center justify-center rounded-lg text-xs transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50">
                     🔄
                 </button>
                 <button @click="showAdvancedFilters = !showAdvancedFilters"
-                        class="h-7 px-2 flex items-center justify-center rounded transition shrink-0"
+                        class="h-8 w-8 flex items-center justify-center rounded-lg transition shrink-0"
                         :class="hasActiveFilters ? 'text-amber-500 border border-amber-500/50 bg-amber-500/10' : 'text-zinc-400 hover:text-zinc-200 border border-zinc-700/50 bg-zinc-800'"
                         :title="showAdvancedFilters ? '收起高级筛选' : '展开高级筛选'">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 9h12M10 14h4M12 19h0"/></svg>
@@ -55,7 +55,7 @@
             </div>
 
             <!-- 搜索语法提示（超级搜索引擎：多词 AND / 前缀语法 / 排除词） -->
-            <p class="text-[10px] text-zinc-500 leading-snug px-0.5 select-none">
+            <p class="text-[10px] text-zinc-500 leading-relaxed px-1.5 py-1 bg-zinc-800/40 border border-zinc-800 rounded-md select-none">
                 💡 <code class="text-zinc-400">傲娇 女仆</code>多词
                 <span class="text-zinc-700">|</span> <code class="text-zinc-400">t:奇幻</code>标签
                 <span class="text-zinc-700">|</span> <code class="text-zinc-400">a:作者</code>
@@ -65,13 +65,13 @@
             </p>
 
             <!-- 行2：分类下拉 + 排序下拉 -->
-            <div class="flex items-center gap-1.5 text-[11px]">
-                <select v-model="currentCategoryKey" class="flex-1 min-w-0 h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1.5 text-zinc-300 focus:outline-none focus:border-blue-500/80 truncate">
+            <div class="flex items-center gap-1.5 text-xs">
+                <select v-model="currentCategoryKey" class="flex-1 min-w-0 h-7 bg-zinc-800/80 border border-zinc-700/60 rounded-lg px-2 text-zinc-300 focus:outline-none focus:border-blue-500/80 truncate">
                     <option v-for="cat in allCategories" :key="cat.key" :value="cat.key">
                         📁 {{ getCategoryDisplayName(cat) }}
                     </option>
                 </select>
-                <select v-model="sortBy" title="列表排序方式" class="w-28 h-6 bg-zinc-800/80 border border-zinc-700/60 rounded px-1.5 text-zinc-400 focus:outline-none focus:border-blue-500/80 truncate shrink-0">
+                <select v-model="sortBy" title="列表排序方式" class="w-28 h-7 bg-zinc-800/80 border border-zinc-700/60 rounded-lg px-2 text-zinc-400 focus:outline-none focus:border-blue-500/80 truncate shrink-0">
                     <option value="name">排序: 名称</option>
                     <option value="time">排序: 最新</option>
                     <option value="tokens">排序: Token</option>
@@ -80,7 +80,7 @@
         </div>
 
         <!-- 高级筛选折叠面板（点击漏斗展开；平时不占空间） -->
-        <div v-if="showAdvancedFilters" class="px-1.5 pt-1.5 pb-1 border-b border-zinc-800 flex flex-col gap-1 bg-zinc-900 shadow-lg z-20">
+        <div v-if="showAdvancedFilters" class="px-3 py-2.5 border-b border-zinc-800 flex flex-col gap-2 bg-zinc-900 shadow-lg z-20">
             <!-- 行1：分组管理按钮（分类下拉已在顶部行2，避免重复的"All (全部)"下拉） -->
             <div class="flex items-center gap-1">
                 <span class="text-[10px] text-zinc-500 font-medium shrink-0">📁 分组:</span>
@@ -128,12 +128,12 @@
             </div>
         </div>
 
-        <!-- 列表头部：计数 + 视图切换 + 多选开关 -->
-        <div class="flex items-center justify-between px-2 py-1.5 bg-zinc-900 border-b border-zinc-800 text-xs">
-            <span class="font-bold text-zinc-400">卡片列表 ({{ filteredLibrary.length }})</span>
+        <!-- 列表头部：计数 + 视图切换 + 紧凑开关 -->
+        <div class="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800 text-xs">
+            <span class="font-bold text-zinc-400">卡片列表 <span class="text-zinc-600 font-normal">({{ filteredLibrary.length }})</span></span>
             <div class="flex items-center gap-1.5 shrink-0">
                 <button @click="toggleViewMode"
-                        class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition font-medium border border-zinc-700 flex items-center gap-1 shadow-sm"
+                        class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition font-medium border border-zinc-700 flex items-center gap-1 shadow-sm"
                         :title="viewMode === 'list' ? '当前：列表 (点击切换网格)' : '当前：网格 (点击切换列表)'">
                     <span v-if="viewMode === 'list'">🎴 网格</span>
                     <span v-else>📜 列表</span>
@@ -141,7 +141,7 @@
                 <!-- ✅ [UI 瘦身] 紧凑模式切换：仅列表视图下生效（隐藏副行/缩头像，一屏更多卡片） -->
                 <button v-if="viewMode === 'list'" @click="isCompactMode = !isCompactMode"
                         :class="isCompactMode ? 'bg-indigo-600 text-white shadow-sm' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'"
-                        class="px-2 py-0.5 rounded transition font-medium" :title="isCompactMode ? '当前：紧凑模式 (点击切换常规)' : '当前：常规模式 (点击切换紧凑)'">
+                        class="px-2.5 py-1 rounded-lg transition font-medium" :title="isCompactMode ? '当前：紧凑模式 (点击切换常规)' : '当前：常规模式 (点击切换紧凑)'">
                     {{ isCompactMode ? '📱 常规' : '🗜️ 紧凑' }}
                 </button>
             </div>
@@ -155,7 +155,7 @@
                  :class="['group relative flex items-center rounded-md cursor-pointer border select-none transition-all duration-150',
                           selectedIds.includes(item.id) ? 'bg-amber-950/20 border-amber-600/40' :
                           (cardData && cardData === item.data) ? 'bg-blue-600 border-blue-600 text-white shadow-inner' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-700/50']"
-                 :style="isCompactMode ? 'padding: 0.12em 0.3em; margin-bottom: 0.12em; gap: 0.4em;' : 'padding: 0.5em 0.6em; margin-bottom: 0.5em; gap: 0.7em;'">
+                 :style="isCompactMode ? 'padding: 0.14em 0.35em; margin-bottom: 0.14em; gap: 0.45em;' : 'padding: 0.65em 0.75em; margin-bottom: 0.6em; gap: 0.8em;'">
 
                 <input v-if="isMultiSelectMode" type="checkbox" :checked="selectedIds.includes(item.id)" @click.stop="toggleSelection(item.id)" :class="isCompactMode ? 'w-3 h-3' : 'w-3.5 h-3.5'" class="rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0 accent-blue-500">
 
@@ -163,10 +163,10 @@
                 <img v-if="item.avatar" :src="item.avatar" loading="lazy" decoding="async" draggable="false"
                      class="object-cover shrink-0 bg-zinc-900 border border-zinc-700/40 transition-transform group-hover:scale-105"
                      :class="isCompactMode ? 'rounded' : 'rounded-lg'"
-                     :style="isCompactMode ? 'width: 1.5em; height: 1.5em;' : 'width: 3.2em; height: 3.2em;'">
+                     :style="isCompactMode ? 'width: 1.5em; height: 1.5em;' : 'width: 3.4em; height: 3.4em;'">
                 <div v-else class="bg-zinc-700 border border-zinc-600 shrink-0 flex items-center justify-center text-zinc-500 font-bold"
                      :class="isCompactMode ? 'rounded' : 'rounded-lg'"
-                     :style="isCompactMode ? 'width: 1.5em; height: 1.5em; font-size: 0.7em;' : 'width: 3.2em; height: 3.2em; font-size: 1.2em;'">{{ isCompactMode ? '' : (item.name || '?').charAt(0) }}</div>
+                     :style="isCompactMode ? 'width: 1.5em; height: 1.5em; font-size: 0.7em;' : 'width: 3.4em; height: 3.4em; font-size: 1.2em;'">{{ isCompactMode ? '' : (item.name || '?').charAt(0) }}</div>
 
                 <!-- ===== 紧凑模式：仅单行小名字 ===== -->
                 <div v-if="isCompactMode" class="flex-1 min-w-0 overflow-hidden">
@@ -174,14 +174,14 @@
                 </div>
 
                 <!-- ===== 常规模式：三行信息（名字 / 分类·描述 / Token·标签） ===== -->
-                <div v-else class="flex-1 min-w-0 flex flex-col overflow-hidden" style="gap: 0.2em;">
+                <div v-else class="flex-1 min-w-0 flex flex-col overflow-hidden" style="gap: 0.25em;">
                     <!-- 行1：名字（粗体） + 分类徽章 -->
                     <div class="flex items-center justify-between gap-1">
                         <span class="text-sm font-bold truncate leading-tight" :class="(cardData && cardData === item.data) ? 'text-white' : 'text-zinc-100 group-hover:text-blue-400'">{{ item.name }}</span>
-                        <span v-if="item.category && item.category !== '未分类'" class="text-[9px] px-1.5 py-0.5 rounded shrink-0 bg-zinc-800 text-zinc-400 border border-zinc-700/50">{{ item.category }}</span>
+                        <span v-if="item.category && item.category !== '未分类'" class="text-[10px] px-2 py-0.5 rounded shrink-0 bg-zinc-800 text-zinc-400 border border-zinc-700/50">{{ item.category }}</span>
                     </div>
                     <!-- 行2：描述片段（截断一行） -->
-                    <div class="truncate text-[11px] leading-tight" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500'">
+                    <div class="truncate text-[11px] leading-snug" :class="(cardData && cardData === item.data) ? 'text-blue-100/80' : 'text-zinc-500'">
                         {{ cardDesc(item) || '无描述' }}
                     </div>
                     <!-- 行3：Token + 世界书 + 标签×2 +N -->
@@ -189,16 +189,16 @@
                         <span v-if="itemTokenCount(item) > 0" class="font-mono text-amber-500/80 shrink-0" title="Token 估算">{{ itemTokenCount(item) }}T</span>
                         <span v-if="hasLorebook(item)" class="text-emerald-500/80 shrink-0" title="包含世界书">🌍</span>
                         <div class="flex items-center gap-1 overflow-hidden truncate">
-                            <span v-for="tag in listTags(item).slice(0, 2)" :key="tag" class="px-1 bg-zinc-800/80 text-zinc-400 rounded text-[9px] truncate max-w-[60px]">#{{ tag }}</span>
+                            <span v-for="tag in listTags(item).slice(0, 2)" :key="tag" class="px-1.5 bg-zinc-800/80 text-zinc-400 rounded text-[9px] truncate max-w-[60px]">#{{ tag }}</span>
                             <span v-if="listTags(item).length > 2" class="text-[9px] text-zinc-600 shrink-0">+{{ listTags(item).length - 2 }}</span>
                         </div>
                     </div>
                 </div>
 
                 <!-- ✅ hover 快捷操作（紧凑模式隐藏，保持纯净单行） -->
-                <div v-if="!isCompactMode" class="hidden group-hover:flex items-center gap-0.5 absolute right-1.5 top-1/2 -translate-y-1/2 bg-zinc-800/90 backdrop-blur-sm px-1 rounded border border-zinc-700/50 z-10">
-                    <button @click.stop="quickTag(item)" title="为这张卡添加标签" class="p-1 text-[10px] text-zinc-400 hover:text-amber-400">🏷️</button>
-                    <button @click.stop="deleteCardItem(item)" title="删除卡片(移入回收站)" class="p-1 text-[10px] text-zinc-400 hover:text-rose-400">🗑️</button>
+                <div v-if="!isCompactMode" class="hidden group-hover:flex items-center gap-0.5 absolute right-2 top-1/2 -translate-y-1/2 bg-zinc-800/90 backdrop-blur-sm px-1.5 py-0.5 rounded-lg border border-zinc-700/50 z-10">
+                    <button @click.stop="quickTag(item)" title="为这张卡添加标签" class="p-1.5 text-[11px] text-zinc-400 hover:text-amber-400">🏷️</button>
+                    <button @click.stop="deleteCardItem(item)" title="删除卡片(移入回收站)" class="p-1.5 text-[11px] text-zinc-400 hover:text-rose-400">🗑️</button>
                 </div>
             </div>
 
@@ -210,17 +210,17 @@
             </div>
 
             <!-- 分页控制条 -->
-            <div class="flex items-center justify-between px-2 py-1.5 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0">
-                <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
+            <div class="flex items-center justify-between px-3 py-2 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0">
+                <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
                 <span class="text-zinc-400 font-mono font-bold">{{ currentPage }} / {{ totalPages }} <span class="text-zinc-600 font-normal">({{ filteredLibrary.length }})</span></span>
-                <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>
+                <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>
             </div>
         </div>
 
         <!-- 🎴 网格视图（固定 2 列自适应竖卡 + 原生 2:3 比例） -->
         <div v-if="viewMode === 'grid'"
-             class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2"
-             style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-content: start;">
+             class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2.5"
+             style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-content: start;">
 
             <div v-for="(item, index) in paginatedLibrary" :key="item.id"
                  @click.prevent="handleCardClick($event, item, index)"
@@ -259,10 +259,10 @@
             </div>
 
             <!-- 分页控制条 -->
-            <div class="flex items-center justify-between px-2 py-1.5 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0" style="grid-column: 1 / -1;">
-                <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
+            <div class="flex items-center justify-between px-3 py-2 border-t border-zinc-800 bg-zinc-900 text-xs sticky bottom-0" style="grid-column: 1 / -1;">
+                <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">◀ 上一页</button>
                 <span class="text-zinc-400 font-mono font-bold">{{ currentPage }} / {{ totalPages }} <span class="text-zinc-600 font-normal">({{ filteredLibrary.length }})</span></span>
-                <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>
+                <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">下一页 ▶</button>
             </div>
         </div>
 
@@ -272,32 +272,54 @@
         <!-- ============ 🌍 世界书模式 ============ -->
         <template v-if="appMode === 'worldbooks'">
             <!-- ✅ 顶部搜索行 + 折叠按钮（与角色卡模式同款） -->
-            <div class="px-2 py-1.5 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-1.5 shrink-0 z-10">
-                <!-- 行1：搜索 + 合并 + 查重 + 折叠 -->
-                <div class="flex items-center gap-1">
-                    <div class="relative flex-1">
-                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
-                        <input v-model="wbSearchQuery" type="text" placeholder="搜索世界书..."
-                               class="w-full h-7 bg-zinc-800/80 border border-zinc-700/60 rounded pl-7 pr-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-amber-500/80 transition">
-                    </div>
+            <!-- ✅ 世界书库顶部：搜索独立一行，操作/分组/统计分区清晰 -->
+            <div class="px-3 pt-2.5 pb-2 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-2 shrink-0 z-10">
+                <!-- 行1：搜索（独立全宽，不与其他控件抢空间） -->
+                <div class="relative">
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                    <input v-model="wbSearchQuery" type="text" placeholder="搜索世界书名称 / 文件名..."
+                           class="w-full h-8 bg-zinc-800/80 border border-zinc-700/60 rounded-lg pl-8 pr-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-amber-500/80 transition">
+                </div>
+
+                <!-- 行2：高频操作（合并/查重/全库 等宽）+ 更多工具折叠 -->
+                <div class="flex items-center gap-1.5">
                     <button @click="openWbMergeModal" title="选择多本世界书进行合并"
-                            class="h-7 px-2 flex items-center justify-center rounded text-xs font-bold transition shrink-0 bg-zinc-800 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30">
+                            class="flex-1 h-8 flex items-center justify-center gap-1 rounded-lg text-xs font-bold transition bg-zinc-800 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30">
                         🔗 合并
                     </button>
                     <button @click="startWorldbookDedupeScan" title="世界书对比与查重"
-                            class="h-7 px-2 flex items-center justify-center rounded text-xs font-bold transition shrink-0 bg-amber-600 hover:bg-amber-500 text-white">
+                            class="flex-1 h-8 flex items-center justify-center gap-1 rounded-lg text-xs font-bold transition bg-amber-600 hover:bg-amber-500 text-white">
                         🔍 查重
                     </button>
+                    <button @click="openGlobalEntrySearch" title="跨独立世界书 + 角色卡内嵌世界书搜索词条，定位来源"
+                            class="flex-1 h-8 flex items-center justify-center gap-1 rounded-lg text-xs font-bold transition bg-zinc-800 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30">
+                        🔎 全库
+                    </button>
                     <button @click="showWbAdvanced = !showWbAdvanced"
-                            class="h-7 px-2 flex items-center justify-center rounded transition shrink-0"
+                            class="h-8 w-8 flex items-center justify-center rounded-lg transition shrink-0"
                             :class="showWbAdvanced ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-700/50'"
-                            :title="showWbAdvanced ? '收起高级功能区' : '展开高级功能区 (导入/分组/筛选)'">
+                            :title="showWbAdvanced ? '收起导入/工具区' : '展开导入/工具区'">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                     </button>
                 </div>
 
+                <!-- 行3：分组导航（常驻，横向滚动） -->
+                <div class="flex items-center gap-1 overflow-x-auto custom-scrollbar">
+                    <button @click="currentWbCategory = '全部'"
+                            :class="currentWbCategory === '全部' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                            class="px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                        🌍 全部
+                    </button>
+                    <button v-for="cat in wbCategories" :key="cat"
+                            @click="currentWbCategory = cat"
+                            :class="currentWbCategory === cat ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                            class="px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
+                        📁 {{ cat }}
+                    </button>
+                </div>
+
                 <!-- 高级功能区折叠面板（URL导入 / 打开目录 / 分组 / 筛选） -->
-                <div v-if="showWbAdvanced" class="flex flex-col gap-1.5 pt-0.5">
+                <div v-if="showWbAdvanced" class="flex flex-col gap-2 pt-1">
                     <!-- 🌐 网址导入世界书 -->
                     <div class="flex items-center gap-1.5">
                         <div class="flex-1 flex items-center bg-black/40 border border-zinc-700 rounded overflow-hidden transition focus-within:border-emerald-500/50 min-w-0">
@@ -327,20 +349,19 @@
                             💾 落盘
                         </button>
                     </div>
-                    <!-- 📁 世界书分组切换导航条 -->
-                    <div class="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
-                        <button @click="currentWbCategory = '全部'"
-                                :class="currentWbCategory === '全部' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
-                                class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
-                            🌍 全部
-                        </button>
-                        <button v-for="cat in wbCategories" :key="cat"
-                                @click="currentWbCategory = cat"
-                                :class="currentWbCategory === cat ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50' : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
-                                class="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition duration-200 border border-zinc-700/50 shrink-0">
-                            📁 {{ cat }}
+                    <!-- � JSONL 导入 + 📦 批量导出 -->
+                    <div class="flex items-center gap-1.5">
+                        <label class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded border border-zinc-700/60 cursor-pointer transition shadow-sm"
+                               title="导入 JSONL / Rentry 格式世界书（逐行解析）">
+                            📜 导入 JSONL
+                            <input type="file" accept=".json,.jsonl,.txt" multiple class="hidden" @change="importWbFromJsonl">
+                        </label>
+                        <button @click="exportWorldbooksBatch" title="批量导出所有已落盘世界书到自选文件夹"
+                                class="px-3 py-1 bg-zinc-800 hover:bg-blue-600 text-zinc-200 hover:text-white text-xs rounded border border-zinc-700/60 transition shadow-sm shrink-0">
+                            📦 批量导出
                         </button>
                     </div>
+
                     <!-- 词条数筛选 chips -->
                     <div class="flex gap-1 text-[10px]">
                         <button @click="wbFilterType = 'all'" :class="wbFilterType === 'all' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'" class="px-1.5 py-0.5 rounded border border-zinc-700">全部 ({{ worldbooks.length }})</button>
@@ -351,13 +372,41 @@
                 </div>
             </div>
 
+            <!-- 📊 世界书库统计（3x2 网格小卡，Token 已格式化） -->
+            <div class="px-3 py-2 border-b border-zinc-800 bg-zinc-900/60 shrink-0 grid grid-cols-3 gap-1.5">
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="世界书总数">
+                    <span class="text-[10px] text-zinc-500">📚 本</span>
+                    <span class="text-[11px] font-bold text-amber-400 font-mono">{{ wbStats.bookCount }}</span>
+                </div>
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="词条总数">
+                    <span class="text-[10px] text-zinc-500">📄 词条</span>
+                    <span class="text-[11px] font-bold text-amber-400 font-mono">{{ wbStats.entryCount }}</span>
+                </div>
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="Token 总量">
+                    <span class="text-[10px] text-zinc-500">⚡ 总量</span>
+                    <span class="text-[11px] font-bold text-amber-400 font-mono">{{ fmtTokens(wbStats.tokenTotal) }}</span>
+                </div>
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="常驻词条数">
+                    <span class="text-[10px] text-zinc-500">🟣 常驻</span>
+                    <span class="text-[11px] font-bold text-emerald-400 font-mono">{{ wbStats.constantCount }}</span>
+                </div>
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="有触发词的词条占比">
+                    <span class="text-[10px] text-zinc-500">🔑 触发</span>
+                    <span class="text-[11px] font-bold text-sky-400 font-mono">{{ wbStats.keyCoverage }}%</span>
+                </div>
+                <div class="bg-zinc-800/50 border border-zinc-700/40 rounded-md px-2 py-1 flex items-center justify-between gap-1" title="平均每本词条数">
+                    <span class="text-[10px] text-zinc-500">📊 均条</span>
+                    <span class="text-[11px] font-bold text-zinc-300 font-mono">{{ wbStats.bookCount ? Math.round(wbStats.entryCount / wbStats.bookCount) : 0 }}</span>
+                </div>
+            </div>
+
             <!-- 世界书列表（筛选后） -->
-            <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+            <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                 <div v-for="(wb, index) in filteredWorldbooks" :key="index"
                      @click="activeWorldbook = wb"
                      @contextmenu.prevent="openWbContextMenu($event, wb)"
                      :class="activeWorldbook && activeWorldbook.path === wb.path ? 'bg-amber-600/20 border-amber-500/50' : 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-700'"
-                     class="p-2.5 rounded-lg border cursor-pointer transition flex flex-col gap-1">
+                     class="p-3 rounded-lg border cursor-pointer transition flex flex-col gap-1.5">
                     <div class="flex justify-between items-center gap-1">
                         <span class="text-xs font-bold text-zinc-200 truncate">{{ (wb.data && wb.data.name) || wb.name }}</span>
                         <div class="flex items-center gap-1 shrink-0">
@@ -528,6 +577,17 @@ export default {
             filteredWorldbooks: ctx.filteredWorldbooks,
             openWbMergeModal: ctx.openWbMergeModal,
             startWorldbookDedupeScan: ctx.startWorldbookDedupeScan,
+            openGlobalEntrySearch: ctx.openGlobalEntrySearch,
+            importWbFromJsonl: ctx.importWbFromJsonl,
+            exportWorldbooksBatch: ctx.exportWorldbooksBatch,
+            wbStats: ctx.wbStats,
+            // 📊 统计数字格式化（1000+ → K，1000000+ → M）
+            fmtTokens: (n) => {
+                if (!n) return '0';
+                if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+                if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
+                return String(n);
+            },
             activeWorldbook: ctx.activeWorldbook,
             openWbContextMenu: ctx.openWbContextMenu,
             openWbInFolder: ctx.openWbInFolder,

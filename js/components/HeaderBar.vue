@@ -179,7 +179,6 @@
                         <div class="px-3 py-1.5 text-xs text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">本地资产检索 (I/O)</div>
                         <button @click="showDiskScanModal = true" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🛰️ 全盘打捞卡片</button>
                         <div class="h-px bg-zinc-700 my-1"></div>
-                        <button @click="openGraph" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">🌌 星系关系图 (ECharts)</button>
                         <button @click="openChatTab" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">💬 本地 AI 对话测卡</button>
                         <button @click="pushToTavern" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🚀 一键推送至酒馆</button>
                     </div>
@@ -199,7 +198,9 @@
             <div class="h-4 w-px bg-zinc-700 shrink-0"></div>
             <button @click="selectFixedDirectory" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">📂 打开本地库</button>
             <button @click="downloadCardFromUrl" title="从 URL 直链下载导入角色卡（Discord/GitHub 等 CDN）" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">🌐 链接导入</button>
-            <button @click="openGraph" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0">🌌 关系图谱</button>
+            <button @click="openGraphSmart" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0" :title="appMode === 'worldbooks' ? '生成当前世界书的词条关联图谱' : '生成全库角色关系图谱'">
+                {{ appMode === 'worldbooks' ? '🌍' : '🌌' }} 关系图谱
+            </button>
             <button @click="showGlobalAssetModal = true" class="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-800 hover:text-zinc-100 rounded text-zinc-400 transition whitespace-nowrap shrink-0" title="查看全库收集的世界书与正则脚本">
                 📚 全局资产库
             </button>
@@ -258,7 +259,8 @@ export default {
             resetApiSettings: ctx.resetApiSettings,
             checkForUpdatesManual: ctx.checkForUpdatesManual,
             showDiskScanModal: ctx.showDiskScanModal,
-            openGraph: ctx.openGraph,
+            openGraphSmart: ctx.openGraphSmart,
+            appMode: ctx.appMode,
             openChatTab: ctx.openChatTab,
             pushToTavern: ctx.pushToTavern,
             showGlobalAssetModal: ctx.showGlobalAssetModal,

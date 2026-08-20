@@ -9,11 +9,11 @@
 
 **🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限）：
 
-[⬇️ 下载安装包 `sillytavern-card-manager-setup-1.8.1.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载安装包 `sillytavern-card-manager-1.8.3.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 **📦 绿色免安装版**（解压即用，无需安装）：
 
-[⬇️ 下载绿色版 `SillyTavern.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载绿色版 `sillytavern-card-manager-1.8.3.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 > 💡 两个版本功能完全相同，任选其一即可。支持 Windows 10/11（64 位）。
 > 程序完全本地运行、无任何联网上传；若杀毒软件误报，请选择「允许 / 信任」。（更多请见 [常见问题排查](#-常见问题排查)）
@@ -160,7 +160,7 @@ npm run build
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版
-- `dist/sillytavern-card-manager-setup-1.8.1.exe` —— NSIS 安装包
+- `dist/sillytavern-card-manager-1.8.3.exe` —— NSIS 安装包
 
 ---
 
@@ -361,7 +361,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
 1. 修改 `package.json` 的 `version`
 2. `npm run build`
 3. 将以下产物上传到 GitHub Release：
-   - `dist/sillytavern-card-manager-setup-1.8.1.exe`（安装包）
+   - `dist/sillytavern-card-manager-1.8.3.exe`（安装包）
    - `dist/win-unpacked/`（可选，绿色免安装版，建议压缩为 zip）
 
 ---

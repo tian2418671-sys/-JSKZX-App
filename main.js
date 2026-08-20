@@ -68,6 +68,29 @@ let snapshotConfig = {
 // 记录卡片上一次生成快照的时间 { [filePath]: timestamp }
 const cardLastBackupMap = new Map();
 
+// ================= [ 快照文件名精确匹配工具 ] =================
+// 快照文件名恒为 `${卡片名}_${ISO时间戳}[_manual]${ext}`，
+// 时间戳固定以 YYYY-MM-DDT 开头。用它锁死分隔符，
+// 杜绝卡片 "A" 的前缀 "A_" 误匹配卡片 "A_1" 的快照（数据错乱级 BUG）。
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// 🔧 预构造快照匹配正则（Map 缓存，避免逐次 new RegExp）
+const _snapshotReCache = new Map();
+function snapshotRe(baseName) {
+  let re = _snapshotReCache.get(baseName);
+  if (!re) {
+    re = new RegExp('^' + escapeRegExp(baseName) + '_\\d{4}-\\d{2}-\\d{2}T');
+    _snapshotReCache.set(baseName, re);
+  }
+  return re;
+}
+function isSnapshotOf(fileName, baseName) {
+  return snapshotRe(baseName).test(fileName);
+}
+// ⚠️ 已知窄残留（趋近零概率，文档注明）：若卡片名本身以 ISO 日期样式结尾（如 A_2026-08-20T.png），
+//    其快照仍会被前缀规则匹配到 A——彻底解决需快照旁车索引，不值得。
+
 /**
  * 清理指定卡片超量的历史快照（按修改时间排序，保留最新的 N 份）
  * @param {string} historyDir .bak_history 目录
@@ -79,8 +102,9 @@ async function cleanupOldSnapshots(historyDir, baseFileName, ext, maxCount) {
   try {
     if (!maxCount || maxCount <= 0) return;
     const allFiles = await fs.promises.readdir(historyDir);
-    // 精确前缀匹配（base + '_'），避免 "卡A" 误配到 "卡A2" 的快照
-    const cardBackups = allFiles.filter(f => f.startsWith(baseFileName + '_') && f.endsWith(ext));
+    // 正则精确匹配（base + ISO日期边界），避免 "卡A" 误配到 "卡A_1" 的快照
+    const re = snapshotRe(baseFileName); // 🔧 复用同一正则，避免 filter 内逐次构造
+    const cardBackups = allFiles.filter(f => re.test(f) && f.endsWith(ext));
     if (cardBackups.length <= maxCount) return;
     const fileStats = await Promise.all(
       cardBackups.map(async (f) => {
@@ -155,7 +179,7 @@ async function processCardSnapshot(filePath, isManual = false) {
         try {
           const existing = await fs.promises.readdir(historyDir);
           const mine = existing
-            .filter(f => f.startsWith(baseName + '_') && f.endsWith(ext))
+            .filter(f => isSnapshotOf(f, baseName) && f.endsWith(ext))
             .sort(); // 文件名含 ISO 时间戳，字典序即时间序
           const latestName = mine[mine.length - 1];
           if (latestName) latestHash = await hashFileContent(path.join(historyDir, latestName));
@@ -351,7 +375,12 @@ function embedCardJSONIntoPNG(pngBuf, cardJson) {
 // （注：与前端 cardLoader.js 的 normalizeCardData 思路一致，但本文件为 Node/CJS 环境，
 //   无法直接复用浏览器 ESM 模块，故保留独立实现并保持口径一致）
 function calibrateCardData(raw) {
-  let card = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  // 🔧 纯函数化：深拷贝后再校准。附带修复隐性 BUG——旧实现原地修改 raw，
+  // 导致 validateCardPNG 中 calibrated 与 card 是同一对象，
+  // JSON.stringify 比较恒等 →「结构已自动校准」警告永远不触发（死代码）
+  let card = (raw && typeof raw === 'object' && !Array.isArray(raw))
+    ? structuredClone(raw)
+    : {};
 
   if (!card.spec && card.data && typeof card.data === 'object') {
     card.spec = 'chara_card_v2';
@@ -497,6 +526,10 @@ loadSnapshotConfig();
 const allowedRoots = new Set();
 function addAllowedRoot(p) {
   try { if (p && typeof p === 'string') allowedRoots.add(path.resolve(p)); } catch (e) { /* 忽略非法路径 */ }
+}
+// 🔧 会话级临时授权回收：盘符/图片目录等一次性授权用后即删，防白名单长期扩权
+function removeAllowedRoot(p) {
+  try { if (p && typeof p === 'string') allowedRoots.delete(path.resolve(p)); } catch (e) { /* 忽略非法路径 */ }
 }
 function isPathAllowed(filePath) {
   if (!filePath || typeof filePath !== 'string') return false;
@@ -672,8 +705,16 @@ const SCAN_PROGRESS_STEP     = 100;              // 每 N 个文件上报一次�
 const CHAT_DEFAULT_MAX_TOKENS = 4096;            // OpenAI/Anthropic 缺省 max_tokens
 
 // 递归扫描核心引擎（目录串行递归 + 文件批并发，彻底避免 EMFILE 句柄爆炸崩溃）
-async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 }, useSizeFilter = false) {
+// ⚠️ 内存上限说明：全盘扫描数十万目录时 visited Set 约占 10-15MB（单机可接受）。
+//    切勿改为跨扫描复用的全局 Set——那会误判不同会话的目录为已访问而漏扫。
+async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 }, useSizeFilter = false, visited = new Set()) {
     try {
+        // 🔧 环路防护：以物理真实路径为 key 判重（同一物理目录经不同链接路径到达只扫一次）
+        let realKey;
+        try { realKey = fs.realpathSync(dirPath); } catch (e) { realKey = path.resolve(dirPath); }
+        if (visited.has(realKey)) return [];
+        visited.add(realKey);
+
         // 读取当前目录下的所有文件和文件夹对象
         const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
         const results = [];
@@ -685,7 +726,7 @@ async function scanDirectoryForCards(dirPath, event, progressState = { count: 0 
             const lowerName = file.name.toLowerCase();
             // 精准匹配黑名单（'cache'/'temp'/'caches' 等已在列表中），避免误杀含关键词的正常文件夹
             if (skipFolders.includes(lowerName)) continue;
-            const subResults = await scanDirectoryForCards(path.join(dirPath, file.name), event, progressState, useSizeFilter);
+            const subResults = await scanDirectoryForCards(path.join(dirPath, file.name), event, progressState, useSizeFilter, visited);
             results.push(...subResults);
         }
 
@@ -911,21 +952,9 @@ app.whenReady().then(() => {
     return null;
   });
 
-  // IPC：保存全局标签库（合并写入 userData/tavern_manager_config.json 的 globalTags 字段）
-  ipcMain.handle('config:saveGlobalTags', (event, tags) => {
-    try {
-      let config = {};
-      if (fs.existsSync(configPath)) {
-        try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { config = {}; }
-      }
-      config.globalTags = Array.isArray(tags) ? tags : [];
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-      return { success: true };
-    } catch (e) {
-      console.error('保存全局标签配置失败', e);
-      return { success: false, error: e.message };
-    }
-  });
+  // 【已删除】config:saveGlobalTags：渲染层零调用，且为旧文件双权威 + 非原子写根源。
+  // 全局标签统一走 sys:saveConfig（app_config.json 原子写入）；
+  // 旧 tavern_manager_config.json 的 globalTags 由 sys:loadConfig 首次启动时一次性迁移。
 
   // ==========================================
   // 🎛️ 通用 UI 状态持久化（分组/语言/卡片分类等）
@@ -942,20 +971,8 @@ app.whenReady().then(() => {
     return {};
   });
 
-  // 合并保存通用 UI 状态（增量合并，避免覆盖其他字段）
-  ipcMain.handle('config:saveUiSettings', (event, settings) => {
-    try {
-      let config = {};
-      if (fs.existsSync(configPath)) {
-        try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { config = {}; }
-      }
-      config.uiSettings = { ...(config.uiSettings || {}), ...(settings || {}) };
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-      return { success: true };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  });
+  // 【已删除】config:saveUiSettings：渲染层零调用（saveUiSettingsToDisk 内部已改走 syncConfigToDisk），
+  // 且为旧文件双权威 + 裸 writeFileSync 非原子写根源。旧文件 uiSettings 由 sys:loadConfig 只读迁移。
 
   // ==========================================
   // 🛡️ 统一持久化中枢（app_config.json 最高权威）
@@ -1028,8 +1045,106 @@ app.whenReady().then(() => {
     return drives;
   });
 
+  // ================= [ 🛰️ 全盘打捞 V3：真伪卡鉴定引擎 ] =================
+  // 旧版仅按「扩展名 + 体积」判定，壁纸/截图/游戏贴图大量混入（假阳性泛滥）。
+  // V3 在遍历后追加黄金标准验证：PNG 必须内嵌合法 chara/ccv3 数据块、JSON 必须是
+  // 角色卡结构、WebP 必须含可解码的 base64 卡数据。
+  // IO 优化：先读头/尾 64KB 做特征预筛（'chara'/'ccv3'/'eyJ' 字节串），命中才
+  // 完整读入做块级精确解析——普通图片只付出 128KB IO 即被剔除，不为垃圾付全文件成本。
+  const VALIDATE_HEAD_BYTES = 64 * 1024;
+  const VALIDATE_TAIL_BYTES = 64 * 1024;
+  const VALIDATE_BATCH = 32;       // 验证阶段单批并发（IO 密集，防句柄爆炸）
+  const VALIDATE_REPORT_EVERY = 8; // 每 N 批上报一次进度（防消息洪泛）
+
+  // 读取文件指定窗口 [start, start+length)，越界自动钳制；失败返回 null
+  async function readFileWindow(filePath, start, length) {
+    const fh = await fs.promises.open(filePath, 'r');
+    try {
+      const size = (await fh.stat()).size;
+      const startPos = Math.max(0, Math.min(start, Math.max(0, size - 1)));
+      const readLen = Math.min(length, size - startPos);
+      if (readLen <= 0) return null;
+      const buf = Buffer.alloc(readLen);
+      await fh.read(buf, 0, readLen, startPos);
+      return buf;
+    } finally {
+      await fh.close().catch(() => { });
+    }
+  }
+
+  // WebP 等无块结构格式：扫 eyJ 开头的 base64 段并解码验证（与前端 deepScanForJSON 同思路）
+  function tryDecodeEmbeddedCard(buf) {
+    try {
+      const latin = buf.toString('latin1');
+      const m = latin.match(/(eyJ[A-Za-z0-9+/=]{100,})/);
+      if (!m) return null;
+      const obj = JSON.parse(Buffer.from(m[1], 'base64').toString('utf-8'));
+      return getCardName(obj) ? obj : null;
+    } catch (e) { return null; }
+  }
+
+  // JSON 对象是否为角色卡结构（必须有角色名；排除纯世界书）
+  function isCardJsonObject(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+    if (obj.entries && typeof obj.entries === 'object') return false; // 世界书（数组或字典形态）
+    return !!getCardName(obj);
+  }
+
+  /**
+   * 验证单个候选文件是否为真角色卡（全盘打捞核心判定）
+   * @returns {Promise<{path,fileName,name,kind,size}|null>} 真卡返回描述对象，否则 null
+   */
+  async function validateCardFile(filePath) {
+    try {
+      const st = await fs.promises.stat(filePath);
+      if (!st.isFile() || st.size === 0) return null;
+      const ext = path.extname(filePath).toLowerCase();
+
+      // ① JSON 卡：完整读取解析（角色卡 JSON 一般仅几十 KB～几 MB）
+      if (ext === '.json') {
+        const text = await fs.promises.readFile(filePath, 'utf-8');
+        const obj = JSON.parse(text.replace(/^\uFEFF/, ''));
+        if (!isCardJsonObject(obj)) return null;
+        return { path: filePath, fileName: path.basename(filePath), name: getCardName(obj), kind: 'json', size: st.size };
+      }
+
+      // ② 图片卡（PNG / WebP）：头尾特征预筛 → 命中才完整读入做块级精确解析
+      const head = await readFileWindow(filePath, 0, VALIDATE_HEAD_BYTES);
+      if (!head) return null;
+      const probe = head.toString('latin1');
+      let hit = probe.includes('chara') || probe.includes('ccv3') || probe.includes('eyJ');
+      if (!hit && st.size > VALIDATE_HEAD_BYTES + VALIDATE_TAIL_BYTES) {
+        // 头部无特征的大文件：查尾部（tEXt 数据块允许位于 IEND 前，部分工具写在文件末尾）
+        const tail = await readFileWindow(filePath, st.size - VALIDATE_TAIL_BYTES, VALIDATE_TAIL_BYTES);
+        if (tail) {
+          const t = tail.toString('latin1');
+          hit = t.includes('chara') || t.includes('ccv3') || t.includes('eyJ');
+        }
+      }
+      if (!hit) return null; // 头尾 128KB 均无内嵌数据特征 → 判定非角色卡（覆盖标准卡 99.9%）
+
+      // 特征命中 → 完整读入，块级精确解析（杜绝字节巧合误判）
+      const buf = await fs.promises.readFile(filePath);
+      if (isPNGBuffer(buf)) {
+        const card = readTavernPNGChunk(buf);
+        const name = card ? getCardName(card) : '';
+        if (!name) return null; // 有块结构但无角色名 → 视为伪卡
+        return { path: filePath, fileName: path.basename(filePath), name, kind: 'png', size: st.size };
+      }
+      const embedded = tryDecodeEmbeddedCard(buf); // WebP / 异常 PNG 深扫兜底
+      if (embedded) {
+        return { path: filePath, fileName: path.basename(filePath), name: getCardName(embedded), kind: 'webp', size: st.size };
+      }
+      return null;
+    } catch (e) {
+      return null; // 读取失败/损坏文件一律视为非卡，不中断批次
+    }
+  }
+
   // IPC：指定文件夹/盘符扫描（未传路径时弹出原生文件夹选择器；useSizeFilter 控制体积过滤开关）
-  ipcMain.handle('scan-target-folder', async (event, targetPath, useSizeFilter) => {
+  // 🔧 V3.1 excludeLibraryPath：当前角色库路径——库内文件与「与库名重名」的文件不再计入结果
+  //    （旧版扫整盘会把库内几千张卡也当"打捞成果"，收编时全部同名跳过 → 看起来像导入失败）
+  ipcMain.handle('scan-target-folder', async (event, targetPath, useSizeFilter, excludeLibraryPath) => {
     let folderToScan = targetPath;
     let trustedByDialog = false;
 
@@ -1053,12 +1168,73 @@ app.whenReady().then(() => {
     }
 
     // 【安全修复】仅可信来源（真实对话框 或 合法纯盘符）才加入白名单
+    // 🔧 先记录该目录是否原本已授权（库根目录在 L2531 已加入白名单），
+    // 只回收我们本次临时添加的授权——无条件回收会把库根/盘根误删，全库瘫痪
+    const preAuthorized = isPathAllowed(folderToScan);
     if (trustedByDialog) addAllowedRoot(folderToScan);
 
     event.sender.send('scan-progress', { status: `正在急速遍历: ${folderToScan}`, count: 0 });
     // 将 useSizeFilter 传递给扫描引擎
-    const cardFiles = await scanDirectoryForCards(folderToScan, event, { count: 0 }, useSizeFilter);
-    return { path: folderToScan, files: cardFiles };
+    const candidates = await scanDirectoryForCards(folderToScan, event, { count: 0 }, useSizeFilter);
+
+    // ===== 🛰️ V3.1 库内排除：先剔除「已在当前库」的文件，再进入真伪鉴定 =====
+    // 双规则（与收编的同名跳过口径一致）：① 路径在库目录树内；② 文件名与库内任意文件重名
+    // （酒馆推送拷贝/ST 备份等同名副本一并排除，杜绝"扫出一堆自家卡"）
+    let libRoot = null;
+    const libNames = new Set();
+    if (excludeLibraryPath && typeof excludeLibraryPath === 'string') {
+      try {
+        const rp = path.resolve(excludeLibraryPath);
+        if (fs.existsSync(rp) && fs.statSync(rp).isDirectory()) {
+          libRoot = rp;
+          const walkLib = async (dir) => {
+            const items = await fs.promises.readdir(dir, { withFileTypes: true });
+            for (const it of items) {
+              if (it.name.startsWith('.')) continue; // 跳过 .bak_history/.trash 等隐藏目录
+              const fp = path.join(dir, it.name);
+              if (it.isDirectory()) await walkLib(fp);
+              else libNames.add(it.name);
+            }
+          };
+          await walkLib(rp);
+        }
+      } catch (e) { libRoot = null; } // 库目录不可读时放弃排除（宁可多报不漏报）
+    }
+    let inLibrary = 0;
+    const toValidate = [];
+    for (const p of candidates) {
+      let rp = null;
+      try { rp = path.resolve(p); } catch (e) { /* 非法路径交给验证阶段丢弃 */ }
+      if (rp && libRoot && (rp === libRoot || rp.startsWith(libRoot + path.sep))) { inLibrary++; continue; }
+      if (libNames.size > 0 && libNames.has(path.basename(p))) { inLibrary++; continue; }
+      toValidate.push(p);
+    }
+
+    // ===== 🛰️ V3 验证阶段：对候选做真伪鉴定（黄金标准：内嵌 chara/ccv3 数据块） =====
+    // 旧版直接返回候选 → 壁纸/截图/UI贴图大量混入。现逐个验证，只放行真卡。
+    const validated = [];
+    const total = toValidate.length;
+    for (let i = 0; i < total; i += VALIDATE_BATCH) {
+      const batch = toValidate.slice(i, i + VALIDATE_BATCH);
+      const results = await Promise.all(batch.map(p => validateCardFile(p)));
+      for (const r of results) {
+        if (r) validated.push(r);
+      }
+      if ((i / VALIDATE_BATCH) % VALIDATE_REPORT_EVERY === 0 || i + VALIDATE_BATCH >= total) {
+        event.sender.send('scan-progress', {
+          status: `🔬 真伪鉴定中... ${Math.min(i + VALIDATE_BATCH, total)}/${total}（已确认 ${validated.length} 张新真卡${inLibrary > 0 ? `，另跳过 ${inLibrary} 张已在库` : ''}）`,
+          count: validated.length
+        });
+      }
+    }
+
+    // 【安全修复】盘符级授权用后即收：全盘扫描是只读行为，结束立即撤销，
+    // 防止渲染层被注入后借驻留的整盘 root 越权读写。
+    // 🔧 但不回收原本就有的授权（库在盘根时 D:\ 是合法库根，撤了就全瘫）
+    if (/^[A-Za-z]:\\?$/.test(folderToScan) && !preAuthorized) {
+      removeAllowedRoot(folderToScan);
+    }
+    return { path: folderToScan, files: validated, scanned: candidates.length, rejected: total - validated.length, inLibrary };
   });
 
   // IPC：唤起系统资源管理器打开指定路径（.bak_history / .trash 等）
@@ -1203,16 +1379,36 @@ app.whenReady().then(() => {
       else return { success: false, error: '未找到 characters 文件夹，请确认选择的是 SillyTavern 根目录！' };
 
       let count = 0;
+      const overwritten = [];
+      const trashDir = path.join(app.getPath('userData'), 'jsTavern_Trash');
+      await fs.promises.mkdir(trashDir, { recursive: true }).catch(() => { });
       for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
-        if (fs.existsSync(src)) {
-          const fileName = path.basename(src);
-          const dest = path.join(targetDir, fileName);
-          // 强制覆盖同名卡片，实现更新效果
-          fs.copyFileSync(src, dest);
-          count++;
+        if (!fs.existsSync(src)) continue;
+        const fileName = path.basename(src);
+        const dest = path.join(targetDir, fileName);
+        if (fs.existsSync(dest)) {
+          try {
+            const trashDest = path.join(trashDir, `${Date.now()}_${fileName}`);
+            try {
+              await fs.promises.rename(dest, trashDest);
+            } catch (ex) {
+              if (ex && ex.code === 'EXDEV') {
+                // 🔧 跨盘（酒馆不在系统盘）：复制进回收站后删除，与 trashFiles 同策略
+                await fs.promises.copyFile(dest, trashDest);
+                await fs.promises.unlink(dest);
+              } else {
+                throw ex;
+              }
+            }
+            overwritten.push(fileName);
+          } catch (backupErr) {
+            continue; // 备份失败绝不裸覆盖，跳过该卡
+          }
         }
+        fs.copyFileSync(src, dest);
+        count++;
       }
-      return { success: true, count };
+      return { success: true, count, overwritten };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -1272,14 +1468,16 @@ app.whenReady().then(() => {
 
       const copiedList = [];
       const skippedList = [];
+      const failedList = [];
 
       for (const file of sourceFiles) {
-        // 兼容全盘扫描返回的对象 { path: '...' } 或纯字符串
+        // 兼容全盘打捞 V3 返回的验证对象 { path, name, kind } 或纯字符串
         const srcPath = (typeof file === 'string' ? file : (file && file.path)) || '';
         if (!srcPath) continue;
         // 源路径存在性检查（不存在/被占用则跳过，不中断整体）
         try {
-          if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) continue;
+          const st = await fs.promises.stat(srcPath);
+          if (!st.isFile()) continue;
         } catch (e) { continue; }
 
         const fileName = path.basename(srcPath);
@@ -1288,17 +1486,25 @@ app.whenReady().then(() => {
 
         const destPath = path.join(destFolder, fileName);
         // 同名文件跳过（绝不覆盖用户已有卡片），记录到 skippedList 便于前端提示
-        if (fs.existsSync(destPath)) {
-          skippedList.push(fileName);
-          continue;
-        }
+        try {
+          if (fs.existsSync(destPath)) {
+            skippedList.push(fileName);
+            continue;
+          }
+        } catch (e) { /* existsSync 异常按不存在处理，交给下方 copy 报错 */ }
 
         // 3. 执行物理拷贝（源路径为全盘检索结果，属用户主动授权，不做白名单限制）
-        fs.copyFileSync(srcPath, destPath);
-        copiedList.push(destPath);
+        // 🔧 单文件失败记入 failedList 继续后续（旧版异常直接中断整批 → 部分导入无明细）
+        // 🔧 全程 fs.promises：几千张卡的批量收编不再冻结主进程消息循环
+        try {
+          await fs.promises.copyFile(srcPath, destPath);
+          copiedList.push(destPath);
+        } catch (copyErr) {
+          failedList.push({ path: srcPath, error: copyErr.message });
+        }
       }
 
-      return { success: true, copied: copiedList, skipped: skippedList };
+      return { success: true, copied: copiedList, skipped: skippedList, failed: failedList };
     } catch (err) {
       console.error('收编外部卡片失败:', err);
       return { success: false, error: err.message };
@@ -1332,10 +1538,20 @@ app.whenReady().then(() => {
       });
       if (canceled || filePaths.length === 0) return { success: false, error: '用户取消操作' };
       const newImagePath = filePaths[0];
-      addAllowedRoot(path.dirname(newImagePath));
-
-      // 2. 读取新图；非 PNG 先转 PNG
-      let imageBuf = await fs.promises.readFile(newImagePath);
+      const imgDir = path.dirname(newImagePath);
+      // 🔧 仅当该目录原本不在白名单时才「临时授权 + 用后回收」。
+      // 旧实现无条件 removeAllowedRoot——若新图选自库目录内（imgDir===库根，
+      // 本应用高频操作），会把整个库根从白名单移除，导致保存/删除/缩略图/
+      // 刷新全部「路径越界」大面积失效（重启才恢复，再换图再瘫痪）
+      const preAuthorized = isPathAllowed(newImagePath);
+      if (!preAuthorized) addAllowedRoot(imgDir);
+      let imageBuf;
+      try {
+        // 🔧 仅此读取需要授权；无论成败，finally 确保撤权（防错误路径泄漏白名单）
+        imageBuf = await fs.promises.readFile(newImagePath);
+      } finally {
+        if (!preAuthorized) removeAllowedRoot(imgDir);
+      }
       if (!isPNGBuffer(imageBuf)) {
         if (!sharp) return { success: false, error: '新图为非 PNG 格式，需先 `npm install sharp` 以支持格式转换。' };
         imageBuf = await sharp(imageBuf).png().toBuffer();
@@ -1415,8 +1631,8 @@ app.whenReady().then(() => {
       const allFiles = await fs.promises.readdir(historyDir);
       const snaps = [];
       for (const f of allFiles) {
-        // 精确前缀匹配（base + '_'）避免 "卡A" 误配到 "卡A2" 的快照
-        if (!f.startsWith(baseName + '_') || !f.endsWith(ext)) continue;
+        // 精确匹配：时间戳锁死分隔符，避免 "卡A" 误配到 "卡A1" 的快照
+        if (!isSnapshotOf(f, baseName) || !f.endsWith(ext)) continue;
         const p = path.join(historyDir, f);
         try {
           const st = await fs.promises.stat(p);
@@ -1454,6 +1670,26 @@ app.whenReady().then(() => {
       await processCardSnapshot(filePath, true);
       // 2. 复制快照覆盖回原文件
       await fs.promises.copyFile(snapshotPath, filePath);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // 🗑️ 删除指定卡片的一条历史快照（仅限 .bak_history 内、文件名符合快照格式，双保险防误删任意文件）
+  ipcMain.handle('card:deleteSnapshot', async (event, snapshotPath) => {
+    try {
+      if (!snapshotPath || typeof snapshotPath !== 'string' || !isPathAllowed(snapshotPath)) return forbidden();
+      // 安全校验①：父目录必须是 .bak_history
+      if (!/\.bak_history$/i.test(path.dirname(snapshotPath))) {
+        return { success: false, error: '非法快照路径：仅能删除 .bak_history 内的文件' };
+      }
+      // 安全校验②：文件名必须符合快照格式（base_YYYY-MM-DDT...）
+      if (!/_\d{4}-\d{2}-\d{2}T/.test(path.basename(snapshotPath))) {
+        return { success: false, error: '非法快照文件名' };
+      }
+      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在' };
+      await fs.promises.unlink(snapshotPath);
       return { success: true };
     } catch (e) {
       return { success: false, error: e.message };
@@ -1546,7 +1782,7 @@ app.whenReady().then(() => {
               // 存在至少一张「有快照的卡片」仍存活 → 目录非孤儿
               let alive = false;
               for (const cb of cardBases) {
-                if (hfs.some(hf => hf.startsWith(cb + '_'))) { alive = true; break; }
+                if (hfs.some(hf => isSnapshotOf(hf, cb))) { alive = true; break; }
               }
               if (!alive) result.push(full);
             } catch (e) { /* 忽略 */ }
@@ -1601,12 +1837,19 @@ app.whenReady().then(() => {
       }
 
       // 📸 版本控制：保存前自动备份旧文件到 .bak_history
-      // （可配置：开关/冷却间隔/最大保留数；手动触发走 card:createManualSnapshot 绕过冷却）
-      await processCardSnapshot(filePath, false);
+      const snap = await processCardSnapshot(filePath, false);
+      // 🔧 修复：备份失败（磁盘满/权限）必须中止保存——
+      // 否则快照盲区内原位覆盖一旦损坏，将无任何回退手段
+      if (snap && snap.success === false) {
+        return {
+          success: false,
+          error: `快照备份失败（${snap.error}），为防数据丢失已中止保存。\n请检查磁盘空间/文件权限后重试。`
+        };
+      }
 
       const ext = path.extname(filePath).toLowerCase();
       if (ext === '.json') {
-        // 🔐 原子写入：tmp + rename，中途崩溃不再损坏原卡（代码审查修复 3）
+        // 原子写入：tmp + rename（原逻辑保留）
         const tmpPath = filePath + '.tmp';
         await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
         await fs.promises.rename(tmpPath, filePath);
@@ -1615,15 +1858,20 @@ app.whenReady().then(() => {
         const buffer = await fs.promises.readFile(filePath);
         const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
         if (newBuffer) {
-          await fs.promises.writeFile(filePath, newBuffer);
+          // 🔧 修复：与 JSON 分支同口径 tmp + rename 原子替换，
+          // 杜绝写入中途崩溃/断电产出无 IEND 的残缺 PNG
+          const tmpPath = filePath + '.tmp';
+          await fs.promises.writeFile(tmpPath, newBuffer);
+          await fs.promises.rename(tmpPath, filePath);
           return { success: true };
         } else {
           return { success: false, error: "无法写入 PNG 结构。" };
         }
       }
-      // 【修复 BUG-4】webp 等格式无法把 JSON 回写图内，明确提示而非笼统"不支持的文件格式"
       return { success: false, error: `暂不支持 ${ext || ''} 格式的在线保存（仅支持 .json / .png 卡片，webp 无法回写数据）` };
     } catch (e) {
+      // 🔧 残留 tmp 清理（rename 失败时遗留 .tmp 不污染库目录扫描）
+      await fs.promises.unlink(filePath + '.tmp').catch(() => { });
       return { success: false, error: e.message };
     }
   });
@@ -1742,7 +1990,7 @@ app.whenReady().then(() => {
 
       // 清理老旧备份，只保留同名文件的最近 10 份
       const files = await fs.promises.readdir(backupDir);
-      const myBackups = files.filter(f => f.startsWith(baseName + '_')).sort();
+      const myBackups = files.filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json')).sort();
       if (myBackups.length > 10) {
         const filesToDelete = myBackups.slice(0, myBackups.length - 10);
         for (const f of filesToDelete) {
@@ -1881,6 +2129,72 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🌍 世界书专属：列表某本世界书的历史快照（userData/jsTavern_Backups/worldbooks，按时间倒序）
+  ipcMain.handle('wb:listSnapshots', async (event, filePath) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
+      if (!fs.existsSync(backupDir)) return { success: true, data: [] };
+      const baseName = path.basename(filePath, '.json');
+      const files = await fs.promises.readdir(backupDir);
+      const snaps = files
+        .filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json'))
+        .sort()
+        .reverse(); // 时间戳内已含可排序 ISO 串，倒序后最新在前
+      const detail = await Promise.all(snaps.map(async f => {
+        const p = path.join(backupDir, f);
+        const st = await fs.promises.stat(p).catch(() => null);
+        return { file: f, path: p, mtime: st ? st.mtimeMs : 0, size: st ? st.size : 0 };
+      }));
+      return { success: true, data: detail };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 🌍 世界书专属：回滚到指定快照（先备份当前版本，再用快照覆盖）
+  ipcMain.handle('wb:restoreSnapshot', async (event, { filePath, snapshotPath }) => {
+    try {
+      if (!filePath || !snapshotPath) return { success: false, error: '参数缺失。' };
+      if (!isPathAllowed(filePath)) return forbidden();
+      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
+      await fs.promises.mkdir(backupDir, { recursive: true });
+      if (fs.existsSync(filePath)) {
+        const baseName = path.basename(filePath, '.json');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        await fs.promises.copyFile(filePath, path.join(backupDir, `${baseName}_${timestamp}.json`));
+      }
+      await fs.promises.copyFile(snapshotPath, filePath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 🌍 世界书专属：批量导出（源须在白名单内；目标目录由用户 dialog 显式选择）
+  ipcMain.handle('wb:exportBatch', async (event, filePaths) => {
+    try {
+      if (!Array.isArray(filePaths) || filePaths.length === 0) return { success: false, error: '未选择任何世界书。' };
+      const { canceled, filePaths: targetDirs } = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择世界书批量导出的目标文件夹'
+      });
+      if (canceled || targetDirs.length === 0) return { success: false, error: '用户取消操作' };
+      const outDir = path.join(targetDirs[0], `Worldbook_Batch_Export_${Date.now()}`);
+      await fs.promises.mkdir(outDir, { recursive: true });
+      let count = 0;
+      for (const p of filePaths) {
+        if (!isPathAllowed(p) || !fs.existsSync(p)) continue;
+        await fs.promises.copyFile(p, path.join(outDir, path.basename(p)));
+        count++;
+      }
+      return { success: true, count, outDir };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // 打开全局回收站（世界书删除/查重清洗移入的 userData/jsTavern_Trash；不存在则先创建）
   ipcMain.handle('sys:openGlobalTrash', async () => {
     try {
@@ -1904,35 +2218,37 @@ app.whenReady().then(() => {
         await fs.promises.mkdir(trashDir, { recursive: true });
       }
 
-      let trashedCount = 0;
+      // 🔧 修复：分项报告。单个文件失败（EBUSY/EPERM）不再中断整批，
+      // 也不再把「前面已删、后面失败」误报成整体失败 → 杜绝幽灵卡
+      const results = { success: true, count: 0, failed: [] };
+      let seq = 0; // 🔧 同批次 Date.now() 可能撞同一毫秒，加序号防回收站内同名互覆
       for (const p of (Array.isArray(filePaths) ? filePaths : [])) {
-        // 【安全加固】仅处理白名单内的文件（防越权移动任意文件）
         if (!isPathAllowed(p)) continue;
-        if (p && fs.existsSync(p)) {
-          const fileName = path.basename(p);
-          // 加上时间戳前缀防重名覆盖
-          const dest = path.join(trashDir, `${Date.now()}_${fileName}`);
-
+        if (!p || !fs.existsSync(p)) continue;
+        try {
+          const dest = path.join(trashDir, `${Date.now()}_${seq++}_${path.basename(p)}`);
           try {
-            // 1. 首选：尝试直接重命名（同盘移动极快）
+            // 1. 首选：同盘 rename（极快）
             await fs.promises.rename(p, dest);
           } catch (renameErr) {
-            // 2. 核心修复：如果是跨盘移动（EXDEV: cross-device link），降级为【复制 + 删除】策略
+            // 2. 跨盘（EXDEV）：降级为复制 + 删除
             if (renameErr && renameErr.code === 'EXDEV') {
               await fs.promises.copyFile(p, dest);
               await fs.promises.unlink(p);
             } else {
-              // 其他错误（如文件被占用 EBUSY / 权限 EPERM）原样抛出，让前端看到明确报错
-              throw renameErr;
+              throw renameErr; // EBUSY/EPERM 等记入 failed，继续处理下一个
             }
           }
-          trashedCount++;
+          results.count++;
+        } catch (err) {
+          results.failed.push({ path: p, error: err.message });
         }
       }
-      return { success: true, count: trashedCount };
+      if (results.count === 0 && results.failed.length > 0) results.success = false;
+      return results;
     } catch (err) {
       console.error('🗑️ 移入回收站失败:', err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message, count: 0, failed: [] };
     }
   });
 

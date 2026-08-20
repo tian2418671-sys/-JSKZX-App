@@ -27,18 +27,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listCardSnapshots: (filePath) => ipcRenderer.invoke('card:listSnapshots', filePath),
     // 📸 历史快照：从快照恢复指定卡片（先备份当前版本再覆盖）
     restoreCardSnapshot: (payload) => ipcRenderer.invoke('card:restoreSnapshot', payload),
+    // 🗑️ 历史快照：删除指定卡片的一条历史快照
+    deleteCardSnapshot: (snapshotPath) => ipcRenderer.invoke('card:deleteSnapshot', snapshotPath),
     // 🧹 历史快照：一键清理全部历史快照垃圾（递归删除库目录下所有 .bak_history，释放硬盘空间）
     cleanAllSnapshots: (libraryPath) => ipcRenderer.invoke('sys:cleanAllSnapshots', libraryPath),
     // 🧹 历史快照：清理孤儿快照目录（卡片已删除但 .bak_history 残留）
     cleanOrphanSnapshots: (libraryPath) => ipcRenderer.invoke('sys:cleanOrphanSnapshots', libraryPath),
-    // 读取全局标签库（主进程配置文件，跨 dev/生产统一持久化）
-    getGlobalTags: () => ipcRenderer.invoke('config:getGlobalTags'),
-    // 保存全局标签库到主进程配置文件
-    saveGlobalTags: (tags) => ipcRenderer.invoke('config:saveGlobalTags', tags),
-    // 读取通用 UI 状态（分组/语言/卡片分类等；主进程配置文件，跨 dev/生产统一持久化）
+    // 【已删除】getGlobalTags / saveGlobalTags / saveUiSettings：渲染层零调用（全局状态统一走 loadAppConfig/saveAppConfig）
+    // 读取通用 UI 状态（旧环境 tavern_manager_config.json 只读回退，仅 app_config.json 不存在时使用）
     getUiSettings: () => ipcRenderer.invoke('config:getUiSettings'),
-    // 合并保存通用 UI 状态到主进程配置文件
-    saveUiSettings: (settings) => ipcRenderer.invoke('config:saveUiSettings', settings),
     // 🛡️ 统一持久化中枢：读取 app_config.json 全量配置（语言/分组/全局标签池/卡片覆盖层/API Key）
     loadAppConfig: () => ipcRenderer.invoke('sys:loadConfig'),
     // 🛡️ 统一持久化中枢：原子写入 app_config.json（全量替换，必须传完整配置对象）
@@ -71,8 +68,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportBatchPackage: (filePaths) => ipcRenderer.invoke('file:exportBatchPackage', filePaths),
     // 磁盘扫描：获取所有存在的盘符
     getWindowsDrives: () => ipcRenderer.invoke('get-windows-drives'),
-    // 磁盘扫描：扫描指定盘符/文件夹（无参时主进程弹出原生目录选择器；useFilter 控制体积过滤）
-    scanTargetFolder: (targetPath, useFilter) => ipcRenderer.invoke('scan-target-folder', targetPath, useFilter),
+    // 磁盘扫描：扫描指定盘符/文件夹（无参时主进程弹出原生目录选择器；useFilter 控制体积过滤；excludeFolder 排除当前库）
+    scanTargetFolder: (targetPath, useFilter, excludeFolder) => ipcRenderer.invoke('scan-target-folder', targetPath, useFilter, excludeFolder),
     // 磁盘扫描：接收主进程扫描进度心跳
     onScanProgress: (callback) => {
         ipcRenderer.removeAllListeners('scan-progress'); // 防止重复绑定
@@ -101,6 +98,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createWorldbook: (params) => ipcRenderer.invoke('wb:create', params),
     // 🌍 世界书专属通道：重命名世界书物理文件
     renameWorldbookFile: (params) => ipcRenderer.invoke('wb:rename', params),
+    // 🌍 世界书专属通道：列表某本世界书的历史快照
+    listWorldbookSnapshots: (filePath) => ipcRenderer.invoke('wb:listSnapshots', filePath),
+    // 🌍 世界书专属通道：回滚到指定快照
+    restoreWorldbookSnapshot: (payload) => ipcRenderer.invoke('wb:restoreSnapshot', payload),
+    // 🌍 世界书专属通道：批量导出已落盘世界书
+    exportWorldbooksBatch: (filePaths) => ipcRenderer.invoke('wb:exportBatch', filePaths),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
     trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
     // 🗑️ 打开全局回收站（世界书删除/查重清洗的 userData/jsTavern_Trash）

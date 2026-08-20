@@ -10,26 +10,23 @@ import { parsePNGChunk, deepScanForJSON } from './pngParser.js';
  * @returns {object} 规范化后的 V2 结构
  */
 export function normalizeCardData(rawData) {
-    let card = rawData;
+    // 🔧 纯函数化：深拷贝后再规范化，杜绝原地修改入参造成的跨引用污染
+    // （同一 parsedData 可能同时被 library 旧引用持有；structuredClone 对 JSON 派生对象零损耗）
+    let card = (rawData && typeof rawData === 'object' && !Array.isArray(rawData))
+        ? structuredClone(rawData)
+        : {};
 
-    // 1. 防止双重嵌套（修复缺陷2）：卡片缺 spec 但已有 data 层（第三方导出/手改 JSON 常见），
-    //    直接补齐 spec 即可，绝不能把整个对象再包进新的 data 层造成 {data:{data:{...}}} 套娃
     if (!card.spec && card.data && typeof card.data === 'object') {
         card.spec = 'chara_card_v2';
         card.spec_version = '2.0';
-    }
-    // 2. V1 卡片包装：既无 spec 也无 data 层，说明是 V1 扁平结构，进行标准 V2 包装
-    else if (!card.spec && !card.data) {
+    } else if (!card.spec && !card.data) {
         card = {
             spec: 'chara_card_v2',
             spec_version: '2.0',
-            data: { ...rawData }
+            data: { ...card }
         };
     }
 
-    // 3. 字段绝对安全兜底（修复缺陷1）：无论原生 V2/V3 还是包装来的 V1，
-    //    一律强制补齐容易缺失的数组字段，杜绝 Vue 渲染时
-    //    `card.data.tags.filter()` 报 Cannot read properties of undefined 导致白屏
     if (card.data) {
         card.data.tags = Array.isArray(card.data.tags) ? card.data.tags : [];
         card.data.alternate_greetings = Array.isArray(card.data.alternate_greetings) ? card.data.alternate_greetings : [];

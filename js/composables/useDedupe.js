@@ -8,7 +8,7 @@ import { ref } from 'vue';
 export function useDedupe({
     library, worldbooks, activeWorldbook, cardData,
     estimateCardTokens,
-    nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories
+    nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories, deleteCardOverlays
 }) {
     // =========================================================
     // 🔍 智能查重与版本清洗系统
@@ -128,21 +128,28 @@ export function useDedupe({
 
         const res = await window.electronAPI.trashFiles(pathsToTrash);
         if (res && res.success) {
-            // 3. 先记录当前正在编辑的卡片是否会被清理
+            // 🔧 按实际删除成功的路径过滤内存（失败项保留在库中，与磁盘一致，杜绝幽灵卡）
+            const failedPaths = new Set((res.failed || []).map(f => f.path));
+            const trashedPaths = pathsToTrash.filter(p => !failedPaths.has(p));
+
             const currentLibItem = library.value.find(item => item.data === cardData.value);
-            const currentTrashed = !!(currentLibItem && pathsToTrash.includes(currentLibItem.path));
+            const currentTrashed = !!(currentLibItem && trashedPaths.includes(currentLibItem.path));
 
-            // 2. 从内存库中物理踢出已清理的卡片
-            library.value = library.value.filter(c => !pathsToTrash.includes(c.path));
-
-            // 1. 从查重视图中移除该组
+            library.value = library.value.filter(c => !trashedPaths.includes(c.path));
             duplicateGroups.value.splice(groupIndex, 1);
 
-            // 3. 若当前编辑卡片被清理，关闭编辑器
             if (currentTrashed) reset();
 
+            deleteCardOverlays(trashedPaths); // 🔧 清理覆盖层，防配置膨胀
             await cleanupEmptyCategories(); // 🧹 自动清理空分组
-            nativeAlert(`清理成功！已将 ${res.count} 张冗余卡片移入回收站。`, 'info');
+
+            // 🔧 分项结果提示（渲染进程无 path 模块，用 split 取文件名）
+            if (failedPaths.size > 0) {
+                const names = [...failedPaths].map(p => p.split(/[\\/]/).pop()).join('、');
+                nativeAlert(`已清理 ${res.count} 张；${failedPaths.size} 张失败（可能被其他程序占用）：\n${names}`, 'warning');
+            } else {
+                nativeAlert(`清理成功！已将 ${res.count} 张冗余卡片移入回收站。`, 'info');
+            }
         } else {
             nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
         }
@@ -265,13 +272,31 @@ export function useDedupe({
 
         const res = await window.electronAPI.trashFiles(pathsToTrash);
         if (res && res.success) {
-            wbDuplicateGroups.value.splice(groupIndex, 1);
-            worldbooks.value = worldbooks.value.filter(wb => !pathsToTrash.includes(wb.path));
-            if (activeWorldbook.value && pathsToTrash.includes(activeWorldbook.value.path)) {
+            // 🔧 按实际删除成功的路径过滤内存（失败项保留，与磁盘一致）
+            const failedPaths = new Set((res.failed || []).map(f => f.path));
+            const trashedPaths = pathsToTrash.filter(p => !failedPaths.has(p));
+            if (trashedPaths.length === 0) {
+                return nativeAlert('全部世界书移入回收站失败（可能被其他程序占用），未做任何更改。', 'error');
+            }
+
+            worldbooks.value = worldbooks.value.filter(wb => !trashedPaths.includes(wb.path));
+            // 组内全部删净才移除该组；有残留则只剔除已删项，保持弹窗数据与磁盘一致
+            if (failedPaths.size === 0) {
+                wbDuplicateGroups.value.splice(groupIndex, 1);
+            } else {
+                group.list = group.list.filter(wb => trashedPaths.includes(wb.path));
+            }
+            if (activeWorldbook.value && trashedPaths.includes(activeWorldbook.value.path)) {
                 activeWorldbook.value = worldbooks.value[0] || null;
             }
             addLog(`🗑️ 已清理 ${res.count} 本冗余世界书`, 'warning');
-            nativeAlert(`清理完成！已移入回收站 ${res.count} 本世界书。`, 'info');
+
+            if (failedPaths.size > 0) {
+                const names = [...failedPaths].map(p => p.split(/[\\/]/).pop()).join('、');
+                nativeAlert(`已清理 ${res.count} 本；${failedPaths.size} 本失败（可能被占用）：\n${names}`, 'warning');
+            } else {
+                nativeAlert(`清理完成！已移入回收站 ${res.count} 本世界书。`, 'info');
+            }
         } else {
             nativeAlert(`清理失败: ${(res && res.error) || '未知错误'}`, 'error');
         }

@@ -18,7 +18,8 @@ export function useTags({
     searchQueryInput,
     selectedIds,
     clearSelection,
-    syncConfigToDisk
+    syncConfigToDisk,
+    createProgressToast     // 🔧 批量进度 Toast 工厂（并发安全）
 }) {
     // ================= 批量标签与预设系统 =================
     const showBatchTagModal = ref(false);
@@ -153,6 +154,24 @@ export function useTags({
         return Array.from(tagSet);
     });
 
+    // 🔧 批量落盘进度执行器：逐张执行 + 节流进度 Toast（每 20 张）+ 完成态。
+    // 仅超过 10 张时启用 Toast（小批量瞬时完成，无需打扰）
+    const runWithProgress = async (items, label, taskFn) => {
+        const total = items.length;
+        const prog = total > 10 ? createProgressToast() : null; // 小批量不打扰
+        let saved = 0;
+        for (let i = 0; i < total; i++) {
+            if (await taskFn(items[i])) saved++;
+            if (prog && ((i + 1) % 20 === 0 || i + 1 === total)) {
+                prog.update(`${label}... ${i + 1}/${total}`);
+            }
+        }
+        if (prog) prog.finish(`✅ ${label}完成（${saved}/${total} 张已落盘）`, saved === total ? 'success' : 'warning');
+        // 🔧 批次结束强制冲刷一次落盘（防抖只负责循环中高频写，这里收尾防丢最后一次变更）
+        if (total > 0) syncConfigToDisk();
+        return saved;
+    };
+
     // 3. 允许在系统/常用标签栏直接添加新标签（写入统一池，watch deep 自动持久化）
     const addTagToGlobalPool = () => {
         const val = newGlobalTagInput.value.trim();
@@ -194,16 +213,15 @@ export function useTags({
         });
 
         // 将受影响的卡片物理保存到本地（防止重启/重新扫描后脏标签复活），并同步覆盖层
-        let savedCount = 0;
-        for (const item of modifiedItems) {
+        const savedCount = await runWithProgress(modifiedItems, '🧹 清洗标签', async (item) => {
             try {
-                // 统一持久化中枢：写覆盖层 + 物理落盘
-                await persistCardUpdate(item, { tags: item.customTags, category: item.category });
-                savedCount++;
+                await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
+                return true;
             } catch (e) {
                 console.error(`清洗标签后物理保存失败 [${item.name}]:`, e);
+                return false;
             }
-        }
+        });
 
         nativeAlert(`已从系统库彻底清洗标签：[${tagToRemove}]\n${savedCount > 0 ? `并已将 ${savedCount} 张受影响卡片物理保存到本地！` : '（库中未发现残留该标签的卡片）'}`, 'info');
     };
@@ -246,15 +264,15 @@ export function useTags({
         });
 
         // 3. 物理落盘（覆盖层写空数组 = 记录"用户已清空"，重扫不自动补标签）
-        let savedCount = 0;
-        for (const item of modifiedItems) {
+        const savedCount = await runWithProgress(modifiedItems, '🧹 清空标签', async (item) => {
             try {
                 await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
-                savedCount++;
+                return true;
             } catch (e) {
                 console.error(`一键清空标签后物理保存失败 [${item.name}]:`, e);
+                return false;
             }
-        }
+        });
 
         // 4. 刷新当前卡片展示
         if (cardData.value) triggerRef(cardData);
@@ -298,15 +316,15 @@ export function useTags({
         });
 
         // 3. 物理落盘 + 覆盖层同步
-        let savedCount = 0;
-        for (const item of modifiedItems) {
+        const savedCount = await runWithProgress(modifiedItems, '🗑️ 批量删除标签', async (item) => {
             try {
                 await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
-                savedCount++;
+                return true;
             } catch (e) {
                 console.error(`批量删除标签后物理保存失败 [${item.name}]:`, e);
+                return false;
             }
-        }
+        });
         if (cardData.value) triggerRef(cardData);
 
         nativeAlert(`🗑️ 已批量删除 ${tags.length} 个标签\n并清洗全库 ${modifiedItems.length} 张卡片，物理保存 ${savedCount} 张。`, 'info');
@@ -357,14 +375,13 @@ export function useTags({
         if (selectedIds.value.length === 0) return;
         const tagsToAdd = batchInputTags.value.split(',').map(t => t.trim()).filter(t => t);
 
-        let savedCount = 0;
+        // 🔧 先收敛目标集合（原为 library 全量遍历 + selectedIds 过滤）
+        const targets = library.value.filter(i => selectedIds.value.includes(i.id));
 
-        for (const item of library.value) {
-            if (!selectedIds.value.includes(item.id)) continue;
-
+        const savedCount = await runWithProgress(targets, '🏷️ 批量标签保存', async (item) => {
             let isModified = false;
 
-            // 1. 同步内存 customTags
+            // 1. 同步内存 customTags（原逻辑不变）
             if (batchMode.value === 'overwrite') {
                 item.customTags = [...tagsToAdd];
                 isModified = true;
@@ -376,10 +393,9 @@ export function useTags({
                 }
             }
 
-            // 2. 同步原生数据 tags
+            // 2. 同步原生数据 tags（原逻辑不变）
             const dataLayer = item.data?.data || item.data || {};
             if (!Array.isArray(dataLayer.tags)) dataLayer.tags = [];
-
             if (batchMode.value === 'overwrite') {
                 dataLayer.tags = [...tagsToAdd];
                 isModified = true;
@@ -392,11 +408,15 @@ export function useTags({
             }
 
             // 3. 统一持久化中枢：写覆盖层 + 物理落盘
-            if (isModified) {
+            if (!isModified) return false;
+            try {
                 await persistCardUpdate(item, { tags: item.customTags, category: item.category });
-                savedCount++;
+                return true;
+            } catch (e) {
+                console.error(`批量标签保存失败 [${item.name}]:`, e);
+                return false;
             }
-        }
+        });
 
         nativeAlert(`成功为 ${selectedIds.value.length} 张卡片更新标签，并成功物理保存了 ${savedCount} 张！`, 'info');
         showBatchTagModal.value = false;

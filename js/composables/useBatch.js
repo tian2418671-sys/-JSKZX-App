@@ -19,6 +19,7 @@ export function useBatch({
     reset,
     cleanupEmptyCategories,
     persistCardUpdate,
+    deleteCardOverlays,
     nativeAlert,
     confirmDialog,
     appPrompt,
@@ -144,18 +145,31 @@ export function useBatch({
         const items = library.value.filter(i => selectedIds.value.includes(i.id));
         const paths = items.map(i => i.path);
         if (paths.length === 0) return;
-        // 若当前打开的卡片也在删除列表中，删除后关闭编辑面板
-        const openCardInList = cardData.value && items.some(i => i.data === cardData.value);
+        // （删除原 openCardInList 预计算——部分成功场景下需按实际删除项重算）
         if (!window.electronAPI || typeof window.electronAPI.trashFiles !== 'function') {
             return nativeAlert('当前环境不支持批量删除，请使用 Electron 版。', 'warning');
         }
         const res = await window.electronAPI.trashFiles(paths);
         if (res && res.success) {
-            library.value = library.value.filter(i => !selectedIds.value.includes(i.id));
-            selectedIds.value = [];
-            if (openCardInList) reset();
+            // 🔧 按实际删除结果过滤内存与选中列表（失败项保留，与磁盘一致）
+            const failedPaths = new Set((res.failed || []).map(f => f.path));
+            const deletedItems = items.filter(i => !failedPaths.has(i.path));
+            if (deletedItems.length === 0) {
+                return nativeAlert('全部卡片移入回收站失败（可能被其他程序占用），未做任何更改。', 'error');
+            }
+            const deletedIds = new Set(deletedItems.map(i => i.id));
+            library.value = library.value.filter(i => !deletedIds.has(i.id));
+            selectedIds.value = selectedIds.value.filter(id => !deletedIds.has(id));
+            // 当前打开的卡片仅在「确实被删除」时才关闭编辑面板
+            if (cardData.value && deletedItems.some(i => i.data === cardData.value)) reset();
+            deleteCardOverlays(deletedItems.map(i => i.path)); // 🔧 清理覆盖层，防配置膨胀
             await cleanupEmptyCategories(); // 🧹 自动清理空分组
-            nativeAlert(`✅ 已将 ${paths.length} 张卡片移入回收站！`, 'info');
+            if (failedPaths.size > 0) {
+                const names = [...failedPaths].map(p => p.split(/[\\/]/).pop()).join('、');
+                nativeAlert(`✅ 已将 ${deletedItems.length} 张卡片移入回收站；${failedPaths.size} 张失败（可能被占用）：\n${names}`, 'warning');
+            } else {
+                nativeAlert(`✅ 已将 ${deletedItems.length} 张卡片移入回收站！`, 'info');
+            }
         } else {
             nativeAlert(`批量删除失败: ${(res && res.error) || '未知错误'}`, 'error');
         }
