@@ -67,6 +67,60 @@ export function extractBookEntries(book) {
 }
 
 /**
+ * 🕵️ 角色卡血统严格鉴定（纯函数，从 App.vue 迁入）：
+ * 过滤伪装成卡片的聊天记录、独立世界书、UI 主题配置、config.json 等系统配置
+ * 与无内容字段的杂物，防止污染卡片库。
+ * @param {object} data 待鉴定的解析后 JSON 对象
+ * @returns {boolean} 是否为合法角色卡数据
+ */
+export function isCharacterCardData(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+
+    // 🚫 绝对拦截①：聊天记录（酒馆聊天导出常为数组，或含 messages / chat_metadata 字段）
+    if (data.messages || data.chat_metadata) return false;
+
+    // 🚫 绝对拦截②：独立世界书 —— 任何形态的 entries 都是世界书特征（数组 / 对象字典 / 字符串），
+    //    以及 data.entries 嵌套结构（非 character_book），一律拦截。
+    //    角色卡的世界书永远只在 data.character_book / data.data.character_book 内，绝不会是顶层或 data.entries。
+    if (data.entries !== undefined) return false;
+    if (data.data && typeof data.data === 'object' &&
+        'entries' in data.data && !data.data.character_book) return false;
+
+    // 🚫 绝对拦截③：酒馆 UI 主题 / 界面配置 JSON
+    if (data.colors || data.user_settings) return false;
+
+    // V2/V3：spec 标记（chara_card_v2/v3）且带 data 对象
+    if (typeof data.spec === 'string' && /^chara_card_v[23]$/i.test(data.spec.trim())) {
+        return !!(data.data && typeof data.data === 'object');
+    }
+    // V1 / Character.ai 格式：必须有角色名 + 至少一个内容字段
+    if (typeof data.name === 'string' && data.name.trim() !== '') {
+        // ✅ [补丁] 增加更严格的排他条件：酒馆 config.json 等标准配置文件即使带 name 也直接抛弃，
+        // 防止其被误当成 V1 角色卡混入库中
+        if (data.system_settings || data.api_keys || data.public_api) return false;
+
+        return typeof data.description === 'string' ||
+               typeof data.personality === 'string' ||
+               typeof data.first_mes === 'string' ||
+               typeof data.scenario === 'string' ||
+               typeof data.mes_example === 'string';
+    }
+    return false;
+}
+
+/**
+ * 自动贴标签规则（正则匹配关键词，静态常量，从 App.vue 迁入）
+ * 供 useCardCrud 的 processAutoTagsAndCategory 消费。
+ */
+export const autoTagRules = {
+    'Fantasy (奇幻)': /魔法|精灵|异世界|巨龙|魔王|骑士/i,
+    'Sci-Fi (科幻)': /星系|机甲|赛博朋克|AI|未来/i,
+    'Monster (魔物娘)': /吸血鬼|狼人|魅魔|触手|兽人/i,
+    'NSFW (限制级)': /nsfw|18\+|r18|色情|淫乱/i,
+    'Romance (恋爱)': /恋爱|傲娇|病娇|青梅竹马/i
+};
+
+/**
  * 读取并解析角色卡文件
  * @param {File} file 用户选择的文件（.json / .png / .webp / .jpeg / .jpg）
  * @returns {Promise<{data: object, imgUrl: string|null, file: File}>} 解析结果
