@@ -1272,6 +1272,8 @@ export default {
         // 导致 Token 统计 / Raw JSON 视图在打字时不刷新。手动 triggerRef 强制刷新（保留 shallowRef 性能优势）
         const refreshCardData = () => {
             if (cardData.value) triggerRef(cardData);
+            // 🚀 v1.8.5：编辑器改了当前卡内容 → 精确失效该卡的 Token 缓存（侧栏徽章下次渲染重算）
+            if (cardData.value) cardTokensCache.delete(cardData.value);
         };
 
         // 识别卡片规范版本
@@ -1363,7 +1365,8 @@ export default {
             // 将逗号分隔的字符串切割为数组，自动去除空格与空项（兼容中英文逗号）
             entry[targetField] = String(rawValue).split(/[,，]/).map(s => s.trim()).filter(s => s.length > 0);
             // 【修复】词条触发词变化会影响世界书 Token 统计，手动触发浅层刷新
-            if (cardData.value) triggerRef(cardData);
+            // 🚀 v1.8.5：触发词参与 Token 估算 → 同步失效缓存
+            if (cardData.value) { triggerRef(cardData); cardTokensCache.delete(cardData.value); }
         };
 
         // 【修复】富文本渲染与代码安全转义
@@ -1465,7 +1468,7 @@ export default {
                 script.disabled = !!value;
             }
             // 【修复】shallowRef 深层编辑不触发响应式，手动刷新视图（防 Checkbox/文字假死）
-            if (cardData.value) triggerRef(cardData);
+            if (cardData.value) { triggerRef(cardData); cardTokensCache.delete(cardData.value); }
         };
 
         // ================= [ 方法：聊天测卡逻辑 ] =================
@@ -1524,7 +1527,8 @@ export default {
             }
             showTextModal.value = false;
             // 【修复】shallowRef 深层编辑不触发响应式，手动刷新（全屏编辑器保存后 Token/正文实时更新）
-            if (cardData.value) triggerRef(cardData);
+            // 🚀 v1.8.5：正文字段变化影响 Token 估算 → 同步失效缓存
+            if (cardData.value) { triggerRef(cardData); cardTokensCache.delete(cardData.value); }
         };
 
         // ================= [ 高清立绘大图预览 Modal ] =================
@@ -1961,11 +1965,38 @@ export default {
             return false;
         };
 
-        const parseAndAddCard = async (file) => {
+        // 🚀 v1.8.5 性能参数（App.vue 模块内共享）：
+        //    - deferredAutoTagSaves：批量加载期收集的"自动打标待落盘"卡片列表
+        //    - flushDeferredAutoTagSaves：加载完成后低并发后台写盘（不阻塞 UI 呈现）
+        //    - opts.target：staging 暂存数组（批量加载完成后一次性赋给 library）
+        //    - opts.deferAutoTagSave：批量加载路径置 true，跳过逐卡立即写盘
+        const deferredAutoTagSaves = [];
+        const flushDeferredAutoTagSaves = async () => {
+            if (deferredAutoTagSaves.length === 0) return;
+            const pending = deferredAutoTagSaves.splice(0, deferredAutoTagSaves.length);
+            console.log(`⏳ 后台落盘自动打标卡片: ${pending.length} 张（低并发，不阻塞界面）`);
+            const CONCURRENCY = 2; // 低并发：避免与用户交互争抢磁盘 IO
+            for (let i = 0; i < pending.length; i += CONCURRENCY) {
+                const batch = pending.slice(i, i + CONCURRENCY);
+                await Promise.all(batch.map(async (cardInfo) => {
+                    try {
+                        await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                    } catch (e) {
+                        console.warn(`自动打标后台保存失败 [${cardInfo.name}]:`, e);
+                    }
+                }));
+                await new Promise(r => setTimeout(r, 0)); // 批间让出主线程一拍
+            }
+            console.log(`✅ 自动打标后台落盘完成`);
+        };
+
+        const parseAndAddCard = async (file, opts = {}) => {
             try {
                 // 去重拦截：同一路径的卡片已在库中则跳过（防止重复扫描/重复导入产生“影分身”）
                 // 标记 _skippedExisting 供上层区分"已在库中"与"无法解析"，给出准确提示
-                if (library.value.some(c => c.path === file.path)) {
+                // 🚀 v1.8.5：批量加载（staging）时需同时查 staging，防止同批次重复路径漏拦
+                const existingPaths = opts.target || library.value;
+                if (existingPaths.some(c => c.path === file.path)) {
                     file._skippedExisting = true;
                     return false;
                 }
@@ -2045,19 +2076,30 @@ export default {
                     const oldTagsLen = (cardInfo.customTags || []).length;
                     const oldCategory = cardInfo.category;
                     processAutoTagsAndCategory(cardInfo);
-                    library.value.push(cardInfo);
+                    // 🚀 v1.8.5 性能修复：批量加载路径推入 staging 暂存数组（加载完成后一次性
+                    //    赋给 library），避免每 push 一张就触发全库 computed（filteredLibrary/
+                    //    globalAllWorldbooks 等）失效风暴 —— 千卡库加载期 O(N²) 重算主因之一。
+                    (opts.target || library.value).push(cardInfo);
 
-                    // ✅ [补丁] 如果自动分类/打标签使数据发生了变更，必须立即覆盖物理文件！
+                    // ✅ [补丁] 如果自动分类/打标签使数据发生了变更，必须覆盖物理文件！
                     // （否则新卡导入的自动标签/分类只活在内存，重启后全部丢失）
+                    // 🚀 v1.8.5 性能修复：批量加载路径（deferAutoTagSave）不再逐卡立即写盘 ——
+                    //    旧版启动加载 = 千张卡 × (整 PNG 读回 + 重写 + 快照备份) 的 I/O 风暴，
+                    //    直接把启动拖到分钟级并伴随「未响应」。现在只收集，加载完成后由
+                    //    flushDeferredAutoTagSaves 低并发后台落盘，UI 秒开。
                     if (oldCategory !== cardInfo.category || oldTagsLen !== (cardInfo.customTags || []).length) {
                         if (window.electronAPI && !/\.json$/i.test(cardInfo.path)) {
                             // 只写入原生 data 的 tags，保证卡片格式不被污染
                             const dataLayer = cardInfo.data?.data || cardInfo.data || {};
                             dataLayer.tags = Array.from(new Set([...(dataLayer.tags || []), ...(cardInfo.customTags || [])]));
-                            try {
-                                await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
-                            } catch (e) {
-                                console.warn(`自动打标物理保存失败 [${cardInfo.name}]:`, e);
+                            if (opts.deferAutoTagSave) {
+                                deferredAutoTagSaves.push(cardInfo);
+                            } else {
+                                try {
+                                    await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                                } catch (e) {
+                                    console.warn(`自动打标物理保存失败 [${cardInfo.name}]:`, e);
+                                }
                             }
                         }
                     }
@@ -2071,6 +2113,14 @@ export default {
 
         // 统一处理主进程传来的文件列表（并发受限批处理：每批最多 8 张并行解析，
         // 大幅加速启动加载，同时避免一次性并发读取几百张 PNG 导致磁盘 I/O 尖峰）
+        // 🚀 v1.8.5 性能修复：
+        //    ① 解析结果先推入 staging 暂存数组，全部完成后【一次性】赋给 library ——
+        //       旧版逐张 library.value.push 会让依赖 library 的全库 computed
+        //       （filteredLibrary / globalAllWorldbooks / globalAllRegexScripts）
+        //       在加载期间反复失效+重算，千卡库 = 千次 O(N) 重算 ≈ O(N²) 开销，
+        //       且每次重算都在主线程排序/拼接大字符串 → 输入卡顿、界面冻结；
+        //    ② 自动打标产生的物理写盘延迟到加载完成后低并发后台执行（见
+        //       flushDeferredAutoTagSaves），启动路径彻底告别「千卡读写 I/O 风暴」。
         const processElectronFiles = async (folderData) => {
             if (!folderData || !folderData.files) return;
 
@@ -2093,14 +2143,22 @@ export default {
             } // 清空当前库
             let addedCount = 0;
 
+            const staging = []; // 🚀 暂存数组：加载完成前不触发任何全库 computed
             const CONCURRENCY = 8;
             const files = folderData.files;
             for (let i = 0; i < files.length; i += CONCURRENCY) {
                 const batch = files.slice(i, i + CONCURRENCY);
-                const results = await Promise.all(batch.map(file => parseAndAddCard(file)));
+                const results = await Promise.all(batch.map(file => parseAndAddCard(file, {
+                    target: staging,             // 推入暂存数组而非 library
+                    deferAutoTagSave: true       // 写盘延迟到加载完成后批量执行
+                })));
                 addedCount += results.filter(Boolean).length;
             }
+            // 🚀 一次性替换：全库 computed 只失效一次、重算一次
+            library.value = staging;
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
+            // 🚀 自动打标落盘转后台低并发执行，不阻塞首屏呈现
+            flushDeferredAutoTagSaves();
         };
 
         // 💽 磁盘卡片扫描 已拆分为组合式函数 useDiskScan（见下文 setup 尾部调用）
@@ -3342,7 +3400,19 @@ export default {
         // 🔍 角色卡查重弹窗状态与方法已拆分为组合式函数 useDedupe（见下文 setup 尾部调用）
 
         // 计算单张卡片的设定丰度（与 cardTokenStats 口径对齐：叠加描述/首句/示例/性格/场景 + 世界书正文与触发词）
+        // 🚀 v1.8.5 性能修复：WeakMap 结果缓存（key = 卡片 data 对象引用）。
+        //    该函数被侧栏每个列表项渲染（itemTokenCount）+ tokens 排序比较器调用，
+        //    旧版无缓存：千卡库一次 tokens 排序 = O(N log N) 次全量重算（每卡正则
+        //    匹配 + 世界书全条目遍历），列表每次重渲再对全部可见项重算一遍 → 输入
+        //    卡顿/界面冻结主因。卡片 data 引用在库内稳定，缓存命中率极高；
+        //    编辑当前卡时由 refreshCardData 精确失效（WeakMap.delete）。
+        const cardTokensCache = new WeakMap();
         const estimateCardTokens = (card) => {
+            const dataKey = (card && (card.data || card)) || null;
+            if (dataKey && typeof dataKey === 'object') {
+                const cached = cardTokensCache.get(dataKey);
+                if (cached !== undefined) return cached;
+            }
             const d = card.data?.data || card.data || {};
             const text = [d.description, d.first_mes, d.mes_example, d.personality, d.scenario].filter(Boolean).join('\n');
             let total = estimateTokens(text);
@@ -3355,6 +3425,7 @@ export default {
             entries.forEach(e => {
                 total += estimateTokens(e.content) + estimateTokens((Array.isArray(e.key) ? e.key : []).join(', '));
             });
+            if (dataKey && typeof dataKey === 'object') cardTokensCache.set(dataKey, total);
             return total;
         };
 
@@ -3388,7 +3459,11 @@ export default {
         // 回调里的 syncConfigToDisk 已内置 isRestoringConfig guard，恢复期触发的写盘会被自动拦截，无需 immediate。
         watch(
             [theme, appSettings, sanitizeImportedTags, snapshotConfig, sidebarWidth, viewMode, isCompactMode, sortBy, systemPromptPresets, lastWorldbookDirPath, wbCategoryMap],
-            () => syncConfigToDisk(),
+            // 🚀 v1.8.5 性能修复：改走 500ms 防抖落盘。旧版直接调 syncConfigToDisk（全量
+            //    序列化 appSettings/cardOverlays/wbCategoryMap + 加密 IPC + 同步写盘），
+            //    连续 UI 微调（拖侧栏宽度/切主题等）每次都全量写盘，千卡库 overlays 体积
+            //    大时拖动全程卡顿。防抖版已有 beforeunload 冲刷兜底，不丢最后一次变更。
+            () => syncConfigToDiskDebounced(),
             { deep: true }
         );
 

@@ -147,31 +147,51 @@ export function useSearch({
                 || (!!subName && (subName === targetCat.cn || subName === targetCat.en || subName === targetCat.key));
         };
 
-        // —— 列表排序（在过滤结果上稳定排序，不修改原始 library）——
-        const sortCards = (a, b) => {
+        // —— 排序键提取（time 模式）——
+        // 【修复 BUG-2】"最新"以物理【创建时间 birthtime】为第一基准：
+        //   实测发现库内大量卡片的 mtime（修改时间）会被批量操作/touch 统一成同一时刻
+        //   （全库 mtime 同时被改），导致全库同值 → 排序退化、"最新"错乱。
+        //   而 birthtime（文件进入库的时刻）不会被批量统一，天然稳定：
+        //   新导入/复制/下载的卡 birthtime = 入库时刻 → 正确排最前。
+        //   内存导入（拖拽/链接下载）未重扫前 _ctime=0，回退 _mtime(=导入时刻) 同样最新。
+        const pickTime = (card) => {
+            const c = Number(card._ctime) || 0; // 创建时间（进入库的时刻，最可靠）
+            if (c) return c;
+            const m = Number(card._mtime) || 0; // 修改时间（可能被批量统一，仅作回退）
+            if (m) return m;
+            return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
+        };
+
+        // —— 列表排序（在过滤结果上排序；filter() 返回新数组，原地 sort 安全）——
+        // 🚀 v1.8.5 性能修复：tokens 排序改为预计算（Schwartzian transform）。
+        //    旧版比较器内嵌 estimateCardTokens(b) - estimateCardTokens(a)：千卡库一次
+        //    排序调用估算 ~2·N·logN 次（每卡全字段拼接 + 正则 + 世界书全条目遍历），
+        //    每次输入/切分组都重跑 → 秒级冻结。现改为每卡只算一次（叠加 App.vue 的
+        //    WeakMap 缓存，未变更卡直接命中缓存），成本从 O(N log N) 降为 O(N)。
+        // 🛡️ 卡片级 try/catch 兜底保留：脏卡估算失败按 0 计，排序永不抛错（防白屏）。
+        const sortList = (arr) => {
             if (sortBy.value === 'name') {
-                return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
+                return arr.sort((a, b) => {
+                    try { return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'); }
+                    catch (e) { return 0; }
+                });
             }
             if (sortBy.value === 'time') {
-                // 【修复 BUG-2】"最新"以物理【创建时间 birthtime】为第一基准：
-                //   实测发现库内大量卡片的 mtime（修改时间）会被批量操作/touch 统一成同一时刻
-                //   （全库 mtime 同时被改），导致 Math.max(mtime,birthtime) 全库同值 → 排序退化、
-                //   "最新"错乱。而 birthtime（文件进入库的时刻）不会被批量统一，天然稳定：
-                //   新导入/复制/下载的卡 birthtime = 入库时刻 → 正确排最前。
-                //   内存导入（拖拽/链接下载）未重扫前 _ctime=0，回退 _mtime(=导入时刻) 同样最新。
-                const pickTime = (card) => {
-                    const c = Number(card._ctime) || 0; // 创建时间（进入库的时刻，最可靠）
-                    if (c) return c;
-                    const m = Number(card._mtime) || 0; // 修改时间（可能被批量统一，仅作回退）
-                    if (m) return m;
-                    return Date.parse((card.data?.data || card.data || {}).create_date) || 0;
-                };
-                return pickTime(b) - pickTime(a); // 最新优先
+                return arr.sort((a, b) => {
+                    try { return pickTime(b) - pickTime(a); } // 最新优先
+                    catch (e) { return 0; }
+                });
             }
             if (sortBy.value === 'tokens') {
-                return estimateCardTokens(b) - estimateCardTokens(a); // Token 多优先
+                return arr
+                    .map(card => {
+                        try { return [card, estimateCardTokens(card)]; }
+                        catch (e) { console.warn('⚠️ Token 估算异常按 0 计:', card?.fileName || card?.name, e); return [card, 0]; }
+                    })
+                    .sort((x, y) => y[1] - x[1]) // Token 多优先
+                    .map(pair => pair[0]);
             }
-            return 0;
+            return arr;
         };
 
         // 无关键词：仅按当前分类过滤 + 排序（浏览模式）
@@ -180,15 +200,11 @@ export function useSearch({
         //    computed 崩溃 → 侧边栏（角色栏）整体消失/白屏，且该卡在库内每次重启复发。
         const query = (searchQuery.value || '').toLowerCase().trim();
         if (!query) {
-            return library.value
+            return sortList(library.value
                 .filter(card => {
                     try { return passCategory(card); }
                     catch (e) { console.warn('⚠️ 分组筛选异常跳过卡片:', card?.fileName || card?.name, e); return false; }
-                })
-                .sort((a, b) => {
-                    try { return sortCards(a, b); }
-                    catch (e) { console.warn('⚠️ 排序异常降级跳过:', e); return 0; }
-                });
+                }));
         }
 
         // —— 解析搜索表达式（拆分为多个 token，识别高级语法）——
@@ -202,7 +218,7 @@ export function useSearch({
             else rules.mustInclude.push(token);
         });
 
-        return library.value.filter(card => {
+        const filtered = library.value.filter(card => {
             try {
                 // 1. 分类过滤（搜索也遵守当前分组/快捷筛选；选"全部"= 全局检索）
                 if (!passCategory(card)) return false;
@@ -256,7 +272,8 @@ export function useSearch({
                 console.warn('⚠️ 检索卡片异常跳过:', card.fileName || card.name, e);
                 return false;
             }
-        }).sort(sortCards);
+        });
+        return sortList(filtered);
     });
 
     // 2. 计算总页数

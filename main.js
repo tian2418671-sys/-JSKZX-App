@@ -11,6 +11,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session, safe
 const { autoUpdater } = require('electron-updater'); // 【新增】OTA 自动更新模块（发布需上传 latest.yml）
 const path = require('path');
 const fs = require('fs');
+const fsp = require('fs/promises'); // 🚀 v1.8.5 异步文件 IO（库目录扫描异步化，消除主进程阻塞）
 const os = require('os');
 const { pathToFileURL } = require('url');
 const crypto = require('crypto'); // 📸 快照内容去重（SHA-256）
@@ -466,10 +467,13 @@ const configPath = path.join(app.getPath('userData'), 'tavern_manager_config.jso
 const APP_CONFIG_PATH = path.join(app.getPath('userData'), 'app_config.json');
 
 // 原子写 JSON 配置文件（写临时文件 + rename 原子替换，绝不在原文件上直接覆盖）
-function atomicWriteJson(filePath, data) {
+// 🚀 v1.8.5 性能修复：同步 writeFileSync/renameSync 改 fs/promises 异步版 ——
+//    旧版每次配置落盘（sys:saveConfig 高频触发）都阻塞主进程事件循环，
+//    cardOverlays 随库规模膨胀到几 MB 时，写盘期间窗口直接冻结。
+async function atomicWriteJson(filePath, data) {
   const tmpPath = filePath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  await fsp.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  await fsp.rename(tmpPath, filePath);
 }
 
 // 🔁 通用退避重试（代码审查修复 8）：仅对 5xx / 网络错误重试，业务错误（4xx）立即返回
@@ -510,9 +514,9 @@ function loadSnapshotConfig() {
   } catch (e) { /* 读取失败时保留默认值 */ }
 }
 
-function saveSnapshotConfig() {
+async function saveSnapshotConfig() {
   try {
-    atomicWriteJson(SNAPSHOT_CONFIG_PATH, snapshotConfig);
+    await atomicWriteJson(SNAPSHOT_CONFIG_PATH, snapshotConfig);
   } catch (e) { console.error('快照配置写盘失败:', e); }
 }
 
@@ -981,7 +985,7 @@ app.whenReady().then(() => {
   // ⚠️ 历史兼容：旧版 tavern_manager_config.json 的 globalTags / uiSettings
   //    会在首次读取时自动合并迁移，绝不丢数据。
   // ==========================================
-  ipcMain.handle('sys:loadConfig', () => {
+  ipcMain.handle('sys:loadConfig', async () => {
     try {
       if (fs.existsSync(APP_CONFIG_PATH)) {
         const raw = fs.readFileSync(APP_CONFIG_PATH, 'utf-8');
@@ -999,7 +1003,7 @@ app.whenReady().then(() => {
         if (Array.isArray(old.globalTags)) legacy.globalTags = old.globalTags;
         if (old.uiSettings && typeof old.uiSettings === 'object') legacy.uiSettings = old.uiSettings;
         if (legacy.globalTags || legacy.uiSettings) {
-          atomicWriteJson(APP_CONFIG_PATH, legacy); // 一次性迁移落盘
+          await atomicWriteJson(APP_CONFIG_PATH, legacy); // 一次性迁移落盘
         }
       }
       return legacy;
@@ -1010,9 +1014,9 @@ app.whenReady().then(() => {
   });
 
   // 安全写入配置（全量原子替换；渲染层必须传入完整对象）
-  ipcMain.handle('sys:saveConfig', (event, configData) => {
+  ipcMain.handle('sys:saveConfig', async (event, configData) => {
     try {
-      atomicWriteJson(APP_CONFIG_PATH, (configData && typeof configData === 'object') ? configData : {});
+      await atomicWriteJson(APP_CONFIG_PATH, (configData && typeof configData === 'object') ? configData : {});
       return { success: true };
     } catch (e) {
       console.error('写入全局物理配置失败:', e);
@@ -2651,10 +2655,19 @@ app.on('window-all-closed', () => {
  */
 // 📁 递归遍历库目录：一级子文件夹名 = 物理分组；跳过隐藏文件夹与系统黑名单
 // relPath 为相对库根的路径（'' 表示根目录），一级文件夹名作为 category 识别
-function walkLibraryDir(dirPath, relPath, files, categories) {
+// 🚀 v1.8.5 性能修复：全套改 fs/promises 异步 IO + 每 25 张卡让出事件循环一拍。
+//    旧版同步 readdirSync/statSync/openSync/readSync 在千卡库上全程霸占主进程事件
+//    循环（每张 PNG 同步读最多 1MB 头 + 同步 JSON.parse），窗口 ready-to-show 被
+//    阻塞数秒~数十秒 → 表现为「启动白屏 / 未响应」。异步化后扫描期间事件循环持续
+//    转动，窗口正常绘制。另修掉旧版对每个文件 statSync×2 的冗余调用（size 与 mtime
+//    共用一次 stat 结果）。
+const YIELD_EVERY = 25; // 每处理 25 张卡让出一次事件循环（UI 心跳粒度）
+const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
+
+async function walkLibraryDir(dirPath, relPath, files, categories) {
   let entries;
   try {
-    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    entries = await fsp.readdir(dirPath, { withFileTypes: true });
   } catch (e) {
     return; // 权限不足 / 系统锁定文件夹静默跳过
   }
@@ -2666,38 +2679,39 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
       if (skipFolders.includes(lowerName)) continue; // node_modules 等海量垃圾目录黑名单
       if (!relPath) categories.add(f.name); // 一级文件夹名 = 物理分组
       const subRel = relPath ? path.join(relPath, f.name) : f.name;
-      walkLibraryDir(absPath, subRel, files, categories);
+      await walkLibraryDir(absPath, subRel, files, categories);
     } else if (f.isFile()) {
       const ext = path.extname(f.name).toLowerCase();
       if (ext !== '.png' && ext !== '.webp' && ext !== '.json') continue;
       const isImage = ext === '.png' || ext === '.webp';
       let mtime = 0;
       let birthtime = 0;
+      let size = 0;
       try {
-        const st = fs.statSync(absPath);
+        const st = await fsp.stat(absPath);
         mtime = st.mtimeMs || 0;       // 文件修改时间
         birthtime = st.birthtimeMs || 0; // 文件创建时间（Windows 支持；可 0，排序时自动回退）
+        size = st.size || 0;
       } catch (e) { /* 文件被占用/删除时忽略 */ }
       // 🚀 性能优化：扫描时主进程本地提取 PNG 内嵌卡片 JSON（只读文件头 1MB，
       // chara/ccv3 块位于 IHDR 之后、IDAT 之前），随 files 一起返回，
       // 前端直接复用，彻底省掉"整张 PNG 跨 IPC 读回渲染端"的最大瓶颈。
       // 提取失败（异常 iTXt/截断）→ embeddedData=null，前端自动回退完整 readBuffer，绝不漏卡
       let embeddedData = null;
-      if (ext === '.png') {
+      if (ext === '.png' && size > 0) {
+        const headLen = Math.min(1024 * 1024, size);
+        // 🔐 文件句柄 try/finally 防泄漏（代码审查修复 4）
+        let fh = null;
         try {
-          const size = fs.statSync(absPath).size;
-          const headLen = Math.min(1024 * 1024, size);
-          // 🔐 文件句柄 try/finally 防泄漏（代码审查修复 4）
-          let fd = null;
-          try {
-            fd = fs.openSync(absPath, 'r');
-            const head = Buffer.alloc(headLen);
-            fs.readSync(fd, head, 0, headLen, 0);
-            embeddedData = readTavernPNGChunk(head) || null;
-          } finally {
-            if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* 关闭失败忽略 */ } }
-          }
-        } catch (e) { embeddedData = null; }
+          fh = await fsp.open(absPath, 'r');
+          const head = Buffer.alloc(headLen);
+          await fh.read(head, 0, headLen, 0);
+          embeddedData = readTavernPNGChunk(head) || null;
+        } catch (e) {
+          embeddedData = null;
+        } finally {
+          if (fh) { try { await fh.close(); } catch (e) { /* 关闭失败忽略 */ } }
+        }
       }
       files.push({
         name: f.name,
@@ -2709,11 +2723,13 @@ function walkLibraryDir(dirPath, relPath, files, categories) {
         category: relPath ? relPath.split(path.sep)[0] : '未分类', // 一级文件夹名 = 物理分组
         embeddedData // 🚀 内嵌 card JSON（无则 null），前端解析优先复用
       });
+      // 🫀 让出事件循环：保证扫描期间主进程仍能处理窗口绘制/IPC，杜绝「未响应」
+      if (files.length % YIELD_EVERY === 0) await yieldToEventLoop();
     }
   }
 }
 
-function scanAndSaveFolder(folderPath) {
+async function scanAndSaveFolder(folderPath) {
   try {
     // 【新增】记录当前库根目录，供白名单校验使用
     addAllowedRoot(folderPath);
@@ -2726,10 +2742,10 @@ function scanAndSaveFolder(folderPath) {
     config.lastFolder = folderPath;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-    // 📁 递归扫描库目录：子文件夹名自动识别为物理分组
+    // 📁 递归扫描库目录：子文件夹名自动识别为物理分组（🚀 异步分片，不再阻塞事件循环）
     const files = [];
     const categories = new Set();
-    walkLibraryDir(folderPath, '', files, categories);
+    await walkLibraryDir(folderPath, '', files, categories);
 
     // 🧹 修复「卡片导入/扫描出现空分组」：空文件夹不再产生"幽灵分组"。
     // 物理分组只保留确实包含卡片文件的文件夹；误建/残留的空文件夹（如 123/、555/）不再显示为分组。
