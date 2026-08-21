@@ -1994,9 +1994,10 @@ export default {
             try {
                 // 去重拦截：同一路径的卡片已在库中则跳过（防止重复扫描/重复导入产生“影分身”）
                 // 标记 _skippedExisting 供上层区分"已在库中"与"无法解析"，给出准确提示
-                // 🚀 v1.8.5：批量加载（staging）时需同时查 staging，防止同批次重复路径漏拦
-                const existingPaths = opts.target || library.value;
-                if (existingPaths.some(c => c.path === file.path)) {
+                // 🚀 v1.8.5：批量加载（staging）时需同时查 staging 与 library ——
+                //    加载窗口期手工导入与正在扫描的同路径卡若只查一边会双双入库（影分身）
+                const dupIn = (arr) => arr.some(c => c.path === file.path);
+                if (dupIn(opts.target || library.value) || (opts.target && dupIn(library.value))) {
                     file._skippedExisting = true;
                     return false;
                 }
@@ -2154,8 +2155,15 @@ export default {
                 })));
                 addedCount += results.filter(Boolean).length;
             }
-            // 🚀 一次性替换：全库 computed 只失效一次、重算一次
-            library.value = staging;
+            // 🚀 一次性并入（分块 push，同一同步批内 computed 只重算一次）。
+            //    ⚠️ 不能写 `library.value = staging` 整体换引用：加载窗口（大库数秒~数十秒）
+            //    期间拖拽导入 / 文件菜单导入 / URL 下载等不带 opts 的 parseAndAddCard
+            //    会直接 push 进 library.value 当前数组 —— 整体换引用会把这些卡连同
+            //    旧数组一起丢弃（提示导入成功但卡从界面消失，须手动刷新才找回）。
+            //    分块 push 保留这些窗口期卡片，且不损失"一次性失效"的 computed 优化。
+            for (let i = 0; i < staging.length; i += 500) {
+                library.value.push(...staging.slice(i, i + 500));
+            }
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
             // 🚀 自动打标落盘转后台低并发执行，不阻塞首屏呈现
             flushDeferredAutoTagSaves();

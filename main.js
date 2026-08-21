@@ -470,8 +470,11 @@ const APP_CONFIG_PATH = path.join(app.getPath('userData'), 'app_config.json');
 // 🚀 v1.8.5 性能修复：同步 writeFileSync/renameSync 改 fs/promises 异步版 ——
 //    旧版每次配置落盘（sys:saveConfig 高频触发）都阻塞主进程事件循环，
 //    cardOverlays 随库规模膨胀到几 MB 时，写盘期间窗口直接冻结。
+// 🚀 v1.8.5 并发修复：tmp 文件名加 pid+序号唯一化 —— 异步化后高频/并发调用
+//    （如连续切换快照开关）会共用同一 `.tmp` 路径互相覆盖/撞 ENOENT。
+let atomicTmpSeq = 0;
 async function atomicWriteJson(filePath, data) {
-  const tmpPath = filePath + '.tmp';
+  const tmpPath = `${filePath}.${process.pid}.${++atomicTmpSeq}.tmp`;
   await fsp.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
   await fsp.rename(tmpPath, filePath);
 }
@@ -1833,51 +1836,70 @@ app.whenReady().then(() => {
     }
   });
 
+  // 🚀 v1.8.5 并发写安全：同一路径的保存按到达顺序串行执行 + tmp 文件名唯一化。
+  //    场景：启动后台自动打标落盘（千卡库持续数十秒）与用户前台编辑保存同一张卡
+  //    并发到达 —— 旧版固定 `filePath + '.tmp'`：两次 writeFile 交错可产出混合内容
+  //    的损坏 PNG；或 A rename 后 B rename 撞 ENOENT 假报错；或旧 payload 后写
+  //    完成反而覆盖新数据（丢失更新）。per-path Promise 链保证同一文件写入互斥有序。
+  const saveCardQueues = new Map(); // resolvedPath -> 链尾 Promise（已 catch，永不上抛）
+  let saveTmpSeq = 0;
+
   ipcMain.handle('file:saveCard', async (event, filePath, updatedJson) => {
-    try {
-      if (!isPathAllowed(filePath)) return forbidden();
-      if (!fs.existsSync(filePath)) {
-        return { success: false, error: "原文件不存在，无法保存。" };
-      }
+    const target = path.resolve(filePath);
+    const run = async () => {
+      let tmpPath = null; // 本次实际使用的 tmp（唯一命名；catch 精确清理，不误删他人 tmp）
+      try {
+        if (!isPathAllowed(filePath)) return forbidden();
+        if (!fs.existsSync(filePath)) {
+          return { success: false, error: "原文件不存在，无法保存。" };
+        }
 
-      // 📸 版本控制：保存前自动备份旧文件到 .bak_history
-      const snap = await processCardSnapshot(filePath, false);
-      // 🔧 修复：备份失败（磁盘满/权限）必须中止保存——
-      // 否则快照盲区内原位覆盖一旦损坏，将无任何回退手段
-      if (snap && snap.success === false) {
-        return {
-          success: false,
-          error: `快照备份失败（${snap.error}），为防数据丢失已中止保存。\n请检查磁盘空间/文件权限后重试。`
-        };
-      }
+        // 📸 版本控制：保存前自动备份旧文件到 .bak_history
+        const snap = await processCardSnapshot(filePath, false);
+        // 🔧 修复：备份失败（磁盘满/权限）必须中止保存——
+        // 否则快照盲区内原位覆盖一旦损坏，将无任何回退手段
+        if (snap && snap.success === false) {
+          return {
+            success: false,
+            error: `快照备份失败（${snap.error}），为防数据丢失已中止保存。\n请检查磁盘空间/文件权限后重试。`
+          };
+        }
 
-      const ext = path.extname(filePath).toLowerCase();
-      if (ext === '.json') {
-        // 原子写入：tmp + rename（原逻辑保留）
-        const tmpPath = filePath + '.tmp';
-        await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
-        await fs.promises.rename(tmpPath, filePath);
-        return { success: true };
-      } else if (ext === '.png') {
-        const buffer = await fs.promises.readFile(filePath);
-        const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
-        if (newBuffer) {
-          // 🔧 修复：与 JSON 分支同口径 tmp + rename 原子替换，
-          // 杜绝写入中途崩溃/断电产出无 IEND 的残缺 PNG
-          const tmpPath = filePath + '.tmp';
-          await fs.promises.writeFile(tmpPath, newBuffer);
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.json') {
+          // 原子写入：tmp + rename（tmp 唯一命名防并发互踩）
+          tmpPath = `${filePath}.${process.pid}.${++saveTmpSeq}.tmp`;
+          await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
           await fs.promises.rename(tmpPath, filePath);
           return { success: true };
-        } else {
-          return { success: false, error: "无法写入 PNG 结构。" };
+        } else if (ext === '.png') {
+          const buffer = await fs.promises.readFile(filePath);
+          const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
+          if (newBuffer) {
+            // 🔧 修复：与 JSON 分支同口径 tmp + rename 原子替换，
+            // 杜绝写入中途崩溃/断电产出无 IEND 的残缺 PNG
+            tmpPath = `${filePath}.${process.pid}.${++saveTmpSeq}.tmp`;
+            await fs.promises.writeFile(tmpPath, newBuffer);
+            await fs.promises.rename(tmpPath, filePath);
+            return { success: true };
+          } else {
+            return { success: false, error: "无法写入 PNG 结构。" };
+          }
         }
+        return { success: false, error: `暂不支持 ${ext || ''} 格式的在线保存（仅支持 .json / .png 卡片，webp 无法回写数据）` };
+      } catch (e) {
+        // 🔧 残留 tmp 清理（rename 失败时遗留 .tmp 不污染库目录扫描）
+        if (tmpPath) await fs.promises.unlink(tmpPath).catch(() => { });
+        return { success: false, error: e.message };
       }
-      return { success: false, error: `暂不支持 ${ext || ''} 格式的在线保存（仅支持 .json / .png 卡片，webp 无法回写数据）` };
-    } catch (e) {
-      // 🔧 残留 tmp 清理（rename 失败时遗留 .tmp 不污染库目录扫描）
-      await fs.promises.unlink(filePath + '.tmp').catch(() => { });
-      return { success: false, error: e.message };
-    }
+    };
+    // 同路径排队：上一任结束（无论成败）后按序执行本次；不同路径互不阻塞
+    const queued = saveCardQueues.get(target) || Promise.resolve();
+    const task = queued.then(run, run);
+    const tail = task.catch(() => { }); // 链尾兜底：不留 rejected promise，后续任务不被跳过
+    saveCardQueues.set(target, tail);
+    tail.then(() => { if (saveCardQueues.get(target) === tail) saveCardQueues.delete(target); });
+    return task;
   });
 
   // ==========================================
