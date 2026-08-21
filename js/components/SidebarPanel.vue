@@ -540,7 +540,14 @@ export default {
             hasLorebook: (item) => {
                 const d = (item && (item.data?.data || item.data)) || {};
                 const book = d.character_book || (item && item.data && item.data.character_book) || {};
-                return !!(book && Array.isArray(book.entries) && book.entries.length);
+                // 🛡️ 全形态安全判定：字典形态 entries（SillyTavern 导出）与数组形态 book
+                //    在旧写法 Array.isArray(book.entries) 下均漏判（不显示 🌍 标记）
+                try {
+                    const entries = Array.isArray(book) ? book
+                        : (Array.isArray(book?.entries) ? book.entries
+                            : (book?.entries && typeof book.entries === 'object' ? Object.values(book.entries) : []));
+                    return entries.some(e => e && typeof e === 'object');
+                } catch (e) { return false; }
             },
             listTags: (item) => {
                 const d = (item && (item.data?.data || item.data)) || {};

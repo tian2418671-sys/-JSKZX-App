@@ -397,7 +397,7 @@ import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
 import SnapshotModal from './SnapshotModal.vue'; // 📸 历史快照列表与一键恢复弹窗
-import { processFile, normalizeCardData } from '../utils/cardLoader.js';
+import { processFile, normalizeCardData, extractBookEntries } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
 import { useSnapshots } from '../composables/useSnapshots.js'; // 📸 历史快照功能（拆分出的组合式函数）
@@ -1307,14 +1307,14 @@ export default {
         const worldbookEntries = computed(() => {
             // 兼容 V1 和 V2 的存放位置
             const book = safeData.value.character_book || cardData.value?.character_book || {};
-            // 兼容是以 entries 数组存放，还是直接就是一个数组
-            let entries = book.entries || (Array.isArray(book) ? book : []);
+            // 🛡️ 全形态安全提取（entries 数组 / entries 字典 / book 本身为数组），
+            // 修复字典形态 entries 与数组形态 book 导致 .filter 崩溃（编辑器白屏）
+            const entries = extractBookEntries(book);
 
             // 【关键】直接返回原始条目的响应式代理（不做拷贝展开），
             // 这样 v-model 编辑能写回原数据（保存时落盘），同时保持响应式（cardData 是 shallowRef）
-            // 【脏数据防护】先过滤 null / 非对象条目，防止 EditorPanel v-for 渲染时读 entry.name 空引用崩溃
+            // 【脏数据防护】脏条目过滤已由 extractBookEntries 完成，防止 EditorPanel v-for 渲染时读 entry.name 空引用崩溃
             return entries
-                .filter(entry => entry && typeof entry === 'object')
                 .map(entry => reactive(entry));
         });
 
@@ -1490,10 +1490,11 @@ export default {
             // 计算所有世界书条目的 Token 总和
             let bookTokens = 0;
             const book = d.character_book || cardData.value?.character_book || {};
-            const entries = book.entries || (Array.isArray(book) ? book : []);
+            // 🛡️ 全形态安全提取（entries 数组/字典/数组 book），修复脏形态 .forEach 崩溃
+            const entries = extractBookEntries(book);
             entries.forEach(e => {
-                if (!e || typeof e !== 'object') return; // 脏数据条目（null/非对象）防护
-                bookTokens += estimateTokens(e.content) + estimateTokens((e.keys || []).join(', '));
+                // 🛡️ keys 非数组脏数据防护（字符串 keys 直接 .join 会 TypeError）
+                bookTokens += estimateTokens(e.content) + estimateTokens((Array.isArray(e.keys) ? e.keys : []).join(', '));
             });
 
             const total = desc + pers + scen + first + bookTokens;
@@ -1546,9 +1547,9 @@ export default {
             library.value.forEach(item => {
                 const d = item.data?.data || item.data || {};
                 const book = d.character_book || item.data?.character_book || {};
-                const entries = book.entries || (Array.isArray(book) ? book : []);
+                // 🛡️ 全形态安全提取（entries 数组/字典/数组 book），修复脏形态 .forEach 崩溃
+                const entries = extractBookEntries(book);
                 entries.forEach(e => {
-                    if (!e || typeof e !== 'object') return; // 脏数据条目（null/非对象）防护
                     list.push({
                         ...e,
                         displayName: e.name || e.comment || '未命名条目',
@@ -2775,7 +2776,8 @@ export default {
             if (!cardData.value) return;
             const book = safeData.value.character_book;
 
-            if (!book || !book.entries || book.entries.length === 0) {
+            // 🛡️ 全形态安全判定（数组 book 的 .entries 是原型方法函数，旧写法会误判长度为 0）
+            if (extractBookEntries(book).length === 0) {
                 return nativeAlert("此卡片没有世界书数据可供导出。", 'warning');
             }
 
@@ -3345,10 +3347,12 @@ export default {
             const text = [d.description, d.first_mes, d.mes_example, d.personality, d.scenario].filter(Boolean).join('\n');
             let total = estimateTokens(text);
             // 追加世界书词条正文与触发词（与 cardTokenStats 的世界书口径保持一致）
+            // 🛡️ extractBookEntries 全形态安全提取：修复 entries 字典形态 / character_book 数组形态
+            //    导致的 entries.forEach 崩溃——该函数被侧栏列表每张卡的渲染（itemTokenCount）与
+            //    tokens 排序调用，一旦抛错即引发「角色栏消失/空屏」，且卡在库内每次重启复发
             const book = d.character_book || (card.data && card.data.character_book) || {};
-            const entries = book.entries || (Array.isArray(book) ? book : []);
+            const entries = extractBookEntries(book);
             entries.forEach(e => {
-                if (!e) return;
                 total += estimateTokens(e.content) + estimateTokens((Array.isArray(e.key) ? e.key : []).join(', '));
             });
             return total;

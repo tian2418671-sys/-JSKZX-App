@@ -5,6 +5,7 @@
  */
 import { ref, computed } from 'vue';
 import { estimateTokens } from '../utils/tokenEstimate.js';
+import { extractBookEntries } from '../utils/cardLoader.js';
 
 // 灵活解析世界书文本：整体 JSON（数组 / {entries} / V2 data.entries）或 JSONL（逐行）
 function parseEntriesFlexible(text) {
@@ -48,8 +49,9 @@ export function useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookD
         if (!cardData) return;
         const data = cardData.data || cardData; // 兼容 V2（data.data）与 V1
         const book = data.character_book || cardData.character_book || {};
-        const entries = book.entries || (Array.isArray(book) ? book : []);
-        if (!Array.isArray(entries) || entries.length === 0) {
+        // 🛡️ 全形态安全提取（entries 数组/字典/数组 book），字典形态（SillyTavern 导出）同样可提取
+        const entries = extractBookEntries(book);
+        if (entries.length === 0) {
             nativeAlert('该角色卡没有内嵌世界书词条，无法提取。', 'warning');
             return;
         }

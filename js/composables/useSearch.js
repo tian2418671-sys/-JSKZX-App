@@ -1,4 +1,5 @@
 import { ref, computed, watch } from 'vue';
+import { extractBookEntries } from '../utils/cardLoader.js';
 
 /**
  * 超级搜索引擎组合式函数（Composable）
@@ -59,18 +60,16 @@ function extractCardSearchableText(item) {
     }
 
     // 5. 关联世界书 (Character Book / Lorebook)
+    // 🛡️ extractBookEntries 全形态安全提取（entries 数组/字典/数组 book）：
+    //    修复字典形态世界书内容无法被搜索 + 数组形态 book 的 .entries 原型方法陷阱
     const book = data.character_book || (item && item.data && item.data.character_book) || (item && item.character_book);
     if (book) {
-        const entries = book.entries || (Array.isArray(book) ? book : []);
-        if (Array.isArray(entries)) {
-            entries.forEach(entry => {
-                if (!entry || typeof entry !== 'object') return; // 防脏数据条目（null/非对象）崩溃
-                if (entry.comment || entry.name) push(entry.comment || entry.name);
-                if (entry.content) push(entry.content);
-                if (Array.isArray(entry.keys)) push(entry.keys.map(k => String(k)).join(' '));
-                if (Array.isArray(entry.secondary_keys)) push(entry.secondary_keys.map(k => String(k)).join(' '));
-            });
-        }
+        extractBookEntries(book).forEach(entry => {
+            if (entry.comment || entry.name) push(entry.comment || entry.name);
+            if (entry.content) push(entry.content);
+            if (Array.isArray(entry.keys)) push(entry.keys.map(k => String(k)).join(' '));
+            if (Array.isArray(entry.secondary_keys)) push(entry.secondary_keys.map(k => String(k)).join(' '));
+        });
     }
 
     // 拼合成单一的全量小写字符串流
@@ -129,10 +128,10 @@ export function useSearch({
             if (currentCategoryKey.value === 'all') return true;
             if (currentCategoryKey.value === 'has_lorebook') {
                 // 📖 带世界书：卡片内嵌世界书且有条目
+                // 🛡️ extractBookEntries 全形态安全判定（字典形态 entries / 数组形态 book 均正确识别）
                 const d = card.data?.data || card.data || {};
                 const book = d.character_book || card.data?.character_book || {};
-                const entries = book.entries || (Array.isArray(book) ? book : []);
-                return (entries || []).length > 0;
+                return extractBookEntries(book).length > 0;
             }
             if (currentCategoryKey.value === 'has_regex') {
                 // ⚡ 带正则脚本：卡片内嵌正则脚本
@@ -176,9 +175,20 @@ export function useSearch({
         };
 
         // 无关键词：仅按当前分类过滤 + 排序（浏览模式）
+        // 🛡️ 卡片级 try/catch 兜底：与下方搜索分支防御对齐。历史教训（bdced8a + 本次
+        //    character_book .entries 陷阱）：浏览模式一旦有脏卡让 passCategory/sortCards 抛错，
+        //    computed 崩溃 → 侧边栏（角色栏）整体消失/白屏，且该卡在库内每次重启复发。
         const query = (searchQuery.value || '').toLowerCase().trim();
         if (!query) {
-            return library.value.filter(passCategory).sort(sortCards);
+            return library.value
+                .filter(card => {
+                    try { return passCategory(card); }
+                    catch (e) { console.warn('⚠️ 分组筛选异常跳过卡片:', card?.fileName || card?.name, e); return false; }
+                })
+                .sort((a, b) => {
+                    try { return sortCards(a, b); }
+                    catch (e) { console.warn('⚠️ 排序异常降级跳过:', e); return 0; }
+                });
         }
 
         // —— 解析搜索表达式（拆分为多个 token，识别高级语法）——
@@ -225,10 +235,12 @@ export function useSearch({
                 }
 
                 // 6. 世界书专用筛选（wb:/w: 语法）
+                // 🛡️ extractBookEntries 全形态安全提取：旧写法在数组形态 book 时拿到
+                //    Array.prototype.entries 原型函数，JSON.stringify(函数)=undefined
+                //    → 链式 .toLowerCase() 直接 TypeError（搜索即崩）
                 if (rules.wbOnly.length > 0) {
                     const book = data.character_book || card.data?.character_book || card.character_book;
-                    const entries = book ? (book.entries || (Array.isArray(book) ? book : [])) : [];
-                    const wbText = JSON.stringify(entries || []).toLowerCase();
+                    const wbText = JSON.stringify(extractBookEntries(book)).toLowerCase();
                     if (!rules.wbOnly.every(w => wbText.includes(w))) return false;
                 }
 
