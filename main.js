@@ -450,7 +450,11 @@ function readTavernPNGChunk(buffer) {
           const base64Str = raw.toString('latin1').replace(/\0/g, '');
           try {
             return JSON.parse(Buffer.from(base64Str, 'base64').toString('utf-8'));
-          } catch (e) { return null; }
+          } catch (e) {
+            // 🔧 v1.8.5 修复：单块解析失败不再整体放弃 —— 部分卡含多个 chara/ccv3 块
+            // （写入方追加写），首块损坏/非 JSON 时继续扫后续块，能救回真卡
+            continue;
+          }
         }
       }
     }
@@ -538,6 +542,15 @@ function addAllowedRoot(p) {
 function removeAllowedRoot(p) {
   try { if (p && typeof p === 'string') allowedRoots.delete(path.resolve(p)); } catch (e) { /* 忽略非法路径 */ }
 }
+// 🔧 路径包含判断（v1.8.5 修复）：child 是否位于 root 目录树内。
+//    旧写法 `child.startsWith(root + path.sep)` 在「库根 = 盘符根」（如 D:\）时失效：
+//    path.resolve('D:\\') 返回 'D:\\'（已以分隔符结尾），再拼 path.sep 得 'D:\\\\' 双分隔符，
+//    正常子路径 D:\foo\card.png 永远匹配不上 → 盘符根库全库 403（缩略图/读写/删除全部被拒）。
+function isPathUnder(child, root) {
+  if (!child || !root) return false;
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  return child === root || child.startsWith(prefix);
+}
 function isPathAllowed(filePath) {
   if (!filePath || typeof filePath !== 'string') return false;
   let resolved;
@@ -549,10 +562,10 @@ function isPathAllowed(filePath) {
   // userData（配置/备份/回收站）总允许
   try {
     const ud = path.resolve(app.getPath('userData'));
-    if (resolved === ud || resolved.startsWith(ud + path.sep)) return true;
+    if (isPathUnder(resolved, ud)) return true;
   } catch (e) { /* 忽略 */ }
   for (const root of allowedRoots) {
-    if (resolved === root || resolved.startsWith(root + path.sep)) return true;
+    if (isPathUnder(resolved, root)) return true;
   }
   return false;
 }
@@ -680,7 +693,11 @@ function createWindow() {
   // 防止图片/文件被误交给系统默认程序打开（如系统英文图片查看器）
   // 开发模式下放行 Vite Dev Server 地址
   win.webContents.on('will-navigate', (e, url) => {
-    const allowed = url.startsWith('app://') || url.startsWith('http://localhost:5173') || url.startsWith('http://127.0.0.1:5173');
+    // 🔧 v1.8.5 修复：开发模式放行地址从 VITE_DEV_SERVER_URL 动态提取 ——
+    //    旧版硬编码 5173，端口被占用顺延（5174+）时页面内导航被误拦截
+    let devOrigin = null;
+    try { if (process.env.VITE_DEV_SERVER_URL) devOrigin = new URL(process.env.VITE_DEV_SERVER_URL).origin; } catch (err) { /* 非法 URL 忽略 */ }
+    const allowed = url.startsWith('app://') || (!!devOrigin && url.startsWith(devOrigin));
     if (!allowed) e.preventDefault();
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -895,8 +912,10 @@ app.whenReady().then(() => {
       if (!libraryPath || typeof libraryPath !== 'string' || !isPathAllowed(libraryPath)) return forbidden();
       if (!cardPath || typeof cardPath !== 'string' || !isPathAllowed(cardPath)) return forbidden();
       // 只处理库目录内的卡片（外部全盘扫描/收编的卡先收编入库，避免跨盘 EXDEV 移动失败）
+      // 🔧 v1.8.5 修复：改用 isPathUnder —— 旧写法在库根=盘符根（D:\）时恒 false，
+      //    盘符根库所有卡片报"不在当前库目录内"
       const libRoot = path.resolve(libraryPath);
-      if (!path.resolve(cardPath).startsWith(libRoot + path.sep)) {
+      if (!isPathUnder(path.resolve(cardPath), libRoot)) {
         return { success: false, error: '该卡片不在当前库目录内，请先将其收编到库目录再移动分组。' };
       }
       const isRootTarget = !targetGroup || targetGroup === '未分类' || targetGroup === '全部' || targetGroup === 'all';
@@ -989,14 +1008,21 @@ app.whenReady().then(() => {
   //    会在首次读取时自动合并迁移，绝不丢数据。
   // ==========================================
   ipcMain.handle('sys:loadConfig', async () => {
-    try {
-      if (fs.existsSync(APP_CONFIG_PATH)) {
+    // 🔧 v1.8.5 修复：配置文件「存在但损坏」时绝不能落入下方迁移分支 ——
+    //    旧逻辑解析失败也继续走"首次使用迁移"，用旧版 tavern_manager_config.json 的
+    //    子集覆盖当前配置（API Key/卡片覆盖层/UI 状态全部静默丢失）。
+    //    迁移仅允许在 app_config.json 「不存在」时执行（真正的首次使用）。
+    const configExists = fs.existsSync(APP_CONFIG_PATH);
+    if (configExists) {
+      try {
         const raw = fs.readFileSync(APP_CONFIG_PATH, 'utf-8');
         const parsed = JSON.parse(raw);
         return (parsed && typeof parsed === 'object') ? parsed : {};
+      } catch (e) {
+        // 文件存在但损坏：返回空配置（前端以默认值运行），不迁移、不覆盖，保留损坏文件供人工抢救
+        console.error('读取全局物理配置失败（文件损坏，跳过迁移防覆盖）:', e);
+        return {};
       }
-    } catch (e) {
-      console.error('读取全局物理配置失败:', e);
     }
     // 首次使用：合并迁移旧版配置文件中的 globalTags / uiSettings，保证历史数据不丢
     try {
@@ -1028,15 +1054,27 @@ app.whenReady().then(() => {
   });
 
   // IPC：读取单个文件内容（返回二进制 Buffer；异步化防大图卡主进程消息循环）
+  // 🔧 v1.8.5 修复：补 try/catch —— 扫描列出文件后、读取前被外部删除/独占时
+  //    readFile reject 会以 unhandled rejection 逃逸（与其他 handler 的 {success:false} 约定不一致）
   ipcMain.handle('file:readBuffer', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();
-    return fs.promises.readFile(filePath);
+    try {
+      const buf = await fs.promises.readFile(filePath);
+      return { buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   });
 
   // IPC：读取单个文件文本（用于 JSON 卡片；异步化）
+  // 🔧 v1.8.5 修复：同上补 try/catch
   ipcMain.handle('file:readText', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();
-    return fs.promises.readFile(filePath, 'utf-8');
+    try {
+      return await fs.promises.readFile(filePath, 'utf-8');
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   });
 
   // IPC：获取所有存在的盘符 (Windows 专属 C:, D:, E: ...)
@@ -1194,7 +1232,13 @@ app.whenReady().then(() => {
         const rp = path.resolve(excludeLibraryPath);
         if (fs.existsSync(rp) && fs.statSync(rp).isDirectory()) {
           libRoot = rp;
+          // 🛡️ v1.8.5：visited 集合防符号链接/junction 环路（同 wb:scan walk）
+          const visitedLibDirs = new Set();
           const walkLib = async (dir) => {
+            let realDir;
+            try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+            if (visitedLibDirs.has(realDir)) return;
+            visitedLibDirs.add(realDir);
             const items = await fs.promises.readdir(dir, { withFileTypes: true });
             for (const it of items) {
               if (it.name.startsWith('.')) continue; // 跳过 .bak_history/.trash 等隐藏目录
@@ -1212,7 +1256,7 @@ app.whenReady().then(() => {
     for (const p of candidates) {
       let rp = null;
       try { rp = path.resolve(p); } catch (e) { /* 非法路径交给验证阶段丢弃 */ }
-      if (rp && libRoot && (rp === libRoot || rp.startsWith(libRoot + path.sep))) { inLibrary++; continue; }
+      if (rp && libRoot && isPathUnder(rp, libRoot)) { inLibrary++; continue; }
       if (libNames.size > 0 && libNames.has(path.basename(p))) { inLibrary++; continue; }
       toValidate.push(p);
     }
@@ -1389,13 +1433,17 @@ app.whenReady().then(() => {
       const overwritten = [];
       const trashDir = path.join(app.getPath('userData'), 'jsTavern_Trash');
       await fs.promises.mkdir(trashDir, { recursive: true }).catch(() => { });
+      // 🔧 v1.8.5 修复：回收站命名加序号 —— 批量推送同名文件（不同子目录的同名卡）
+      //    或同毫秒多文件回收时 `${Date.now()}_${fileName}` 撞车互相覆盖，
+      //    被回收的原件实际丢失一个（sys:trashFiles 已修同款，此处补齐）
+      let trashSeq = 0;
       for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
         if (!fs.existsSync(src)) continue;
         const fileName = path.basename(src);
         const dest = path.join(targetDir, fileName);
         if (fs.existsSync(dest)) {
           try {
-            const trashDest = path.join(trashDir, `${Date.now()}_${fileName}`);
+            const trashDest = path.join(trashDir, `${Date.now()}_${++trashSeq}_${fileName}`);
             try {
               await fs.promises.rename(dest, trashDest);
             } catch (ex) {
@@ -1590,12 +1638,18 @@ app.whenReady().then(() => {
       const targetPath = ext === '.png' ? cardPath : cardPath.slice(0, -ext.length) + '.png';
 
       // 7. 写前手动备份原卡（.bak_history），再原子写入
-      if (targetPath === cardPath) {
-        await processCardSnapshot(cardPath, true);
+      //    🔧 v1.8.5 修复：webp/json 升级路径同样先备份 —— 旧版只有 PNG 就地覆盖才
+      //    快照，升级路径删除原文件时无任何备份，新 PNG 损坏即无回退手段
+      await processCardSnapshot(cardPath, true);
+      // 🔧 v1.8.5 修复：tmp 唯一命名 + 失败清理（防并发互踩与 .tmp 残留积攒）
+      const tmpPath = `${targetPath}.${process.pid}.${Date.now()}_${Math.floor(Math.random() * 1e6)}.tmp`;
+      try {
+        await fs.promises.writeFile(tmpPath, outBuf);
+        await fs.promises.rename(tmpPath, targetPath);
+      } catch (writeErr) {
+        await fs.promises.unlink(tmpPath).catch(() => { });
+        throw writeErr;
       }
-      const tmpPath = targetPath + '.tmp';
-      await fs.promises.writeFile(tmpPath, outBuf);
-      await fs.promises.rename(tmpPath, targetPath);
 
       // 8. webp/json 升级后删除旧文件，避免刷新时误扫成重复卡片
       if (targetPath !== cardPath && fs.existsSync(cardPath)) {
@@ -1726,7 +1780,13 @@ app.whenReady().then(() => {
         return total;
       };
       // 递归扫描：删除所有 .bak_history 文件夹（含物理分组子文件夹内的），跳过其他隐藏目录
+      // 🛡️ v1.8.5：visited 集合防符号链接/junction 环路（同步递归遇环路直接栈溢出）
+      const visitedClean = new Set();
       const walk = (dir) => {
+        let realDir;
+        try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+        if (visitedClean.has(realDir)) return;
+        visitedClean.add(realDir);
         let entries;
         try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
         for (const f of entries) {
@@ -1866,12 +1926,16 @@ app.whenReady().then(() => {
         }
 
         const ext = path.extname(filePath).toLowerCase();
+        // 🔧 v1.8.5：保存成功后回传新 mtime —— 增量刷新按 mtime 差分，若内存 _mtime
+        //    停留在扫描时刻，本次保存改了磁盘 mtime，下次刷新会把该卡误判为"已变化"
+        //    重新解析并再次触发自动打标写盘 → mtime 又变 → 死循环（每次刷新全量重写）
         if (ext === '.json') {
           // 原子写入：tmp + rename（tmp 唯一命名防并发互踩）
           tmpPath = `${filePath}.${process.pid}.${++saveTmpSeq}.tmp`;
           await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
           await fs.promises.rename(tmpPath, filePath);
-          return { success: true };
+          const st = await fs.promises.stat(filePath);
+          return { success: true, mtime: st.mtimeMs };
         } else if (ext === '.png') {
           const buffer = await fs.promises.readFile(filePath);
           const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
@@ -1881,7 +1945,8 @@ app.whenReady().then(() => {
             tmpPath = `${filePath}.${process.pid}.${++saveTmpSeq}.tmp`;
             await fs.promises.writeFile(tmpPath, newBuffer);
             await fs.promises.rename(tmpPath, filePath);
-            return { success: true };
+            const st = await fs.promises.stat(filePath);
+            return { success: true, mtime: st.mtimeMs };
           } else {
             return { success: false, error: "无法写入 PNG 结构。" };
           }
@@ -1942,12 +2007,41 @@ app.whenReady().then(() => {
       if (!dirPath || !fs.existsSync(dirPath)) {
         return { success: false, error: '目录不存在: ' + dirPath };
       }
-      // 【安全加固】用户选择的世界书目录加入白名单（该目录内文件可读可写）
-      addAllowedRoot(dirPath);
+      // 【安全加固 v1.8.5】白名单自扩权后门修复（对齐 tavern:pushDir 指纹验证模式）：
+      //   旧版无条件 addAllowedRoot(dirPath) —— 被注入的渲染层脚本可传任意目录
+      //   （如 C:\Users）直接获得该目录树永久读写授权，整个 isPathAllowed 安全模型被单击穿透。
+      //   现在：① 已在白名单（本会话经 dialog:selectGenericFolder 真实选择加入）→ 直接通过；
+      //        ② 未授权（如重启后从 localStorage 恢复的世界书目录）→ 必须通过世界书指纹验证
+      //          （顶层存在 ≥1 个通过 isValidWorldbook 校验的 .json）才信任并加入白名单。
+      if (!isPathAllowed(dirPath)) {
+        let hasWbFingerprint = false;
+        try {
+          const names = fs.readdirSync(dirPath).filter(n => n.toLowerCase().endsWith('.json')).slice(0, 20);
+          for (const n of names) {
+            try {
+              if (isValidWorldbook(JSON.parse(fs.readFileSync(path.join(dirPath, n), 'utf-8')))) {
+                hasWbFingerprint = true;
+                break;
+              }
+            } catch (e) { /* 单个损坏文件继续检查下一个 */ }
+          }
+        } catch (e) { /* 目录不可读按无指纹处理 */ }
+        if (!hasWbFingerprint) {
+          return { success: false, error: '该目录不含有效世界书文件，或目录来源未经验证，已拒绝授权。请通过「打开世界书目录」按钮重新选择。' };
+        }
+        addAllowedRoot(dirPath);
+      }
       const results = [];
 
       // 深度递归扫描（不限层级；跳过隐藏文件/目录）
+      // 🛡️ v1.8.5：realpath + visited 集合防符号链接/junction 环路（指回祖先目录的
+      //    链接会让递归无限循环、results 无限膨胀直至内存耗尽）
+      const visitedDirs = new Set();
       const walk = async (dir) => {
+        let realDir;
+        try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+        if (visitedDirs.has(realDir)) return; // 环路保护：同一物理目录只扫一次
+        visitedDirs.add(realDir);
         const entries = await fs.promises.readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
           if (entry.name.startsWith('.')) continue; // 忽略隐藏文件/目录
@@ -2024,8 +2118,17 @@ app.whenReady().then(() => {
         }
       }
 
-      // 3. 覆盖写入新文件
-      await fs.promises.writeFile(filePath, fileContent, 'utf-8');
+      // 3. 原子覆写新文件（tmp 唯一命名 + rename）
+      //    🔧 v1.8.5 修复：旧版直接 writeFile 覆盖 —— 写入中途崩溃/断电会产出半截
+      //    损坏 JSON；且并发保存共用 tmp 路径会互踩（与 file:saveCard 同款问题）
+      const tmpPath = `${filePath}.${process.pid}.${Date.now()}_${Math.floor(Math.random() * 1e6)}.tmp`;
+      try {
+        await fs.promises.writeFile(tmpPath, fileContent, 'utf-8');
+        await fs.promises.rename(tmpPath, filePath);
+      } catch (writeErr) {
+        await fs.promises.unlink(tmpPath).catch(() => { });
+        throw writeErr;
+      }
       return { success: true };
     } catch (err) {
       console.error('保存世界书失败:', err);
@@ -2047,8 +2150,14 @@ app.whenReady().then(() => {
       if (!response.ok) {
         return { success: false, error: `网络请求失败 (状态码: ${response.status})` };
       }
+      // 🔧 v1.8.5 修复：体积上限前置到响应头 —— 旧版先全量载入内存再检查，
+      //    超大/恶意 URL（数 GB）会先吃满内存才拒绝；无 Content-Length 时仍保留载入后校验
+      const declaredLen = Number(response.headers.get('content-length') || 0);
+      if (declaredLen > MAX_WB_FETCH_BYTES) {
+        return { success: false, error: '响应体过大（超过 50MB），已中止拉取。' };
+      }
       const text = await response.text();
-      if (text.length > MAX_WB_FETCH_BYTES) {
+      if (Buffer.byteLength(text, 'utf-8') > MAX_WB_FETCH_BYTES) {
         return { success: false, error: '响应体过大（超过 50MB），已中止拉取。' };
       }
       return { success: true, data: text };
@@ -2075,6 +2184,12 @@ app.whenReady().then(() => {
       });
       if (!response.ok) {
         return { success: false, error: `网络请求失败 (状态码: ${response.status})` };
+      }
+      // 🔧 v1.8.5 修复：体积上限前置到响应头（同 wb:fetchUrl），
+      //    防超大/恶意 URL 先吃满内存才被拒绝；无 Content-Length 时保留载入后校验
+      const declaredLen = Number(response.headers.get('content-length') || 0);
+      if (declaredLen > MAX_URL_DOWNLOAD_BYTES) {
+        return { success: false, error: '文件过大（超过 20MB），已中止下载。' };
       }
       const buf = Buffer.from(await response.arrayBuffer());
       if (!buf || buf.length === 0) return { success: false, error: '下载内容为空。' };
@@ -2183,6 +2298,15 @@ app.whenReady().then(() => {
     try {
       if (!filePath || !snapshotPath) return { success: false, error: '参数缺失。' };
       if (!isPathAllowed(filePath)) return forbidden();
+      // 【安全加固 v1.8.5】snapshotPath 必须位于 userData 备份目录内 ——
+      //   旧版只查存在性：被注入脚本传任意本地文件（如 ~/.ssh/id_rsa）作为
+      //   snapshotPath，配合 filePath 指向 userData 内白名单路径，即构成
+      //   「任意本地文件 → 白名单可读位置」的任意文件读取原语。
+      //   对照 card:restoreSnapshot 已做 .bak_history 目录约束，此处补齐同款防护。
+      const udRoot = path.resolve(app.getPath('userData'));
+      if (!isPathUnder(path.resolve(snapshotPath), udRoot)) {
+        return { success: false, error: '快照路径越界，操作被拒绝。' };
+      }
       if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
       const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
       await fs.promises.mkdir(backupDir, { recursive: true });
@@ -2376,8 +2500,11 @@ app.whenReady().then(() => {
   });
 
   // 2. 触发开始下载
+  //    🔧 v1.8.5 修复：吞掉 downloadUpdate() 的 rejection —— 下载中断网会以
+  //    unhandledRejection 逃逸，被全局兜底写进 crash.log 产生虚假"崩溃"记录
+  //    （真实错误已由 autoUpdater.on('error') 广播给渲染端）
   ipcMain.handle('sys:downloadUpdate', () => {
-    autoUpdater.downloadUpdate();
+    Promise.resolve(autoUpdater.downloadUpdate()).catch(() => { });
     return { success: true };
   });
 
@@ -2465,7 +2592,14 @@ app.whenReady().then(() => {
         };
         let systemPrompt = '';
         const filteredMessages = (payload.messages || []).filter(m => {
-          if (m.role === 'system') { systemPrompt = m.content; return false; }
+          // 🔧 v1.8.5 修复：多条 system 消息拼接保留而非互相覆盖 ——
+          //    主提示词 + 越狱/风格设定分开传时，旧版 systemPrompt = m.content
+          //    只留最后一条，前面的 system 内容被静默丢弃
+          if (m.role === 'system') {
+            const c = (m && m.content !== undefined && m.content !== null) ? String(m.content) : '';
+            if (c) systemPrompt = systemPrompt ? (systemPrompt + '\n\n' + c) : c;
+            return false;
+          }
           return true;
         });
         bodyData = {
@@ -2686,7 +2820,13 @@ app.on('window-all-closed', () => {
 const YIELD_EVERY = 25; // 每处理 25 张卡让出一次事件循环（UI 心跳粒度）
 const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
 
-async function walkLibraryDir(dirPath, relPath, files, categories) {
+async function walkLibraryDir(dirPath, relPath, files, categories, visitedDirs) {
+  // 🛡️ v1.8.5：realpath + visited 集合防符号链接/junction 环路（同 wb:scan walk；
+  //    指回祖先的链接会让异步递归无限循环、files 数组无限膨胀直至内存耗尽）
+  let realDir;
+  try { realDir = fs.realpathSync(dirPath); } catch (e) { return; }
+  if (visitedDirs.has(realDir)) return;
+  visitedDirs.add(realDir);
   let entries;
   try {
     entries = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -2701,7 +2841,7 @@ async function walkLibraryDir(dirPath, relPath, files, categories) {
       if (skipFolders.includes(lowerName)) continue; // node_modules 等海量垃圾目录黑名单
       if (!relPath) categories.add(f.name); // 一级文件夹名 = 物理分组
       const subRel = relPath ? path.join(relPath, f.name) : f.name;
-      await walkLibraryDir(absPath, subRel, files, categories);
+      await walkLibraryDir(absPath, subRel, files, categories, visitedDirs);
     } else if (f.isFile()) {
       const ext = path.extname(f.name).toLowerCase();
       if (ext !== '.png' && ext !== '.webp' && ext !== '.json') continue;
@@ -2767,7 +2907,7 @@ async function scanAndSaveFolder(folderPath) {
     // 📁 递归扫描库目录：子文件夹名自动识别为物理分组（🚀 异步分片，不再阻塞事件循环）
     const files = [];
     const categories = new Set();
-    await walkLibraryDir(folderPath, '', files, categories);
+    await walkLibraryDir(folderPath, '', files, categories, new Set());
 
     // 🧹 修复「卡片导入/扫描出现空分组」：空文件夹不再产生"幽灵分组"。
     // 物理分组只保留确实包含卡片文件的文件夹；误建/残留的空文件夹（如 123/、555/）不再显示为分组。

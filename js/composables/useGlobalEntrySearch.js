@@ -5,6 +5,7 @@
  * 共享状态（worldbooks / library / appMode / activeWorldbook / openFromLibrary）保留在 App.vue 并注入。
  */
 import { ref, computed } from 'vue';
+import { extractBookEntries } from '../utils/cardLoader.js';
 
 // 把触发词字段归一化为字符串数组（兼容数组 / 逗号分隔字符串 / 空）
 function toArray(v) {
@@ -46,13 +47,12 @@ export function useGlobalEntrySearch({ worldbooks, library, appMode, activeWorld
                 if (n) list.push(n);
             });
         });
-        // 角色卡内嵌世界书
+        // 角色卡内嵌世界书（🛡️ extractBookEntries 兼容 entries 数组/字典/数组 book 全形态，
+        //    旧版漏索引字典形态 entries 的卡片，其内嵌词条在全库搜索中永远搜不到）
         (library.value || []).forEach(item => {
             const d = (item.data && item.data.data) || item.data || {};
             const book = d.character_book || (item.data && item.data.character_book) || {};
-            const entries = (book.entries && Array.isArray(book.entries))
-                ? book.entries
-                : (Array.isArray(book) ? book : []);
+            const entries = extractBookEntries(book);
             const name = d.name || item.name || '未知角色';
             entries.forEach(e => {
                 const n = normalizeEntry(e, 'card', name, item.path || '');

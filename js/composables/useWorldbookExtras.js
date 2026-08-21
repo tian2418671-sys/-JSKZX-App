@@ -25,7 +25,9 @@ function parseEntriesFlexible(text) {
         const lines = trim.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         entries = lines.map(l => { try { return JSON.parse(l); } catch (e2) { return null; } }).filter(Boolean);
     }
-    const normalized = (Array.isArray(entries) ? entries : []).filter(e => e && typeof e === 'object').map(e => ({
+    // 🛡️ 字典形态 entries（SillyTavern 世界书导出 {"0":{...},"1":{...}}）同样可导入
+    const normalized = (Array.isArray(entries) ? entries : Object.values(entries || {}))
+        .filter(e => e && typeof e === 'object').map(e => ({
         uid: `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
         key: Array.isArray(e.key) ? e.key : (Array.isArray(e.keys) ? e.keys : (e.key ? [e.key] : (e.keys ? [e.keys] : []))),
         keysecondary: Array.isArray(e.keysecondary) ? e.keysecondary : (Array.isArray(e.secondary_keys) ? e.secondary_keys : (e.keysecondary ? [e.keysecondary] : [])),

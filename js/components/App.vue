@@ -1128,9 +1128,11 @@ export default {
             syncConfigToDiskDebounced();
 
             // 3. 物理重写文件（PNG 的 tEXt 元数据块 / JSON 覆写），剥离 Proxy 后经 IPC
+            // 🔧 v1.8.5 配套：保存成功后回写 _mtime（防下次"刷新库"把本卡误判为已变化）
             if (window.electronAPI && typeof window.electronAPI.saveCard === 'function' && cardItem.path && cardItem.data) {
                 try {
-                    await window.electronAPI.saveCard(cardItem.path, JSON.parse(JSON.stringify(cardItem.data)));
+                    const saveRes = await window.electronAPI.saveCard(cardItem.path, JSON.parse(JSON.stringify(cardItem.data)));
+                    if (saveRes && saveRes.success && saveRes.mtime) cardItem._mtime = saveRes.mtime;
                 } catch (err) {
                     console.error('卡片文件物理覆盖失败，已用物理配置文件兜底:', err);
                 }
@@ -1980,7 +1982,9 @@ export default {
                 const batch = pending.slice(i, i + CONCURRENCY);
                 await Promise.all(batch.map(async (cardInfo) => {
                     try {
-                        await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                        const saveRes = await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                        // 🔧 v1.8.5 配套：回写新 mtime，防下次刷新误判变化触发死循环重写
+                        if (saveRes && saveRes.success && saveRes.mtime) cardInfo._mtime = saveRes.mtime;
                     } catch (e) {
                         console.warn(`自动打标后台保存失败 [${cardInfo.name}]:`, e);
                     }
@@ -2088,6 +2092,9 @@ export default {
                     //    旧版启动加载 = 千张卡 × (整 PNG 读回 + 重写 + 快照备份) 的 I/O 风暴，
                     //    直接把启动拖到分钟级并伴随「未响应」。现在只收集，加载完成后由
                     //    flushDeferredAutoTagSaves 低并发后台落盘，UI 秒开。
+                    // 🔧 v1.8.5 配套：保存成功后回写 _mtime（saveCard 返回新 mtime）——
+                    //    否则下次"刷新库"按 mtime 差分会把本卡误判为"已变化"重新解析，
+                    //    再次触发自动打标写盘 → mtime 又变 → 每次刷新全量重写的死循环
                     if (oldCategory !== cardInfo.category || oldTagsLen !== (cardInfo.customTags || []).length) {
                         if (window.electronAPI && !/\.json$/i.test(cardInfo.path)) {
                             // 只写入原生 data 的 tags，保证卡片格式不被污染
@@ -2097,7 +2104,8 @@ export default {
                                 deferredAutoTagSaves.push(cardInfo);
                             } else {
                                 try {
-                                    await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                                    const saveRes = await window.electronAPI.saveCard(cardInfo.path, JSON.parse(JSON.stringify(cardInfo.data)));
+                                    if (saveRes && saveRes.success && saveRes.mtime) cardInfo._mtime = saveRes.mtime;
                                 } catch (e) {
                                     console.warn(`自动打标物理保存失败 [${cardInfo.name}]:`, e);
                                 }
@@ -2126,6 +2134,12 @@ export default {
             if (!folderData || !folderData.files) return;
 
             currentFolderPath.value = folderData.folderPath;
+            // 🔧 v1.8.5 修复：记录切换前正在编辑卡片的路径 —— 旧版切库后编辑面板还开着
+            //    旧 cardData（其 data 引用已不在新 library 中），Ctrl+S 查找失败只能靠
+            //    导出 JSON 救回。加载完成后按路径重绑（同 refreshLibrary 的处理）。
+            const prevCardPath = cardData.value
+                ? (library.value.find(i => i.data === cardData.value)?.path || null)
+                : null;
             // 🧹 释放旧卡片 blob URL（浏览器降级导入的卡片用 blob: 临时地址，重建库后无人引用 → 泄漏；local-file 永久路径无需 revoke）
             library.value.forEach(c => {
                 if (c.avatar && typeof c.avatar === 'string' && c.avatar.startsWith('blob:')) {
@@ -2165,6 +2179,12 @@ export default {
                 library.value.push(...staging.slice(i, i + 500));
             }
             console.log(`成功从 ${folderData.folderPath} 加载了 ${addedCount} 张卡片`);
+            // 🔧 v1.8.5 修复：切库后重绑/关闭当前编辑卡片（防"孤儿编辑面板"保存失败）
+            if (prevCardPath && cardData.value) {
+                const reopen = library.value.find(i => i.path === prevCardPath);
+                if (reopen) openFromLibrary(reopen);
+                else reset(); // 旧卡不在新库：关闭编辑器，避免编辑已失效对象
+            }
             // 🚀 自动打标落盘转后台低并发执行，不阻塞首屏呈现
             flushDeferredAutoTagSaves();
         };
