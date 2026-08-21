@@ -325,6 +325,7 @@
         :snapshots="wbSnapshotList"
         @close="closeWbSnapshotModal"
         @restore="restoreWbSnapshot"
+        @delete="deleteWbSnapshot"
     />
 
     <!-- ================= [ 弹窗：版本更新检测（子组件 UpdateModal） ] ================= -->
@@ -334,6 +335,20 @@
         :error-msg="updateErrorMsg"
         @close="showUpdateModal = false"
     />
+
+    <!-- ================= [ 🔔 新版本角落提醒浮标（右下角常驻，静默检测到新版时点亮；点击查看详情） ] ================= -->
+    <transition name="fade">
+        <div v-if="showUpdateBadge && !showUpdateModal" class="fixed bottom-5 right-5 z-[90] select-none">
+            <div class="flex items-center gap-2.5 pl-3.5 pr-2 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.45)] cursor-pointer hover:scale-105 transition-transform duration-200" title="点击查看新版本详情" @click="showUpdateModal = true">
+                <span class="relative flex h-2.5 w-2.5 shrink-0">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
+                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+                </span>
+                <span class="text-xs font-bold whitespace-nowrap">🚀 发现新版本 <span class="font-mono underline underline-offset-2 decoration-white/50">v{{ updateInfo.latestVersion }}</span></span>
+                <button class="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/25 text-white/80 hover:text-white transition text-[10px] shrink-0" title="本次启动内不再提醒" @click.stop="dismissUpdateBadge">✕</button>
+            </div>
+        </div>
+    </transition>
 
         <!-- ================= [ 全局 Toast 消息通知（子组件 ToastContainer） ] ================= -->
         <toast-container :toasts="toasts" />
@@ -3983,6 +3998,10 @@ export default {
         });
         // 更新错误信号（统一在 App 层收口，转发给 UpdateModal 重置状态，避免与子组件监听冲突）
         const updateErrorMsg = ref('');
+        // 🔔 新版本角落提醒浮标：静默检测到新版时点亮右下角浮标（不弹窗打断操作）
+        const showUpdateBadge = ref(false);
+        // 用户点浮标 ✕ 后本次启动内不再提醒（下次启动重新静默检测）
+        const dismissUpdateBadge = () => { showUpdateBadge.value = false; };
         let isManualCheck = false; // 区分手动/静默检测（静默检测到已最新时不打扰）
         let manualCheckTimer = null; // 手动检测超时保护，防止事件未到达时 isManualCheck 卡死
 
@@ -4031,12 +4050,18 @@ export default {
                 window.electronAPI.onUpdateAvailable((info) => {
                     updateInfo.value = { ...(info || {}) };
                     updateErrorMsg.value = ''; // 新版本信息到达，清空上一次的错误信号
-                    showUpdateModal.value = true;
+                    showUpdateBadge.value = true; // 🔔 点亮角落浮标（常驻直至处理/关闭）
+                    // 手动检测：直接弹详情窗；静默检测：仅角落浮标提示，不打断当前操作
+                    if (isManualCheck) {
+                        isManualCheck = false;
+                        showUpdateModal.value = true;
+                    }
                     addLog(`🎉 发现新版本: v${(info && info.latestVersion) || ''}`, 'success');
                 });
             }
             if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
                 window.electronAPI.onUpdateNotAvailable((info) => {
+                    showUpdateBadge.value = false; // 已是最新，撤下角落浮标
                     if (isManualCheck) {
                         isManualCheck = false;
                         nativeAlert(`当前已是最新版本 (v${(info && info.currentVersion) || ''})！`, 'info');
@@ -4175,7 +4200,7 @@ export default {
         // 📤 世界书扩展：提取/JSONL导入/批量导出/快照/统计
         const {
             extractWorldbookFromCard, importWbFromJsonl, exportWorldbooksBatch,
-            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot,
+            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot, deleteWbSnapshot,
             wbStats
         } = useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookDirPath, nativeAlert, addLog, confirmDialog });
 
@@ -4320,7 +4345,7 @@ export default {
             showGlobalEntrySearchModal, openGlobalEntrySearch, closeGlobalEntrySearch, jumpToEntrySource,
             // 📤 世界书扩展
             extractWorldbookFromCard, importWbFromJsonl, exportWorldbooksBatch,
-            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot,
+            showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot, deleteWbSnapshot,
             wbStats,
             // 🎛️ 角色卡内嵌世界书细化操作（词条增删/克隆/排序/搜索/标签化触发词）
             characterWorldbookSearchQuery, filteredCharacterWorldbookEntries,
@@ -4349,7 +4374,7 @@ export default {
             showWbImportModal, importSourceBook, importCandidates, selectedImportEntries, importableSourceBooks,
             openWbImportModal, pickImportSource, confirmImportEntries,
             // 🚀 系统版本更新检测
-            showUpdateModal, updateInfo, updateErrorMsg, checkForUpdatesManual, openExternalUrl,
+            showUpdateModal, updateInfo, updateErrorMsg, showUpdateBadge, dismissUpdateBadge, checkForUpdatesManual, openExternalUrl,
             // 🛡️ 统一持久化中枢（app_config.json 最高权威）
             appConfig, syncConfigToDisk, persistCardUpdate
         };

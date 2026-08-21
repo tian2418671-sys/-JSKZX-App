@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listWorldbookSnapshots: (filePath) => ipcRenderer.invoke('wb:listSnapshots', filePath),
     // 🌍 世界书专属通道：回滚到指定快照
     restoreWorldbookSnapshot: (payload) => ipcRenderer.invoke('wb:restoreSnapshot', payload),
+    // 🌍 世界书专属通道：删除一条世界书历史快照
+    deleteWorldbookSnapshot: (snapshotPath) => ipcRenderer.invoke('wb:deleteSnapshot', snapshotPath),
     // 🌍 世界书专属通道：批量导出已落盘世界书
     exportWorldbooksBatch: (filePaths) => ipcRenderer.invoke('wb:exportBatch', filePaths),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）

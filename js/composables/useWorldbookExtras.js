@@ -158,6 +158,23 @@ export function useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookD
     };
     const closeWbSnapshotModal = () => { showWbSnapshotModal.value = false; };
 
+    // 🗑️ 删除一条世界书历史快照（物理删除，不可恢复）
+    const deleteWbSnapshot = async (snap) => {
+        if (!snap || !snap.path) return;
+        if (!window.electronAPI || typeof window.electronAPI.deleteWorldbookSnapshot !== 'function') {
+            return nativeAlert('当前版本不支持删除世界书快照，请更新应用。', 'warning');
+        }
+        const ok = await confirmDialog(`确定要删除这条世界书快照吗？\n\n${snap.file}\n\n⚠️ 删除后不可恢复。`);
+        if (!ok) return;
+        const res = await window.electronAPI.deleteWorldbookSnapshot(snap.path);
+        if (res?.success) {
+            wbSnapshotList.value = wbSnapshotList.value.filter(s => s.path !== snap.path);
+            addLog(`🗑️ 已删除世界书快照: ${snap.file}`, 'success');
+        } else {
+            nativeAlert(`删除快照失败: ${res?.error || '未知错误'}`, 'error');
+        }
+    };
+
     const restoreWbSnapshot = async (snap) => {
         const target = wbSnapshotTarget.value;
         if (!target || !snap) return;
@@ -204,7 +221,7 @@ export function useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookD
 
     return {
         extractWorldbookFromCard, importWbFromJsonl, exportWorldbooksBatch,
-        showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot,
+        showWbSnapshotModal, wbSnapshotList, wbSnapshotTarget, openWbSnapshots, closeWbSnapshotModal, restoreWbSnapshot, deleteWbSnapshot,
         wbStats
     };
 }

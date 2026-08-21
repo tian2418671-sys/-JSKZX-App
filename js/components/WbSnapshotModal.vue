@@ -19,10 +19,11 @@
                         <div class="text-[11px] font-mono text-zinc-300 truncate">{{ s.file }}</div>
                         <div class="text-[10px] text-zinc-500 mt-0.5">{{ formatTime(s.mtime) }} · {{ formatSize(s.size) }}</div>
                     </div>
-                    <button @click="$emit('restore', s)" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shrink-0 transition">回滚</button>
+                    <button @click="$emit('restore', s)" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded shrink-0 transition" title="把当前世界书恢复为该快照内容">回滚</button>
+                    <button @click="$emit('delete', s)" class="px-2.5 py-1.5 bg-zinc-700 hover:bg-rose-600 hover:text-white text-zinc-400 text-xs rounded shrink-0 transition" title="删除这条快照（不可恢复）">🗑️</button>
                 </div>
             </div>
-            <div class="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-500 shrink-0">回滚前会自动备份当前版本。</div>
+            <div class="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-500 shrink-0">回滚前自动备份当前版本（已留档内容自动跳过，超量快照自动清理）。</div>
         </div>
     </div>
 </template>
@@ -35,7 +36,7 @@ export default {
         targetName: { type: String, default: '未命名' },
         snapshots: { type: Array, default: () => [] }
     },
-    emits: ['close', 'restore'],
+    emits: ['close', 'restore', 'delete'],
     methods: {
         formatTime(ms) { try { return new Date(ms).toLocaleString('zh-CN', { hour12: false }); } catch (e) { return ''; } },
         formatSize(n) { if (!n && n !== 0) return ''; return n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(2) + ' MB' : (n / 1024).toFixed(1) + ' KB'; }

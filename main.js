@@ -125,6 +125,58 @@ async function cleanupOldSnapshots(historyDir, baseFileName, ext, maxCount) {
 }
 
 /**
+ * 🌍 世界书快照备份（wb:save 保存前 / wb:restoreSnapshot 回滚前共用）
+ * 【修复「回滚快照无限增值」BUG】旧版回滚每次都无条件备份当前版本且从不清理，
+ * 在多个快照间反复回滚时，同一内容被反复复制成新快照，列表只增不减。
+ * 现改为三重防护：
+ *   ① 内容去重：当前内容与任意一份现有快照一致 → 该版本已留档，跳过备份
+ *      （世界书为小体积 JSON，快照上限个位数，全量 hash 比对成本可忽略）
+ *   ② 超量清理：同名快照超过 snapshotConfig.maxSnapshots 份时删旧留新
+ *   ③ 备份失败向上抛出 → 调用方中止主流程，防止未留档版本被覆盖丢失
+ * @param {string} backupDir userData/jsTavern_Backups/worldbooks 备份目录
+ * @param {string} baseName 世界书文件名（不含 .json 扩展名）
+ * @param {string} filePath 待备份的世界书物理路径
+ * @returns {Promise<{skipped?: boolean, backupFilePath?: string}>}
+ */
+async function backupWorldbookSnapshot(backupDir, baseName, filePath) {
+  await fs.promises.mkdir(backupDir, { recursive: true });
+  const existing = (await fs.promises.readdir(backupDir).catch(() => []))
+    .filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json'))
+    .sort(); // 文件名含 ISO 时间戳，字典序即时间序
+
+  // ① 内容去重：当前版本已留档则跳过备份
+  if (existing.length > 0) {
+    const currentHash = await hashFileContent(filePath);
+    if (currentHash) {
+      for (const f of existing) {
+        const h = await hashFileContent(path.join(backupDir, f));
+        if (h && h === currentHash) return { skipped: true };
+      }
+    }
+  }
+
+  // ② 备份当前版本
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupFilePath = path.join(backupDir, `${baseName}_${timestamp}.json`);
+  await fs.promises.copyFile(filePath, backupFilePath);
+
+  // ③ 超量清理：删旧留新（失败静默，不影响主流程）
+  try {
+    const filesNow = (await fs.promises.readdir(backupDir))
+      .filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json'))
+      .sort();
+    const maxCount = Math.max(1, snapshotConfig.maxSnapshots || 10);
+    if (filesNow.length > maxCount) {
+      for (const f of filesNow.slice(0, filesNow.length - maxCount)) {
+        await fs.promises.unlink(path.join(backupDir, f)).catch(() => { });
+      }
+    }
+  } catch (e) { /* 清理失败不影响备份结果 */ }
+
+  return { backupFilePath };
+}
+
+/**
  * 计算文件内容 SHA-256（内容去重用；走流式读取，PNG 大文件不一次性吃满内存）
  * @param {string} filePath 文件物理路径
  * @returns {Promise<string|null>} 十六进制哈希；读取失败返回 null
@@ -2095,28 +2147,9 @@ app.whenReady().then(() => {
 
       const fileContent = JSON.stringify(cleanData, null, 4);
 
-      // 2. 物理快照备份逻辑 (保留最近 10 次)
+      // 2. 物理快照备份（内容去重 + 超量清理；备份失败向上抛出 → 中止保存防数据丢失）
       const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
-      if (!fs.existsSync(backupDir)) {
-        await fs.promises.mkdir(backupDir, { recursive: true });
-      }
-
-      const baseName = path.basename(filePath, '.json');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupPath = path.join(backupDir, `${baseName}_${timestamp}.json`);
-
-      // 备份当前原文件
-      await fs.promises.copyFile(filePath, backupPath);
-
-      // 清理老旧备份，只保留同名文件的最近 10 份
-      const files = await fs.promises.readdir(backupDir);
-      const myBackups = files.filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json')).sort();
-      if (myBackups.length > 10) {
-        const filesToDelete = myBackups.slice(0, myBackups.length - 10);
-        for (const f of filesToDelete) {
-          await fs.promises.unlink(path.join(backupDir, f)).catch(() => { });
-        }
-      }
+      await backupWorldbookSnapshot(backupDir, path.basename(filePath, '.json'), filePath);
 
       // 3. 原子覆写新文件（tmp 唯一命名 + rename）
       //    🔧 v1.8.5 修复：旧版直接 writeFile 覆盖 —— 写入中途崩溃/断电会产出半截
@@ -2309,13 +2342,35 @@ app.whenReady().then(() => {
       }
       if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
       const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
-      await fs.promises.mkdir(backupDir, { recursive: true });
+      // 🔧 修复「回滚快照无限增值」：旧版每次回滚都无条件备份当前版本且从不清理，
+      //   在多个快照间反复回滚时，同一内容被反复复制成新快照，列表只增不减。
+      //   现改用 backupWorldbookSnapshot：已留档版本跳过备份 + 超量自动清理。
       if (fs.existsSync(filePath)) {
-        const baseName = path.basename(filePath, '.json');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        await fs.promises.copyFile(filePath, path.join(backupDir, `${baseName}_${timestamp}.json`));
+        await backupWorldbookSnapshot(backupDir, path.basename(filePath, '.json'), filePath);
       }
       await fs.promises.copyFile(snapshotPath, filePath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 🌍 世界书专属：删除一条历史快照（双保险防误删：仅限世界书快照目录内 + 文件名须符合快照格式）
+  ipcMain.handle('wb:deleteSnapshot', async (event, snapshotPath) => {
+    try {
+      if (!snapshotPath || typeof snapshotPath !== 'string') return { success: false, error: '参数缺失。' };
+      // 安全校验①：必须位于 userData 世界书快照专属备份目录内（防任意文件删除原语）
+      const backupDir = path.resolve(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
+      const resolved = path.resolve(snapshotPath);
+      if (path.dirname(resolved).toLowerCase() !== backupDir.toLowerCase()) {
+        return { success: false, error: '非法快照路径：仅能删除世界书快照目录内的文件。' };
+      }
+      // 安全校验②：文件名必须符合快照命名格式（baseName_ISO时间戳.json）
+      if (!/_\d{4}-\d{2}-\d{2}T/.test(path.basename(snapshotPath))) {
+        return { success: false, error: '非法快照文件名，操作被拒绝。' };
+      }
+      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
+      await fs.promises.unlink(snapshotPath);
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
