@@ -30,7 +30,6 @@
   "build": {
     "appId": "com.sillytavern.cardmanager",
     "productName": "SillyTavern 角色卡管理器",
-    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "dist"
     },
