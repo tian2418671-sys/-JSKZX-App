@@ -418,6 +418,8 @@ import { processFile, extractBookEntries } from '../utils/cardLoader.js';
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
 import { useSnapshots } from '../composables/useSnapshots.js'; // 📸 历史快照功能（拆分出的组合式函数）
 import { useCardCrud } from '../composables/useCardCrud.js'; // 🃏 卡片 CRUD（导入入库/删除回收/持久化保存/导出重命名，从 App.vue 拆分）
+import { useConfigPersistence } from '../composables/useConfigPersistence.js'; // 🛡️ 统一配置持久化中枢（app_config.json 收集/加密/落盘/防抖，从 App.vue 拆分）
+import { useEmbeddedWorldbook } from '../composables/useEmbeddedWorldbook.js'; // 🌍 角色卡内嵌世界书编辑（条目派生/uid/折叠展开/触发词工具，从 App.vue 拆分）
 import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色卡分组/分类功能（拆分出的组合式函数）
 import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
@@ -1004,14 +1006,12 @@ export default {
             }
         });
 
-        // 🛡️ 启动配置恢复保护：loadAppConfig 恢复字段时置 true，防止各 watch 触发写盘把「恢复值/旧残留」回写 app_config.json
-        //    （否则旧文件 / localStorage 残留会在加载竞态中被写回权威文件，导致「删除/清空后重启复活」）
-        let isRestoringConfig = false;
+        // 🛡️ isRestoringConfig / syncConfigToDisk / syncConfigToDiskDebounced / saveUiSettingsToDisk
+        //    （统一持久化中枢：收集→加密→原子落盘 + 防抖 + 恢复期禁写 + beforeunload 冲刷）
+        //    已迁至 useConfigPersistence 组合式函数（见下文 setup 中部调用；isRestoringConfig 已 ref 化，赋值须 .value）
 
         // 📸 历史快照配置 ref
-        // ⚠️ 必须在此（syncConfigToDisk / 集中 watch 之前）顶层定义：
-        //    syncConfigToDisk(ui.snapshotConfig) 与集中 watch 在 setup 早期就引用 snapshotConfig，
-        //    若只由 useSnapshots（setup 尾部注入）定义会触发 TDZ「Cannot access 'snapshotConfig' before initialization」。
+        // ⚠️ 必须在此顶层定义：snapshotConfig 被下方集中 watch 与 useSnapshots/useConfigPersistence 注入引用。
         const snapshotConfig = ref((() => {
             const defaults = { enabled: true, intervalMinutes: 5, maxSnapshots: 10 };
             try {
@@ -1023,86 +1023,6 @@ export default {
             } catch (e) { return { ...defaults }; }
         })());
 
-        // 统一写入磁盘：从各响应式源收集完整配置 → JSON 剥离 Vue 响应式 Proxy → 原子落盘
-        // ⚠️ 关键：ref 的 value 若为对象/数组会被 reactive 包装成 Proxy，直接传 IPC 会报
-        //    "An object could not be cloned"（structured clone 失败）→ 必须统一 JSON 序列化剥离。
-        const syncConfigToDisk = async () => {
-            if (isRestoringConfig) return; // 启动恢复期间不落盘，避免把恢复值/旧值写回造成复活
-            if (!window.electronAPI || typeof window.electronAPI.saveAppConfig !== 'function') return;
-            // 🔐 加密 API Key 后落盘（代码审查修复 2）：密文写入 app_config.json，明文只存内存
-            const rawKey = apiKey ? apiKey.value : (appConfig.value.api && appConfig.value.api.key) || '';
-            let encKey = rawKey || '';
-            if (rawKey && typeof window.electronAPI.encryptSecret === 'function') {
-                try {
-                    const enc = await window.electronAPI.encryptSecret(rawKey);
-                    if (enc && enc.success && enc.value) encKey = enc.value;
-                } catch (e) { /* 加密失败回退明文 */ }
-            }
-            const payload = {
-                language: 'zh-CN',
-                tagLangMode: tagLangMode.value,
-                customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
-                removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
-                globalTags: JSON.parse(JSON.stringify(Array.isArray(systemCommonTags.value) ? systemCommonTags.value : [])),
-                cardOverlays: JSON.parse(JSON.stringify(appConfig.value.cardOverlays || {})),
-                api: {
-                    endpoint: apiEndpoint ? apiEndpoint.value : (appConfig.value.api && appConfig.value.api.endpoint) || '',
-                    key: encKey,
-                    model: apiModel ? apiModel.value : (appConfig.value.api && appConfig.value.api.model) || '',
-                    type: apiType ? apiType.value : (appConfig.value.api && appConfig.value.api.type) || 'openai'
-                },
-                // 🧩 UI 状态统一收口：生产 app:// 下 localStorage 不持久，改存 app_config.json
-                ui: {
-                    theme: theme.value,
-                    appSettings: JSON.parse(JSON.stringify(appSettings.value || {})),
-                    sanitizeImportedTags: sanitizeImportedTags.value,
-                    snapshotConfig: JSON.parse(JSON.stringify(snapshotConfig.value || {})),
-                    localCategoryMap: JSON.parse(JSON.stringify(localCategoryMap.value || {})),
-                    sidebarWidth: Number(sidebarWidth.value) || 0,
-                    viewMode: viewMode.value,
-                    isCompactMode: isCompactMode.value,
-                    sortBy: sortBy.value,
-                    systemPromptPresets: JSON.parse(JSON.stringify(Array.isArray(systemPromptPresets.value) ? systemPromptPresets.value : [])),
-                    lastWorldbookDirPath: lastWorldbookDirPath.value || '',
-                    wbCategoryMap: JSON.parse(JSON.stringify(wbCategoryMap.value || {}))
-                }
-            };
-            window.electronAPI.saveAppConfig(payload).catch(() => { });
-        };
-
-        // 🔧 落盘防抖：批量操作（清空标签/批量删除/批量加标签等）会对每张卡
-        // 调 persistCardUpdate → syncConfigToDisk（全量序列化 + 加密 IPC + 写盘），
-        // 几千张卡 = 几千次写放大。500ms 内的变更合并为一次落盘。
-        let syncTimer = null;
-        const syncConfigToDiskDebounced = () => {
-            if (isRestoringConfig) return;
-            if (syncTimer) clearTimeout(syncTimer);
-            syncTimer = setTimeout(() => {
-                syncTimer = null;
-                syncConfigToDisk();
-            }, 500);
-        };
-        // 窗口关闭前冲刷最后一次挂起的落盘（尽力而为：IPC 为异步，极端情况可能来不及）
-        window.addEventListener('beforeunload', () => {
-            if (syncTimer) {
-                clearTimeout(syncTimer);
-                syncTimer = null;
-                syncConfigToDisk();
-            }
-        });
-
-        // 💾 persistCardUpdate / deleteCardOverlays（卡片变更持久化中枢与覆盖层清理）
-        //    已迁至 useCardCrud 组合式函数（见下文 setup 中部调用）。
-        //    persistCardCategory（单卡分类双保险持久化）同批次迁出。
-
-        // 【兼容保留】统一将关键 UI 状态（分组/语言/卡片分类等）持久化到主进程配置文件。
-        // 现在内部直接走统一中枢 syncConfigToDisk（app_config.json 唯一权威），旧文件双写已移除（避免双权威竞态）。
-        const saveUiSettingsToDisk = () => {
-            if (!window.electronAPI) return;
-            if (isRestoringConfig) return; // 启动恢复期间不落盘
-            // 统一写入 app_config.json（唯一权威）；旧文件 uiSettings 双写已移除
-            syncConfigToDisk();
-        };
         const currentFolderPath = ref(''); // 当前打开的文件夹路径（Electron）
 
         // ================= [ 多选与批量操作状态 ] =================
@@ -1229,16 +1149,9 @@ export default {
             return 'Custom';
         });
 
-        // 世界书条目（兼容 V1/V2 层级与 comment 字段）
-        // 世界书条目稳定标识：为每个条目对象分配唯一 uid（v-for :key 使用，避免增删时节点错位）
-        // 【修复】改用 WeakMap：键为对象引用，条目对象被 GC 时映射自动释放，防止频繁切卡导致内存泄漏
-        const entryUidMap = new WeakMap();
-        let entryUidCounter = 0;
-        const getEntryUid = (entry) => {
-            if (!entry || typeof entry !== 'object') return 'entry-' + (++entryUidCounter);
-            if (!entryUidMap.has(entry)) entryUidMap.set(entry, 'entry-' + (++entryUidCounter));
-            return entryUidMap.get(entry);
-        };
+        // 🌍 角色卡内嵌世界书编辑域（worldbookEntries / getEntryUid / worldbookExpanded /
+        //    toggle·expand·collapse / getKeysString / updateEntryKeys）
+        //    已迁至 useEmbeddedWorldbook 组合式函数（见下文 setup 中部调用）
 
         // 正则脚本稳定标识（同世界书机制，避免增删时节点错位）
         // 【修复】同样改用 WeakMap，避免正则脚本对象被丢弃后残留强引用
@@ -1248,69 +1161,6 @@ export default {
             if (!script || typeof script !== 'object') return 'regex-' + (++regexUidCounter);
             if (!regexUidMap.has(script)) regexUidMap.set(script, 'regex-' + (++regexUidCounter));
             return regexUidMap.get(script);
-        };
-
-        const worldbookEntries = computed(() => {
-            // 兼容 V1 和 V2 的存放位置
-            const book = safeData.value.character_book || cardData.value?.character_book || {};
-            // 🛡️ 全形态安全提取（entries 数组 / entries 字典 / book 本身为数组），
-            // 修复字典形态 entries 与数组形态 book 导致 .filter 崩溃（编辑器白屏）
-            const entries = extractBookEntries(book);
-
-            // 【关键】直接返回原始条目的响应式代理（不做拷贝展开），
-            // 这样 v-model 编辑能写回原数据（保存时落盘），同时保持响应式（cardData 是 shallowRef）
-            // 【脏数据防护】脏条目过滤已由 extractBookEntries 完成，防止 EditorPanel v-for 渲染时读 entry.name 空引用崩溃
-            return entries
-                .map(entry => reactive(entry));
-        });
-
-        // ================= 世界书折叠展开控制 =================
-        // 存储每个世界书条目是否展开的映射表，key 为条目的稳定唯一标识（getEntryUid），value 为 boolean
-        // ✅ [补丁] 改用 uid 而非数组 index：删除/排序条目后 index 会错位继承旧折叠状态（打开的突然闭合）
-        const worldbookExpanded = ref({});
-
-        // 切换单个条目的折叠状态（按条目的稳定唯一标识追踪）
-        const toggleWorldbookEntry = (entry) => {
-            if (!entry) return;
-            const key = getEntryUid(entry);
-            worldbookExpanded.value[key] = !worldbookExpanded.value[key];
-        };
-
-        // 全部展开
-        const expandAllWorldbook = () => {
-            worldbookEntries.value.forEach((entry) => {
-                if (entry) worldbookExpanded.value[getEntryUid(entry)] = true;
-            });
-        };
-
-        // 全部折叠
-        const collapseAllWorldbook = () => {
-            worldbookEntries.value.forEach((entry) => {
-                if (entry) worldbookExpanded.value[getEntryUid(entry)] = false;
-            });
-        };
-
-        // 世界书触发词转字符串以便在 input 中编辑
-        const getKeysString = (keysArray) => {
-            return Array.isArray(keysArray) ? keysArray.join(', ') : (keysArray || '');
-        };
-
-        const updateEntryKeys = (entry, fieldOrVal, value) => {
-            if (!entry) return;
-            // 兼容两种调用形态：
-            //   updateEntryKeys(entry, value)          -> 写 entry.keys（角色卡世界书编辑器）
-            //   updateEntryKeys(entry, 'key', value)   -> 写 entry.key / entry.keysecondary（独立世界书 IDE）
-            let targetField = 'keys';
-            let rawValue = fieldOrVal;
-            if (value !== undefined) {
-                targetField = fieldOrVal;
-                rawValue = value;
-            }
-            // 将逗号分隔的字符串切割为数组，自动去除空格与空项（兼容中英文逗号）
-            entry[targetField] = String(rawValue).split(/[,，]/).map(s => s.trim()).filter(s => s.length > 0);
-            // 【修复】词条触发词变化会影响世界书 Token 统计，手动触发浅层刷新
-            // 🚀 v1.8.5：触发词参与 Token 估算 → 同步失效缓存
-            if (cardData.value) { triggerRef(cardData); cardTokensCache.delete(cardData.value); }
         };
 
         // 【修复】富文本渲染与代码安全转义
@@ -1739,7 +1589,7 @@ export default {
                 if (window.electronAPI && typeof window.electronAPI.loadAppConfig === 'function') {
                     const cfg = await window.electronAPI.loadAppConfig();
                     if (cfg && typeof cfg === 'object') {
-                        isRestoringConfig = true; // 🛡️ 恢复期间统一禁止写盘（防竞态自污染，任何恢复值都不回写磁盘）
+                        isRestoringConfig.value = true; // 🛡️ 恢复期间统一禁止写盘（防竞态自污染，任何恢复值都不回写磁盘）
                         try {
                             // 全局标签池（globalTags）
                             // 🐛 修复「删除标签后重启复发」：app_config.json 是唯一权威，必须【整体替换】而非【并集合并】。
@@ -1809,7 +1659,7 @@ export default {
                                 }
                             }
                         } finally {
-                            isRestoringConfig = false;
+                            isRestoringConfig.value = false;
                         }
                     }
                 } else if (window.electronAPI && typeof window.electronAPI.getUiSettings === 'function') {
@@ -3518,6 +3368,31 @@ export default {
             if (!url) return;
             window.electronAPI.openExternal(url);
         };
+
+        // 🛡️ 统一配置持久化中枢：组合式函数注入（收集→加密→原子落盘 + 防抖 + 恢复期禁写 + beforeunload 冲刷）
+        // ⚠️ 调用时序：必须晚于全部被收集 ref（最晚 wbCategoryMap）的定义；
+        //    必须早于 useCardCrud / useChat / useTags / useCardGroups 等注入 syncConfigToDisk 的消费方；
+        //    App.vue 内各 watch 回调引用返回的 const（运行时执行，无 immediate 注册），闭包安全。
+        // ⚠️ isRestoringConfig 已 ref 化：onMounted 恢复期赋值须用 .value。
+        const {
+            isRestoringConfig, syncConfigToDisk, syncConfigToDiskDebounced, saveUiSettingsToDisk
+        } = useConfigPersistence({
+            appConfig,
+            tagLangMode, customCategories, removedDefaultKeys, systemCommonTags,
+            apiEndpoint, apiKey, apiModel, apiType,
+            theme, appSettings, sanitizeImportedTags, snapshotConfig, localCategoryMap,
+            sidebarWidth, viewMode, isCompactMode, sortBy,
+            systemPromptPresets, lastWorldbookDirPath, wbCategoryMap
+        });
+
+        // 🌍 角色卡内嵌世界书编辑：组合式函数注入（条目派生/uid/折叠展开/触发词工具）
+        // ⚠️ 调用时序：必须晚于 cardTokensCache 的定义（updateEntryKeys 运行时引用）；
+        //    必须早于 useGraph（注入 worldbookExpanded）。引用方经解构同名 const，零改动。
+        const {
+            getEntryUid, worldbookEntries,
+            worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
+            getKeysString, updateEntryKeys
+        } = useEmbeddedWorldbook({ cardData, safeData, cardTokensCache });
 
         // 📸 历史快照功能：组合式函数注入（依赖 App.vue 共享状态；行为与原内联实现一致）
         // ⚠️ snapshotConfig 由 App.vue 顶层定义并注入（syncConfigToDisk/集中 watch 需早期引用，防 TDZ）
