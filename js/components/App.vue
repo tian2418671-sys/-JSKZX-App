@@ -3048,9 +3048,13 @@ export default {
                     if (!targetEntry) return;
                     targetEntry._collapsed = false; // 自动展开
 
-                    // ✅ 增强：平滑滚动到词条卡片并高亮闪烁（用 getEntryUid 做稳定锚点，不受搜索过滤影响）
+                    // ✅ 增强：平滑滚动到词条卡片并高亮闪烁
+                    // 🔧 修复：锚点须与 EditorPanel 渲染 id 同源 —— 独立世界书 IDE 的 DOM id
+                    //    是 'wb-entry-' + ensureUid(entry)（uid 字段体系），
+                    //    旧代码误用 getEntryUid（内嵌世界书的 WeakMap 计数器体系，'entry-N' 样式），
+                    //    两套体系永不相等 → getElementById 永远落空，图谱点击定位静默失效。
                     nextTick(() => {
-                        const dom = document.getElementById('wb-entry-' + getEntryUid(targetEntry));
+                        const dom = document.getElementById('wb-entry-' + ensureUid(targetEntry));
                         if (dom) {
                             dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             dom.classList.add('ring-2', 'ring-emerald-500', 'shadow-[0_0_24px_rgba(16,185,129,0.35)]');
