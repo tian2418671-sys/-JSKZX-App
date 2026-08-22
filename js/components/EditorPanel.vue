@@ -567,10 +567,11 @@
                                             :class="entry.enabled !== false ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]' : 'bg-zinc-600'"></button>
 
                                     <div class="flex-1 min-w-0 flex flex-col justify-center">
-                                        <span class="text-[11px] font-bold truncate leading-tight" :class="entry.enabled !== false ? 'text-emerald-400' : 'text-zinc-500'">
-                                            {{ formatKeys(entry.key) }}
+                                        <span class="text-[11px] font-bold truncate leading-tight" :class="entry.enabled !== false ? 'text-emerald-400' : 'text-zinc-500'"
+                                              :title="entry.comment || entry.name || '未命名词条'">
+                                            {{ entry.comment || entry.name || '未命名词条' }}
                                         </span>
-                                        <span v-if="entry.comment" class="text-[9px] text-zinc-500 truncate mt-0.5">{{ entry.comment }}</span>
+                                        <span v-if="Array.isArray(entry.key) && entry.key.length" class="text-[9px] text-zinc-500 truncate mt-0.5">🔑 {{ formatKeys(entry.key) }}</span>
                                         <span class="text-[9px] text-amber-500/70 font-mono mt-0.5">⚡ {{ entryTokens(entry) }}</span>
                                     </div>
 

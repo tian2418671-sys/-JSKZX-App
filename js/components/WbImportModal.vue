@@ -32,7 +32,8 @@
                        class="flex items-start gap-3 p-2.5 bg-zinc-900/50 hover:bg-zinc-800 rounded border border-zinc-700/50 cursor-pointer transition">
                     <input type="checkbox" :checked="selectedEntries.includes(c._srcUid)" @change="toggleEntry(c._srcUid, $event.target.checked)" class="mt-0.5 rounded accent-emerald-500">
                     <div class="flex-1 min-w-0">
-                        <div class="text-xs font-bold text-emerald-400 truncate">{{ c.comment || (Array.isArray(c.key) && c.key.length ? c.key.join(', ') : '未命名词条') }}</div>
+                        <div class="text-xs font-bold text-emerald-400 truncate" :title="c.comment || c.name || '未命名词条'">{{ c.comment || c.name || '未命名词条' }}</div>
+                        <div v-if="Array.isArray(c.key) && c.key.length" class="text-[10px] text-zinc-500 mt-0.5 truncate">🔑 {{ c.key.join(', ') }}</div>
                         <div class="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{{ c.content || '（无内容）' }}</div>
                     </div>
                 </label>
