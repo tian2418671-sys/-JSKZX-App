@@ -511,7 +511,7 @@
                             <div class="p-2 border-b border-zinc-800 flex gap-1 items-center shrink-0 bg-zinc-900 flex-wrap">
                                 <div class="relative flex-1 min-w-[120px]">
                                     <span class="absolute left-2 top-1.5 text-zinc-500 text-xs">🔍</span>
-                                    <input v-model="entrySearchQuery" type="text" placeholder="搜索触发词或备注..."
+                                    <input v-model="entrySearchQuery" type="text" placeholder="搜索名字或触发词..."
                                            class="w-full h-7 bg-zinc-800/80 border border-zinc-700 rounded pl-7 pr-2 text-xs text-zinc-200 focus:border-emerald-500 focus:outline-none transition">
                                 </div>
                                 <button @click="addWorldbookEntry" title="新建词条" class="h-7 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs shrink-0 transition flex items-center justify-center">➕</button>
@@ -598,8 +598,8 @@
                                 <input v-model="primaryKeysStr" placeholder="逗号分隔，例如: sword, magic" class="w-full h-8 bg-zinc-900 border border-zinc-700 rounded px-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
                             </div>
                             <div>
-                                <label class="block text-xs font-bold text-zinc-300 mb-1">📝 备注 (Comment)</label>
-                                <input v-model="currentEntry.comment" placeholder="仅作标识用，大模型不可见" class="w-full h-8 bg-zinc-900 border border-zinc-700 rounded px-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
+                                <label class="block text-xs font-bold text-zinc-300 mb-1">📝 名称 / 备注 (Comment)</label>
+                                <input v-model="currentEntry.comment" placeholder="输入条目名称（大模型不可见，仅作标识）" class="w-full h-8 bg-zinc-900 border border-zinc-700 rounded px-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
                             </div>
                         </div>
 
