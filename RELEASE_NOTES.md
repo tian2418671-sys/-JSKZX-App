@@ -1,3 +1,18 @@
+## SillyTavern 角色卡管理器 v1.8.9
+
+本地优先、完全离线可用的角色卡管理与解析工具（Electron + Vue3 + Tailwind + ECharts）。
+
+### ✨ v1.8.9 更新 —— 世界书导入导出 + 词条字段映射修复
+
+#### 📥 世界书导入导出（新功能）
+- **从世界书库导入词条到角色卡**：角色卡内嵌世界书编辑区新增「📥 从世界书库导入」按钮（空状态也有入口），复用 WbImportModal 弹窗——选源世界书 → 勾选词条 → 字段转换（库 `key/keysecondary/order` → 内嵌 `keys/secondary_keys/insertion_order`）→ 追加到内嵌 `character_book.entries`
+- 与已有「📤 提取为世界书」功能形成双向闭环：卡 → 书、书 → 卡 全链路打通
+- 深拷贝清洗 `_` 前缀临时字段与 uid，不污染卡片 JSON（与 `wb:create` 同一清洗口径）
+
+#### 🐛 BUG 修复
+- **世界书导出条目名缺失**：V1 旧卡 / RisuAI 等第三方卡词条用 `name` 存名字，导出到世界书库后库 IDE 只读 `comment` 导致名字「消失」——补 `name → comment` 映射（与 JSONL 导入/全库词条搜索同口径）
+- **权重回退映射**：纯 V2 卡词条只有 `insertion_order`，导出后库 IDE 的 `order` 权重字段为空——补 `insertion_order → order` 回退
+
 ## SillyTavern 角色卡管理器 v1.8.8
 
 本地优先、完全离线可用的角色卡管理与解析工具（Electron + Vue3 + Tailwind + ECharts）。
