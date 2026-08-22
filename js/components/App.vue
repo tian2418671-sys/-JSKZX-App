@@ -308,6 +308,20 @@
         @confirm-import="confirmImportEntries"
     />
 
+    <!-- ================= [ 📥 从世界书库导入词条到角色卡弹窗（复用 WbImportModal 子组件） ] ================= -->
+    <wb-import-modal
+        :show="showCardWbImportModal"
+        :active-worldbook-name="safeData.name || '当前角色卡'"
+        :source-books="worldbooks"
+        :source-book="cardWbImportSource"
+        :candidates="cardWbImportCandidates"
+        :selected-entries="cardWbSelectedEntries"
+        @close="showCardWbImportModal = false"
+        @pick-source="pickCardWbImportSource"
+        @update:selectedEntries="cardWbSelectedEntries = $event"
+        @confirm-import="confirmCardWbImport"
+    />
+
     <!-- ================= [ 🔎 全库词条搜索与反向引用（子组件 GlobalEntrySearchModal） ] ================= -->
     <global-entry-search-modal
         :show="showGlobalEntrySearchModal"
@@ -2619,6 +2633,68 @@ export default {
             return target.character_book.entries;
         };
 
+        // =========================================================
+        // 📥 从世界书库导入词条到角色卡（与「📤 提取为世界书」反向对称）
+        // 复用 WbImportModal 弹窗 UI；字段转换：库（key/keysecondary/order）→ 内嵌（keys/secondary_keys/insertion_order）
+        // =========================================================
+        const showCardWbImportModal = ref(false);   // 导入弹窗显隐
+        const cardWbImportSource = ref(null);       // 当前选中的源世界书
+        const cardWbImportCandidates = ref([]);     // 源书词条候选（带临时 _srcUid 做勾选 key）
+        const cardWbSelectedEntries = ref([]);      // 用户勾选的词条 _srcUid 集合
+
+        const openCardWbImportModal = () => {
+            if (!cardData.value) { nativeAlert('请先打开一张角色卡。', 'warning'); return; }
+            if (worldbooks.value.length === 0) { nativeAlert('世界书库为空，请先在世界书模式导入世界书。', 'warning'); return; }
+            cardWbImportSource.value = null;
+            cardWbImportCandidates.value = [];
+            cardWbSelectedEntries.value = [];
+            showCardWbImportModal.value = true;
+        };
+
+        // 选中源世界书后，展开其词条候选（🛡️ 兼容字典形态 entries，与库内其他入口同一清洗口径）
+        const pickCardWbImportSource = (wb) => {
+            cardWbImportSource.value = wb;
+            let srcEntries = (wb.data && wb.data.entries) || [];
+            if (srcEntries && typeof srcEntries === 'object' && !Array.isArray(srcEntries)) {
+                srcEntries = Object.values(srcEntries);
+            }
+            cardWbImportCandidates.value = srcEntries.map((e, i) => ({
+                ...e,
+                _srcIndex: i,
+                _srcUid: e.uid || ('src-' + i)
+            }));
+            cardWbSelectedEntries.value = [];
+        };
+
+        // 确认导入：深拷贝勾选词条 → 库字段转换为内嵌字段 → 追加到 character_book.entries
+        const confirmCardWbImport = () => {
+            if (!cardWbImportSource.value) { nativeAlert('请先选择源世界书。', 'warning'); return; }
+            if (cardWbSelectedEntries.value.length === 0) { nativeAlert('请至少勾选一个词条。', 'warning'); return; }
+            const targetEntries = ensureCharacterBookEntries();
+            if (!targetEntries) { nativeAlert('请先打开一张角色卡。', 'warning'); return; }
+
+            let count = 0;
+            cardWbImportCandidates.value.forEach(c => {
+                if (!cardWbSelectedEntries.value.includes(c._srcUid)) return;
+                // 深拷贝并剔除 _ 前缀临时字段与 uid，防止污染卡片 JSON（与 wb:create 同一清洗口径）
+                const clean = JSON.parse(JSON.stringify(c, (k, v) => (k.startsWith('_') || k === 'uid') ? undefined : v));
+                // 字段转换：世界书库（key/keysecondary/order）→ 角色卡内嵌（keys/secondary_keys/insertion_order）
+                clean.keys = Array.isArray(c.key) ? [...c.key] : (c.key ? [c.key] : []);
+                clean.secondary_keys = Array.isArray(c.keysecondary) ? [...c.keysecondary] : (c.keysecondary ? [c.keysecondary] : []);
+                delete clean.key; delete clean.keysecondary;
+                clean.insertion_order = c.insertion_order ?? c.order ?? 50;
+                clean.uid = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                targetEntries.push(clean);
+                count++;
+            });
+
+            showCardWbImportModal.value = false;
+            refreshCardData();
+            const srcName = (cardWbImportSource.value.data && cardWbImportSource.value.data.name) || cardWbImportSource.value.name;
+            nativeAlert(`📥 已从《${srcName}》导入 ${count} 个词条到角色卡内嵌世界书。`, 'info');
+            addLog(`📥 从世界书库《${srcName}》导入 ${count} 个词条到角色卡内嵌世界书`, 'success');
+        };
+
         // 搜索过滤后的角色卡世界书词条（触发词/次级词/备注/正文 全字段匹配）
         const filteredCharacterWorldbookEntries = computed(() => {
             const q = characterWorldbookSearchQuery.value.trim().toLowerCase();
@@ -3690,6 +3766,9 @@ export default {
             addCharacterWorldbookEntry, deleteCharacterWorldbookEntry,
             duplicateCharacterWorldbookEntry, moveCharacterWorldbookEntry,
             addEntryKey, removeEntryKey, handleEntryKeyInput, updateEntryComment,
+            // 📥 从世界书库导入词条到角色卡（与「📤 提取为世界书」对称）
+            showCardWbImportModal, cardWbImportSource, cardWbImportCandidates, cardWbSelectedEntries,
+            openCardWbImportModal, pickCardWbImportSource, confirmCardWbImport,
             // 🎨 三主题切换（暗夜/青灰/白昼）
             setTheme,
             // 🚀 首屏加载状态

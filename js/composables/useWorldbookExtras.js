@@ -64,6 +64,12 @@ export function useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookD
             c.key = Array.isArray(e.keys) ? [...e.keys] : (e.keys || []);
             c.keysecondary = Array.isArray(e.secondary_keys) ? [...e.secondary_keys] : (e.secondary_keys || []);
             delete c.keys; delete c.secondary_keys; delete c._collapsed;
+            // 【BUG 修复】条目名字映射：V1 旧卡/第三方卡词条用 name 存名字，
+            // 世界书库 IDE 只读 comment，不映射会导致导出后条目名字缺失
+            // （卡内编辑器显示 entry.comment || entry.name，掩盖了该问题）
+            c.comment = String(c.comment || c.name || '');
+            // 【BUG 修复】权重回退映射：纯 V2 卡词条只有 insertion_order，库 IDE 编辑的是 order 字段
+            c.order = c.order ?? c.insertion_order ?? 100;
             c.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
             return c;
         });

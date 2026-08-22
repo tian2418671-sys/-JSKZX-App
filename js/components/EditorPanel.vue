@@ -218,6 +218,7 @@
                                     <button @click="expandAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部展开</button>
                                     <button @click="collapseAllWorldbook" class="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition whitespace-nowrap">全部折叠</button>
                                     <button @click="extractWorldbookFromCard(cardData, safeData.name)" class="text-xs px-2.5 py-1 bg-amber-600/80 hover:bg-amber-500 border border-amber-500/30 rounded text-amber-100 transition whitespace-nowrap" title="把该卡片内嵌世界书提取为独立世界书">📤 提取为世界书</button>
+                                    <button @click="openCardWbImportModal" class="text-xs px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 border border-emerald-500/30 rounded text-emerald-100 transition whitespace-nowrap" title="从世界书库勾选词条导入到该卡片内嵌世界书">📥 从世界书库导入</button>
                                 </div>
                             </div>
                             <div class="flex gap-2 items-center">
@@ -334,6 +335,7 @@
                     </div>
                     <div v-else class="text-zinc-500 text-center py-10">此卡片未内置世界书数据
                         <button @click="addCharacterWorldbookEntry" class="ml-2 text-blue-400 hover:underline">+ 立即新增一条</button>
+                        <button @click="openCardWbImportModal" class="ml-2 text-emerald-400 hover:underline">📥 从世界书库导入</button>
                     </div>
                 </div>
 
@@ -934,6 +936,7 @@ export default {
             ensureUid: ctx.ensureUid,
             entryTokens,
             extractWorldbookFromCard: ctx.extractWorldbookFromCard,
+            openCardWbImportModal: ctx.openCardWbImportModal,
             openWbSnapshots: ctx.openWbSnapshots,
             openWbGraphModal: ctx.openWbGraphModal,
             openWbImportModal: ctx.openWbImportModal,
