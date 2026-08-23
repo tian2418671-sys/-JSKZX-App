@@ -191,8 +191,9 @@ export function useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookD
         if (res?.success) {
             // 回滚后重读文件同步内存
             try {
-                const text = await window.electronAPI.readText(target.path);
-                const data = JSON.parse(text);
+                const readRes = await window.electronAPI.readText(target.path);
+                if (!readRes?.success || typeof readRes.text !== 'string') throw new Error(readRes?.error || 'readText failed');
+                const data = JSON.parse(readRes.text);
                 data.entries = Array.isArray(data.entries) ? data.entries : (data.entries && typeof data.entries === 'object' ? Object.values(data.entries) : []);
                 target.data = data;
             } catch (e) { /* 忽略解析/读取异常 */ }

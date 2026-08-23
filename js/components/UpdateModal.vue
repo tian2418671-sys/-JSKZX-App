@@ -138,7 +138,8 @@ export default {
         },
         formatMB(bytes) {
             const mb = (Number(bytes) || 0) / 1024 / 1024;
-            return mb >= 1 ? mb.toFixed(2) + ' MB' : (Number(bytes) || 0).toFixed(0) + ' KB';
+            const kb = (Number(bytes) || 0) / 1024;
+            return mb >= 1 ? mb.toFixed(2) + ' MB' : kb.toFixed(1) + ' KB';
         },
         formatSpeed(bps) {
             const mb = (Number(bps) || 0) / 1024 / 1024;

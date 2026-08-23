@@ -1123,7 +1123,8 @@ app.whenReady().then(() => {
   ipcMain.handle('file:readText', async (event, filePath) => {
     if (!isPathAllowed(filePath)) return forbidden();
     try {
-      return await fs.promises.readFile(filePath, 'utf-8');
+      const text = await fs.promises.readFile(filePath, 'utf-8');
+      return { success: true, text };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -2331,24 +2332,26 @@ app.whenReady().then(() => {
     try {
       if (!filePath || !snapshotPath) return { success: false, error: '参数缺失。' };
       if (!isPathAllowed(filePath)) return forbidden();
-      // 【安全加固 v1.8.5】snapshotPath 必须位于 userData 备份目录内 ——
-      //   旧版只查存在性：被注入脚本传任意本地文件（如 ~/.ssh/id_rsa）作为
-      //   snapshotPath，配合 filePath 指向 userData 内白名单路径，即构成
-      //   「任意本地文件 → 白名单可读位置」的任意文件读取原语。
-      //   对照 card:restoreSnapshot 已做 .bak_history 目录约束，此处补齐同款防护。
-      const udRoot = path.resolve(app.getPath('userData'));
-      if (!isPathUnder(path.resolve(snapshotPath), udRoot)) {
-        return { success: false, error: '快照路径越界，操作被拒绝。' };
-      }
-      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
       const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'worldbooks');
+      const baseName = path.basename(filePath, '.json');
+      const resolvedSnapshot = path.resolve(snapshotPath);
+      const resolvedBackupDir = path.resolve(backupDir);
+      // 【安全加固】仅允许回滚世界书快照目录内、且属于当前世界书本体的快照文件。
+      // 旧版仅要求位于 userData 下，仍可能把其他业务文件或别的世界书快照复制覆盖到当前世界书。
+      if (path.dirname(resolvedSnapshot).toLowerCase() !== resolvedBackupDir.toLowerCase()) {
+        return { success: false, error: '非法快照路径：仅能回滚世界书快照目录内的文件。' };
+      }
+      if (!isSnapshotOf(path.basename(resolvedSnapshot), baseName) || !resolvedSnapshot.toLowerCase().endsWith('.json')) {
+        return { success: false, error: '非法快照文件：该快照不属于当前世界书。' };
+      }
+      if (!fs.existsSync(resolvedSnapshot)) return { success: false, error: '快照文件不存在。' };
       // 🔧 修复「回滚快照无限增值」：旧版每次回滚都无条件备份当前版本且从不清理，
       //   在多个快照间反复回滚时，同一内容被反复复制成新快照，列表只增不减。
       //   现改用 backupWorldbookSnapshot：已留档版本跳过备份 + 超量自动清理。
       if (fs.existsSync(filePath)) {
-        await backupWorldbookSnapshot(backupDir, path.basename(filePath, '.json'), filePath);
+        await backupWorldbookSnapshot(backupDir, baseName, filePath);
       }
-      await fs.promises.copyFile(snapshotPath, filePath);
+      await fs.promises.copyFile(resolvedSnapshot, filePath);
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };

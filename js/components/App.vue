@@ -434,6 +434,7 @@ import { useSnapshots } from '../composables/useSnapshots.js'; // 📸 历史快
 import { useCardCrud } from '../composables/useCardCrud.js'; // 🃏 卡片 CRUD（导入入库/删除回收/持久化保存/导出重命名，从 App.vue 拆分）
 import { useConfigPersistence } from '../composables/useConfigPersistence.js'; // 🛡️ 统一配置持久化中枢（app_config.json 收集/加密/落盘/防抖，从 App.vue 拆分）
 import { useEmbeddedWorldbook } from '../composables/useEmbeddedWorldbook.js'; // 🌍 角色卡内嵌世界书编辑（条目派生/uid/折叠展开/触发词工具，从 App.vue 拆分）
+import { useStatusbarPreview } from '../composables/useStatusbarPreview.js'; // 📊 状态栏预览器（正则脚本渲染效果所见即所得 + 内置模板注入）
 import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色卡分组/分类功能（拆分出的组合式函数）
 import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
@@ -774,7 +775,7 @@ export default {
                         try {
                             if (window.electronAPI && finalPath !== (realPath || f.name)) {
                                 const res = await window.electronAPI.readText(finalPath);
-                                if (typeof res === 'string') rawText = res;
+                                if (res?.success && typeof res.text === 'string') rawText = res.text;
                             }
                         } catch (err) { /* 忽略 */ }
                         if (rawText === null || rawText === undefined) {
@@ -1395,6 +1396,7 @@ export default {
                 { id: 'advanced', name: '进阶设定', icon: '🛠️' },
                 { id: 'worldbook', name: '世界书', icon: '🌍', badge: worldbookEntries.value.length || null },
                 { id: 'regex', name: '正则脚本', icon: '⚙️', badge: regexScripts.value.length || null },
+                { id: 'statusbar', name: '美化/状态栏', icon: '📊', badge: renderableScripts.value.length || null },
                 { id: 'chat', name: '聊天测试', icon: '💬', action: initChat },
                 { id: 'raw', name: 'Raw JSON', icon: '💻' }
             ];
@@ -3474,6 +3476,19 @@ export default {
             getKeysString, updateEntryKeys
         } = useEmbeddedWorldbook({ cardData, safeData, cardTokensCache });
 
+        // 📊 渲染预览器（美化/状态栏）：组合式函数注入（渲染型脚本识别 + 正则模拟替换 + DOMPurify 安全预览
+        //    + 外链 GUI 沙箱 iframe + 候选数据源扫描 + 内置模板注入）
+        // ⚠️ 调用时序：依赖正则域（regexScripts/ensureRegexScriptsArray/getRegexUid，定义于 setup 早期）与
+        //    refreshCardData/safeData，均早于此处；chatHistory 经 getter 箭头延迟绑定（useChat 调用时序晚于本函数）。
+        const {
+            statusbarInput, statusbarViewMode, resetStatusbarDemo,
+            statusbarTemplateMeta, statusbarPromptMeta,
+            statusbarTemplates, expandedTemplateUid, toggleTemplateCard, fragmentScriptCount,
+            showStatusDataPanel, statusDataCandidates, importStatusData, importAllStatusData,
+            renderableScripts, toggleStatusbarScript, isScriptEnabled,
+            appliedResult, previewHtml, loaderUrls, injectStatusbarTemplate, injectStatusbarPrompt
+        } = useStatusbarPreview({ regexScripts, ensureRegexScriptsArray, getRegexUid, refreshCardData, safeData, worldbookEntries, ensureCharacterBookEntries, getChatHistory: () => chatHistory.value, addLog, nativeAlert, confirmDialog });
+
         // 📸 历史快照功能：组合式函数注入（依赖 App.vue 共享状态；行为与原内联实现一致）
         // ⚠️ snapshotConfig 由 App.vue 顶层定义并注入（syncConfigToDisk/集中 watch 需早期引用，防 TDZ）
         const {
@@ -3676,6 +3691,13 @@ export default {
             isDragging, dragCounter, handleDragEnter, handleDragLeave, cardData, imgUrl, tabs, currentTab, currentTabInfo,
             safeData, specVersion, worldbookEntries, getEntryUid, getRegexUid, regexScripts, formattedJson, refreshCardData,
             addRegexScript, deleteRegexScript, syncRegexScriptField,
+            // 📊 渲染预览器（美化/状态栏）
+            statusbarInput, statusbarViewMode, resetStatusbarDemo,
+            statusbarTemplateMeta, statusbarPromptMeta,
+            statusbarTemplates, expandedTemplateUid, toggleTemplateCard, fragmentScriptCount,
+            showStatusDataPanel, statusDataCandidates, importStatusData, importAllStatusData,
+            renderableScripts, toggleStatusbarScript, isScriptEnabled,
+            appliedResult, previewHtml, loaderUrls, injectStatusbarTemplate, injectStatusbarPrompt,
             worldbookExpanded, toggleWorldbookEntry, expandAllWorldbook, collapseAllWorldbook,
             getKeysString, updateEntryKeys,
             getRegexPlacement, handleDrop, handleFileUpload, downloadJson, reset,

@@ -1,7 +1,35 @@
-# SillyTavern 角色卡管理器 · v1.6.2 → v1.8.5 更新汇总
+# SillyTavern 角色卡管理器 · v1.6.2 → v1.8.9 更新汇总
 
-> 更新周期：2026-08-15 ~ 2026-08-21
+> 更新周期：2026-08-15 ~ 2026-08-23
 > 技术栈：Electron + Vue3 + Tailwind + ECharts
+
+---
+
+## ✨ v1.8.9 —— 状态栏渲染预览 + 世界书导入导出 + 显示修复（覆盖发布）
+
+> 内部详细版（对外精简版见 RELEASE_NOTES.md v1.8.9）
+
+### 📊 状态栏渲染预览器（新功能，`useStatusbarPreview.js` + App.vue + EditorPanel.vue）
+- **背景**：酒馆聊天中「状态栏」是把 AI 输出的 `<status>` 文本块经卡内正则脚本渲染成 HTML 面板的常见玩法，但调样式必须反复"改脚本→保存→进酒馆→发消息"验证
+- **能力**：
+  1. 自动识别「渲染型脚本」（未禁用 + 替换串含 HTML 标签），列出供勾选参与预览
+  2. 正则引擎模拟：`parseRegexPattern` 兼容 `/pattern/flags` 与裸 pattern，强制补 `g` flag（与酒馆全局替换一致），非法正则跳过不炸预览；`$1` 捕获组由 `String.replace` 原生展开
+  3. 双视图：✨ 渲染效果 / 📄 替换后源码；渲染结果经 DOMPurify 白名单清洗（`FORBID_ATTR` 全事件属性 + `ALLOWED_URI_REGEXP` 禁外联，与 `renderSafeHTML` 同策略）
+  4. 内置模板一键注入：`STATUSBAR_TEMPLATE`（V2/V3 字段双写 `findRegex/find_regex`、`replaceString/replace_string`，`placement:[2]` 作用于 AI 输出，深色渐变面板样式），重复注入按 `<status>` 特征拦截
+  5. 脚本勾选状态：`enabledScriptUids` 数组 + `watch(renderableScripts, immediate)` 自动纳入新脚本，`toggleStatusbarScript`/`isScriptEnabled` 配套- **📚 15 套渲染模板库**（`js/utils/statusbarTemplates.js`）：dark-rpg / cyber-hud / 江湖 / cozy / ghostly / mini / pixel / relation / log / card / wave / mind / star / lord / theme，每套内置图标/配色/动画，点击卡片注入正则脚本
+- **📜 11 套世界书指令模板（三合一）**（`js/utils/statusbarPromptTemplates.js`）：通用三合一 ⭐ + 10 套主题（奇幻/克苏鲁/赛博/武侠/星际/黑暗/日常/领主/怪物/时间），每套均为「初始值定义 + 显示格式 + 数值更新规则」三合一条目，点击注入为内嵌世界书常驻条目（keys 留空 / constant / 插入深度 0）
+- **模板库折叠**：渲染模板库与世界书指令模板库各自可折叠收起- **接线**：App.vue 引入 composable + tabs 新增 `{ id:'statusbar', name:'状态栏', icon:'📊', badge: renderableScripts.length }` + ctx 暴露 9 项；EditorPanel 新增完整 UI 区块（标题栏/脚本勾选/输入区/预览区 + 空状态引导注入按钮）
+- **TDZ 安全确认**：`tabs` computed（L1396）引用 `renderableScripts`（L3486 声明）——computed 惰性求值，全文件仅 L1411 引用 `tabs.value`（同为惰性），onMounted/watch 均异步，无同步访问路径，无 TDZ
+- ✅ CDP 实测全过：Tab 切换 / 脚本识别 / 勾选切换（true→false→true）/ 模板注入完整链路 / 重复注入防重 / `<status>` 渲染成面板无残留
+
+### 🌍 世界书库显示修复（commit 332c437 / df3b78b）
+- **触发词被当名字**：世界书库 IDE 列表原主显示 `formatKeys(entry.key)`（触发词大字加粗），名字 comment 为空时不显示 → 视觉错乱。改为名字主显示（`comment || name || '未命名词条'`）+ 🔑 触发词副显示；`WbImportModal.vue` 导入弹窗同款修复
+- **名字输入框标签**：库 IDE 名称输入框原标「📝 备注 (Comment)」误导用户以为名字不可改 → 改为「📝 名称 / 备注 (Comment)」与角色卡内嵌一致
+- 根因核实：外部导入世界书源数据 comment 为空/comment==key 属源数据问题，本应用导入/转换逻辑从不把 key 写进 comment（已全量核对 5 处 comment 赋值点）
+
+### 📥 世界书导入导出（上一轮 v1.8.9，trae/agent-Fxvvsf 分支合入）
+- 从世界书库导入词条到角色卡（复用 WbImportModal，与「📤 提取为世界书」双向闭环）
+- 导出条目名缺失修复：`name → comment` 映射 + `insertion_order → order` 回退（useWorldbookExtras.js）
 
 ---
 

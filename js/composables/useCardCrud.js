@@ -253,8 +253,7 @@ export function useCardCrud({
                     text = file.rawText;
                 } else if (window.electronAPI && typeof window.electronAPI.readText === 'function') {
                     const res = await window.electronAPI.readText(file.path);
-                    // readText 返回 forbidden() 对象（{success:false}）时不能当文本解析
-                    if (typeof res === 'string') text = res;
+                    if (res && res.success && typeof res.text === 'string') text = res.text;
                     else console.warn(`读取 JSON 失败（可能路径不在白名单）: ${file.name}`, res && res.error);
                 }
                 if (text === null) return false;

@@ -387,6 +387,198 @@
                     </div>
                 </div>
 
+                <!-- 📊 渲染预览器：应用卡内渲染型正则脚本，实时预览 HTML 美化/状态栏效果 -->
+                <div v-if="currentTab === 'statusbar'">
+                    <div class="bg-zinc-900/90 border border-zinc-800 rounded-lg p-4 shadow-sm">
+                        <!-- 标题栏 -->
+                        <div class="flex items-center justify-between mb-3 pb-2 border-b border-zinc-800 flex-wrap gap-2">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-bold text-emerald-400">📊 渲染预览（美化 / 状态栏）</span>
+                                <span v-if="renderableScripts.length > 0" class="text-xs px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-mono">{{ renderableScripts.length }} 个渲染脚本</span>
+                            </div>
+                            <div v-if="renderableScripts.length > 0" class="flex items-center gap-2">
+                                <button @click="showStatusDataPanel = !showStatusDataPanel" :class="showStatusDataPanel ? 'bg-emerald-600 text-white' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'" class="px-2.5 py-1 border border-zinc-700 rounded text-xs transition flex items-center gap-1" title="从开场白/备用开场白/聊天测试记录自动导入状态文本">📥 导入数据</button>
+                                <div class="flex rounded overflow-hidden border border-zinc-700 text-xs">
+                                    <button @click="statusbarViewMode = 'render'" :class="statusbarViewMode === 'render' ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'" class="px-2.5 py-1 transition">✨ 渲染效果</button>
+                                    <button @click="statusbarViewMode = 'source'" :class="statusbarViewMode === 'source' ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'" class="px-2.5 py-1 transition">📄 替换后源码</button>
+                                </div>
+                                <button @click="resetStatusbarDemo" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs text-zinc-300 transition" title="恢复预置的状态文本示例">↩️ 示例</button>
+                            </div>
+                        </div>
+
+                        <!-- 📚 状态栏模板库：15 套风格始终可点选注入（可折叠） -->
+                        <div class="mb-4 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.03] p-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-[11px] font-bold text-emerald-400">📚 状态栏模板库（点击卡片注入正则脚本）</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] text-zinc-500">{{ statusbarTemplateMeta.length }} 套风格 · 注入后可在「正则脚本」Tab 微调</span>
+                                    <button @click="statusTemplateLibCollapsed = !statusTemplateLibCollapsed" :title="statusTemplateLibCollapsed ? '展开模板库' : '收起模板库'"
+                                        class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">
+                                        {{ statusTemplateLibCollapsed ? '▸ 展开' : '▾ 收起' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <div v-show="!statusTemplateLibCollapsed" class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <button v-for="tpl in statusbarTemplateMeta" :key="tpl.key" @click="injectStatusbarTemplate(tpl.key)"
+                                    class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-emerald-500/50 rounded-lg p-2.5 transition group">
+                                    <div class="flex items-center gap-1.5 mb-1">
+                                        <span class="text-base leading-none">{{ tpl.icon }}</span>
+                                        <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                                    </div>
+                                    <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
+                                    <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
+                                    <p class="text-[9px] text-emerald-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此模板</p>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 📜 世界书指令模板库：11 套 AI 输出约束，注入为内嵌世界书常驻条目（可折叠） -->
+                        <div class="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/[0.03] p-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-[11px] font-bold text-amber-400">📜 世界书指令模板（AI 输出 &lt;Status&gt; 文本）</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] text-zinc-500">{{ statusbarPromptMeta.length }} 套 · 注入为内嵌世界书常驻条目 · 与上方渲染模板配合使用</span>
+                                    <button @click="statusPromptLibCollapsed = !statusPromptLibCollapsed" :title="statusPromptLibCollapsed ? '展开指令库' : '收起指令库'"
+                                        class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">
+                                        {{ statusPromptLibCollapsed ? '▸ 展开' : '▾ 收起' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <p v-show="!statusPromptLibCollapsed" class="text-[10px] text-zinc-500 leading-snug mb-2">指导 AI 在回复末尾按规则输出 &lt;Status&gt;...&lt;/Status&gt; 文本状态栏（含数值映射 / 趋势箭头 / 变化原因 / 严格格式）；渲染模板把该文本渲染成面板。</p>
+                            <div v-show="!statusPromptLibCollapsed" class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <button v-for="tpl in statusbarPromptMeta" :key="tpl.key" @click="injectStatusbarPrompt(tpl.key)"
+                                    class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-amber-500/50 rounded-lg p-2.5 transition group">
+                                    <div class="flex items-center gap-1.5 mb-1">
+                                        <span class="text-base leading-none">{{ tpl.icon }}</span>
+                                        <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                                    </div>
+                                    <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
+                                    <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
+                                    <p class="text-[9px] text-amber-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此指令</p>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 空状态：无渲染型脚本 → 提示 -->
+                        <div v-if="renderableScripts.length === 0" class="text-center py-8 border border-dashed border-zinc-800 rounded-lg text-zinc-500 text-xs flex flex-col items-center gap-3">
+                            <span class="text-4xl opacity-30">📊</span>
+                            <div>
+                                <p>当前卡片没有「渲染型」正则脚本（美化 / 状态栏均无）</p>
+                                <p class="mt-1 text-[10px] opacity-80">从上方模板库选择一套注入，或用 AI 输出 &lt;status&gt;...&lt;/status&gt; 格式状态块</p>
+                            </div>
+                        </div>
+
+                        <template v-else>
+                            <!-- 🎨 卡内美化模板检测（核心）：美化代码写在正则替换串里，逐脚本独立成卡自动预览 -->
+                            <div class="mb-4">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="text-[11px] font-bold text-emerald-400">🎨 卡内美化模板</span>
+                                    <span class="text-[10px] text-zinc-500">从正则脚本自动检测，点击卡片展开预览（已自动代入数据源）</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <div v-for="tpl in statusbarTemplates" :key="tpl.uid" class="border border-zinc-700/80 rounded-lg overflow-hidden">
+                                        <!-- 卡头：脚本名 + 类型/匹配状态徽章，点击展开 -->
+                                        <div class="flex items-center gap-2 px-3 py-2 bg-zinc-800/80 hover:bg-zinc-800 cursor-pointer select-none transition" @click="toggleTemplateCard(tpl.uid)">
+                                            <span class="text-[10px] text-zinc-500 w-3 shrink-0">{{ expandedTemplateUid === tpl.uid ? '▾' : '▸' }}</span>
+                                            <span class="text-xs font-bold text-zinc-200 truncate flex-1 min-w-0">{{ tpl.name }}</span>
+                                            <span v-if="tpl.type === 'loader'" class="text-[9px] px-1.5 py-px rounded bg-sky-500/15 text-sky-400 border border-sky-500/30 shrink-0">🌐 外链GUI</span>
+                                            <span v-else-if="tpl.type === 'code'" class="text-[9px] px-1.5 py-px rounded bg-violet-500/15 text-violet-400 border border-violet-500/30 shrink-0">📜 脚本/样式</span>
+                                            <span v-else class="text-[9px] px-1.5 py-px rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 shrink-0">🎨 HTML模板</span>
+                                            <span v-if="tpl.matched" class="text-[9px] px-1.5 py-px rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0" title="数据来源">✅ {{ tpl.matchedFrom }}</span>
+                                            <span v-else class="text-[9px] px-1.5 py-px rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 shrink-0" title="所有数据源均未命中该脚本的正则">⚠️ 未匹配数据</span>
+                                        </div>
+                                        <!-- 卡体：渲染效果 -->
+                                        <div v-if="expandedTemplateUid === tpl.uid" class="p-3 bg-zinc-900/60">
+                                            <template v-if="tpl.type === 'loader'">
+                                                <div class="px-2 py-1 bg-sky-500/10 border border-sky-500/20 rounded text-[10px] text-sky-300 font-mono break-all mb-2">{{ tpl.loaderUrl }}</div>
+                                                <iframe :src="tpl.loaderUrl" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" loading="lazy" class="w-full h-[420px] bg-white rounded border border-zinc-700" title="外链界面预览"></iframe>
+                                                <p class="text-[10px] text-zinc-500 mt-1.5">沙箱加载 · 预览环境下酒馆变量接口不可用，界面可能显示默认值</p>
+                                            </template>
+                                            <template v-else-if="tpl.type === 'code'">
+                                                <iframe :srcdoc="tpl.previewSrcdoc" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" class="w-full h-[420px] bg-white rounded border border-zinc-700" title="代码形态状态栏预览"></iframe>
+                                                <p class="text-[10px] text-zinc-500 mt-1.5">📜 代码形态模板 · 沙箱运行（JS/CSS 全量生效；预览环境无酒馆变量接口，界面可能显示默认值）</p>
+                                                <p v-if="!tpl.matched" class="text-[10px] text-amber-500/80 mt-1">⚠️ 未匹配数据源，当前运行的是模板骨架（$1 等捕获组未代入）。可在下方输入框粘贴符合格式的 AI 输出后再试。</p>
+                                            </template>
+                                            <template v-else>
+                                                <div class="rounded-lg border border-zinc-700 bg-white p-4 max-w-[720px] overflow-x-auto custom-scrollbar">
+                                                    <div v-if="tpl.previewHtml" class="statusbar-preview-body text-[13px] leading-relaxed" v-html="tpl.previewHtml"></div>
+                                                    <p v-else class="text-zinc-400 text-xs">（模板为空或清洗后无内容）</p>
+                                                </div>
+                                                <p v-if="!tpl.matched" class="text-[10px] text-amber-500/80 mt-1.5">⚠️ 输入框/开场白/世界书/聊天记录/内置示例均未命中该脚本的正则，当前展示的是模板骨架（$1 等捕获组未代入数据）。可在下方输入框粘贴符合格式的 AI 输出后再试。</p>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 📥 候选数据导入面板：仅列出命中渲染脚本正则的来源（开场白/世界书/聊天记录） -->
+                            <div v-if="showStatusDataPanel" class="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-[11px] font-bold text-emerald-400">📥 检测到的状态数据（已按正则命中筛选：开场白 / 世界书条目 / 聊天记录）</span>
+                                    <button v-if="statusDataCandidates.length > 1" @click="importAllStatusData" class="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition">拼接导入全部</button>
+                                </div>
+                                <div v-if="statusDataCandidates.length === 0" class="text-[11px] text-zinc-500 py-2">
+                                    未检测到能命中卡内渲染脚本正则的文本：开场白、世界书条目与聊天记录里都没有符合格式约定的状态块。可在下方输入框手动粘贴 AI 输出。
+                                </div>
+                                <div v-else class="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar">
+                                    <div v-for="(item, idx) in statusDataCandidates" :key="idx" class="flex items-start gap-2 bg-zinc-900/80 border border-zinc-700/70 rounded p-2">
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-center gap-1.5 mb-0.5">
+                                                <span class="text-[10px] text-zinc-400 font-bold shrink-0">{{ item.source }}</span>
+                                                <span class="text-[9px] px-1 py-px rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">✅ 命中脚本</span>
+                                                <span class="text-[9px] text-zinc-600 shrink-0">{{ item.text.length }} 字</span>
+                                            </div>
+                                            <p class="text-[10px] text-zinc-500 font-mono leading-relaxed line-clamp-2 break-all">{{ item.text.slice(0, 150) }}{{ item.text.length > 150 ? '…' : '' }}</p>
+                                        </div>
+                                        <button @click="importStatusData(item)" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded shrink-0 transition">导入</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 参与预览的脚本勾选（默认全选；取消勾选可隔离单个脚本效果） -->
+                            <div class="mb-3 flex items-center flex-wrap gap-x-4 gap-y-1.5">
+                                <span class="text-[10px] text-zinc-500 shrink-0">参与预览的脚本：</span>
+                                <label v-for="s in renderableScripts" :key="getRegexUid(s)" class="flex items-center gap-1.5 cursor-pointer text-xs select-none">
+                                    <input type="checkbox" :checked="isScriptEnabled(s)" @change="toggleStatusbarScript(s)" class="rounded bg-zinc-900 border-zinc-700 text-emerald-600 focus:ring-0">
+                                    <span :class="isScriptEnabled(s) ? 'text-zinc-200' : 'text-zinc-500'">{{ s.scriptName || s.script_name || '未命名脚本' }}</span>
+                                </label>
+                            </div>
+
+                            <!-- 输入区：粘贴 AI 输出的状态文本块，或经上方按钮自动导入 -->
+                            <div class="mb-3">
+                                <label class="block text-[10px] text-zinc-400 mb-1">📝 状态文本（粘贴 AI 的输出内容，含状态块即可实时渲染；支持 &lt;body&gt;&lt;script&gt;$('body').load('URL')&lt;/script&gt;&lt;/body&gt; 外链界面格式）</label>
+                                <textarea v-model="statusbarInput" rows="7" placeholder="粘贴 AI 输出的状态文本块…（点上方「📥 导入数据」可自动从卡片/聊天记录导入）" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2.5 py-2 text-xs text-zinc-200 font-mono focus:border-emerald-500 focus:outline-none resize-y custom-scrollbar"></textarea>
+                            </div>
+
+                            <!-- 🌐 外链 GUI 预览：检测到 $('body').load('URL') 格式时，沙箱 iframe 直接加载远程界面 -->
+                            <div v-if="loaderUrls.length > 0" class="mb-3">
+                                <label class="block text-[10px] text-sky-400 mb-1">🌐 外链界面（$('body').load 格式，沙箱加载 · 预览环境下酒馆变量接口不可用，界面可能显示默认值）</label>
+                                <div v-for="url in loaderUrls" :key="url" class="rounded-lg border border-sky-500/30 bg-zinc-950 overflow-hidden mb-2">
+                                    <div class="px-2 py-1 bg-sky-500/10 border-b border-sky-500/20 text-[10px] text-sky-300 font-mono break-all">{{ url }}</div>
+                                    <iframe :src="url" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" loading="lazy" class="w-full h-[420px] bg-white" title="外链状态栏界面预览"></iframe>
+                                </div>
+                            </div>
+
+                            <!-- 预览区 -->
+                            <div v-if="statusbarViewMode === 'render'">
+                                <label class="block text-[10px] text-zinc-400 mb-1">✨ 渲染效果（模拟酒馆聊天气泡，经安全清洗）</label>
+                                <div class="rounded-lg border border-zinc-700 bg-white p-4 max-w-[720px] overflow-x-auto custom-scrollbar">
+                                    <div v-if="previewHtml" class="statusbar-preview-body text-[13px] leading-relaxed" v-html="previewHtml"></div>
+                                    <p v-else class="text-zinc-400 text-xs">（无内容：输入为空或未命中任何正则）</p>
+                                </div>
+                            </div>
+                            <div v-else>
+                                <label class="block text-[10px] text-zinc-400 mb-1">📄 替换后源码（应用勾选脚本得到的原始结果）</label>
+                                <pre class="rounded-lg border border-zinc-700 bg-zinc-950 p-3 max-w-[720px] overflow-x-auto text-[11px] text-emerald-300 font-mono whitespace-pre-wrap custom-scrollbar">{{ statusSourcePreview || '（无内容）' }}</pre>
+                                <div v-if="statusSourceIsLong" class="mt-1.5 flex items-center gap-2">
+                                    <button @click="statusSourceExpanded = !statusSourceExpanded" class="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-emerald-300 transition">{{ statusSourceExpanded ? '↩️ 收起源码' : '📄 展开全文' }}</button>
+                                    <span class="text-[10px] text-zinc-600">源码较长，默认折叠（压缩 JS / 内联样式可能占数千字符）</span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
                 <!-- 3. 聊天测卡 (Chat) -->
                 <div v-if="currentTab === 'chat'" class="flex flex-col h-full max-w-4xl mx-auto border border-zinc-700 rounded">
                     <div class="bg-zinc-900 p-2 text-xs flex items-center justify-between border-b border-zinc-800 flex-wrap gap-2">
@@ -744,6 +936,20 @@ export default {
         // ✅ [批量删除标签] 标签云批量勾选删除模式（本组件本地状态）
         const isBatchDeleteTags = ref(false); // 是否处于批量删除标签模式
         const batchSelectedTags = ref(new Set()); // 批量模式下选中的标签集合
+
+        // ✅ [状态栏预览] 源码视图折叠（超长源码默认折叠，避免一坨压缩 JS 刷屏）
+        const statusSourceExpanded = ref(false);
+        const SOURCE_PREVIEW_LIMIT = 800; // 超过此长度默认折叠
+        const statusSourcePreview = computed(() => {
+            const s = (ctx.appliedResult && ctx.appliedResult.value) ? ctx.appliedResult.value : '';
+            if (!s) return '';
+            if (s.length <= SOURCE_PREVIEW_LIMIT || statusSourceExpanded.value) return s;
+            return s.slice(0, SOURCE_PREVIEW_LIMIT) + '\n\n…（已折叠，共 ' + s.length + ' 字符；点击下方「展开全文」查看完整源码）';
+        });
+        const statusSourceIsLong = computed(() => {
+            const s = (ctx.appliedResult && ctx.appliedResult.value) ? ctx.appliedResult.value : '';
+            return s.length > SOURCE_PREVIEW_LIMIT;
+        });
         const toggleBatchTagSelect = (tag) => {
             const s = new Set(batchSelectedTags.value);
             if (s.has(tag)) s.delete(tag);
@@ -813,11 +1019,18 @@ export default {
             }
         });
         return {
+            // ✅ [状态栏预览] 模板库折叠（📚 渲染模板库 / 📜 世界书指令模板库 各自可折叠收起）
+            statusTemplateLibCollapsed: ref(false),
+            statusPromptLibCollapsed: ref(false),
             isWbSidebarCollapsed,
             isToolbarMenuOpen,
             toolbarMenuBtn,
             toolbarMenuPos,
             toggleToolbarMenu,
+            // ✅ [状态栏预览] 源码折叠
+            statusSourceExpanded,
+            statusSourcePreview,
+            statusSourceIsLong,
             currentEntry,
             selectEntry,
             formatKeys,
@@ -901,6 +1114,27 @@ export default {
             syncRegexScriptField: ctx.syncRegexScriptField,
             getRegexPlacement: ctx.getRegexPlacement,
             deleteRegexScript: ctx.deleteRegexScript,
+            // 📊 渲染预览器（美化/状态栏）
+            statusbarInput: ctx.statusbarInput,
+            statusbarViewMode: ctx.statusbarViewMode,
+            resetStatusbarDemo: ctx.resetStatusbarDemo,
+            statusbarTemplateMeta: ctx.statusbarTemplateMeta,
+            statusbarPromptMeta: ctx.statusbarPromptMeta,
+            statusbarTemplates: ctx.statusbarTemplates,
+            expandedTemplateUid: ctx.expandedTemplateUid,
+            toggleTemplateCard: ctx.toggleTemplateCard,
+            showStatusDataPanel: ctx.showStatusDataPanel,
+            statusDataCandidates: ctx.statusDataCandidates,
+            importStatusData: ctx.importStatusData,
+            importAllStatusData: ctx.importAllStatusData,
+            renderableScripts: ctx.renderableScripts,
+            toggleStatusbarScript: ctx.toggleStatusbarScript,
+            isScriptEnabled: ctx.isScriptEnabled,
+            appliedResult: ctx.appliedResult,
+            previewHtml: ctx.previewHtml,
+            loaderUrls: ctx.loaderUrls,
+            injectStatusbarTemplate: ctx.injectStatusbarTemplate,
+            injectStatusbarPrompt: ctx.injectStatusbarPrompt,
             apiEndpoint: ctx.apiEndpoint,
             apiKey: ctx.apiKey,
             apiModel: ctx.apiModel,
