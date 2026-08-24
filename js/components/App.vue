@@ -148,6 +148,7 @@
             @duplicate="handleContextMenuAction('duplicate')"
             @move-group="quickMoveGroup(contextMenu.item); closeContextMenu()"
             @export="exportCard(contextMenu.item); closeContextMenu()"
+            @push-target="handleContextMenuAction('pushTarget')"
             @ai-tag="handleContextMenuAction('aiTag')"
             @snapshots="handleContextMenuAction('snapshots')"
             @replace-image="replaceCardImage(contextMenu.item); closeContextMenu()"
@@ -196,6 +197,14 @@
             @restore="restoreSnapshot"
             @delete="deleteSnapshot"
             @open-folder="openSnapshotFolder"
+        />
+
+        <!-- ================= [ 弹窗：🚀 推送目标选择与执行（子组件 PushModal） ] ================= -->
+        <push-modal
+            :show="showPushModal"
+            :selected-count="selectedIds.length"
+            :current-card-name="(currentOpenCardItem && currentOpenCardItem.name) || ''"
+            @close="showPushModal = false"
         />
 
         <!-- ================= [ 弹窗：API 引擎与模型设置（子组件 ApiSettingsModal） ] ================= -->
@@ -426,6 +435,7 @@ import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
 import SnapshotModal from './SnapshotModal.vue'; // 📸 历史快照列表与一键恢复弹窗
+import PushModal from './PushModal.vue'; // 🚀 推送目标选择与执行对话框
 import { processFile, extractBookEntries } from '../utils/cardLoader.js';
 // normalizeCardData / isCharacterCardData / autoTagRules（cardLoader）与 parsePNGChunk / deepScanForJSON（pngParser）
 // 已随导入入库域迁移至 useCardCrud 组合式函数，由其自行 import
@@ -471,7 +481,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal, PushModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -616,67 +626,252 @@ export default {
         if (appSettings.value.tavernLocalPath === undefined) {
             appSettings.value.tavernLocalPath = '';
         }
+        if (appSettings.value.pushTargetMode === undefined) {
+            appSettings.value.pushTargetMode = 'sillytavern';
+        }
+        if (appSettings.value.customPushPath === undefined) {
+            appSettings.value.customPushPath = '';
+        }
+        if (appSettings.value.customPushName === undefined) {
+            appSettings.value.customPushName = '';
+        }
+        if (!Array.isArray(appSettings.value.customPushTargets)) {
+            appSettings.value.customPushTargets = [];
+        }
+        if (appSettings.value.currentPushTargetId === undefined) {
+            appSettings.value.currentPushTargetId = '';
+        }
 
-        // 推送到酒馆：本地物理拷贝（直接复制卡片 PNG 到酒馆 characters 目录，无 API / CORS / 403 烦恼）
-        const pushToTavern = async () => {
-            showExperimentalMenu.value = false;
+        const makePushTargetId = () => 'push_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        const ensureCustomPushTargets = () => {
+            if (!Array.isArray(appSettings.value.customPushTargets)) appSettings.value.customPushTargets = [];
+            return appSettings.value.customPushTargets;
+        };
+        const getFolderDisplayName = (folderPath) => folderPath.split(/[\\/]/).filter(Boolean).pop() || '自定义卡库';
+        const syncLegacyCustomPushFields = () => {
+            const current = ensureCustomPushTargets().find(t => t.id === appSettings.value.currentPushTargetId) || null;
+            appSettings.value.customPushPath = current?.path || '';
+            appSettings.value.customPushName = current?.name || '';
+        };
+        const legacyCustomPath = (appSettings.value.customPushPath || '').trim();
+        if (legacyCustomPath && !ensureCustomPushTargets().some(t => String(t.path || '').toLowerCase() === legacyCustomPath.toLowerCase())) {
+            ensureCustomPushTargets().push({
+                id: makePushTargetId(),
+                name: (appSettings.value.customPushName || '').trim() || getFolderDisplayName(legacyCustomPath),
+                path: legacyCustomPath
+            });
+        }
 
-            if (selectedIds.value.length === 0) {
-                return nativeAlert('请先在列表中勾选要推送到酒馆的角色卡！', 'warning');
+        const customPushTargets = computed(() => (
+            ensureCustomPushTargets()
+                .filter(t => t && typeof t.path === 'string' && t.path.trim() !== '')
+                .map(t => ({
+                    id: String(t.id || ''),
+                    name: String(t.name || '').trim() || getFolderDisplayName(String(t.path || '')),
+                    path: String(t.path || '').trim()
+                }))
+        ));
+        const currentCustomPushTarget = computed(() => (
+            customPushTargets.value.find(t => t.id === appSettings.value.currentPushTargetId)
+            || customPushTargets.value[0]
+            || null
+        ));
+        watch(customPushTargets, (targets) => {
+            if (targets.length === 0) {
+                appSettings.value.currentPushTargetId = '';
+                appSettings.value.customPushPath = '';
+                appSettings.value.customPushName = '';
+                if (appSettings.value.pushTargetMode === 'custom') appSettings.value.pushTargetMode = 'sillytavern';
+                return;
+            }
+            if (!targets.some(t => t.id === appSettings.value.currentPushTargetId)) {
+                appSettings.value.currentPushTargetId = targets[0].id;
+            }
+            syncLegacyCustomPushFields();
+        }, { deep: true, immediate: true });
+
+        const currentPushTargetName = computed(() => (
+            appSettings.value.pushTargetMode === 'custom'
+                ? (currentCustomPushTarget.value?.name || '自定义卡库')
+                : 'SillyTavern'
+        ));
+
+        const currentPushTargetHint = computed(() => (
+            appSettings.value.pushTargetMode === 'custom'
+                ? (currentCustomPushTarget.value?.path || '未绑定自定义卡库目录')
+                : (appSettings.value.tavernLocalPath || '未绑定 SillyTavern 根目录')
+        ));
+
+        const rebindTavernPath = async (silent = false) => {
+            const folderPath = await window.electronAPI.selectGenericFolder();
+            if (!folderPath) return false;
+            appSettings.value.tavernLocalPath = folderPath;
+            appSettings.value.pushTargetMode = 'sillytavern';
+            if (!silent) nativeAlert('推送目标已绑定为 SillyTavern：' + folderPath, 'info');
+            return true;
+        };
+
+        const setCurrentCustomPushTarget = (targetId) => {
+            if (!customPushTargets.value.some(t => t.id === targetId)) return false;
+            appSettings.value.currentPushTargetId = targetId;
+            appSettings.value.pushTargetMode = 'custom';
+            syncLegacyCustomPushFields();
+            return true;
+        };
+
+        const addCustomPushTarget = async (silent = false) => {
+            if (!window.electronAPI || typeof window.electronAPI.selectPushFolder !== 'function') {
+                nativeAlert('当前版本不支持自定义卡库推送，请更新应用。', 'warning');
+                return false;
+            }
+            const folderPath = await window.electronAPI.selectPushFolder();
+            if (!folderPath) return false;
+            const folderName = getFolderDisplayName(folderPath);
+            const existing = ensureCustomPushTargets().find(t => String(t.path || '').toLowerCase() === folderPath.toLowerCase());
+            const defaultName = existing?.name || appSettings.value.customPushName || folderName;
+            const customName = await appPrompt('给这个自定义卡库起个名字：', defaultName);
+            if (customName === null) return false;
+            const finalName = (customName || '').trim() || folderName;
+            if (existing) {
+                existing.name = finalName;
+                existing.path = folderPath;
+                appSettings.value.currentPushTargetId = existing.id;
+            } else {
+                const target = { id: makePushTargetId(), name: finalName, path: folderPath };
+                ensureCustomPushTargets().push(target);
+                appSettings.value.currentPushTargetId = target.id;
+            }
+            appSettings.value.pushTargetMode = 'custom';
+            syncLegacyCustomPushFields();
+            if (!silent) nativeAlert(`已保存卡库目标【${finalName}】\n${folderPath}`, 'info');
+            return true;
+        };
+
+        const renameCurrentCustomPushTarget = async () => {
+            const current = currentCustomPushTarget.value;
+            if (!current) return false;
+            const nextName = await appPrompt('修改当前卡库目标名称：', current.name);
+            if (nextName === null) return false;
+            const matched = ensureCustomPushTargets().find(t => t.id === current.id);
+            if (!matched) return false;
+            matched.name = (nextName || '').trim() || getFolderDisplayName(matched.path || current.path || '');
+            syncLegacyCustomPushFields();
+            showToast(`已重命名为 ${matched.name}`, 'success');
+            return true;
+        };
+
+        const removeCurrentCustomPushTarget = async () => {
+            const current = currentCustomPushTarget.value;
+            if (!current) return false;
+            const ok = await confirmDialog(`确定删除卡库目标【${current.name}】吗？\n只会删除保存的快捷目标，不会删除真实文件夹。`);
+            if (!ok) return false;
+            const nextTargets = ensureCustomPushTargets().filter(t => t.id !== current.id);
+            appSettings.value.customPushTargets = nextTargets;
+            if (nextTargets.length > 0) {
+                appSettings.value.currentPushTargetId = nextTargets[0].id;
+                appSettings.value.pushTargetMode = 'custom';
+            } else {
+                appSettings.value.currentPushTargetId = '';
+                appSettings.value.pushTargetMode = 'sillytavern';
+            }
+            syncLegacyCustomPushFields();
+            showToast(`已删除目标 ${current.name}`, 'success');
+            return true;
+        };
+
+        const useSillyTavernPushTarget = async () => {
+            if (appSettings.value.pushTargetMode !== 'sillytavern' && appSettings.value.tavernLocalPath) {
+                appSettings.value.pushTargetMode = 'sillytavern';
+                showToast('已切换到 SillyTavern 推送目标', 'success');
+                return true;
+            }
+            return await rebindTavernPath();
+        };
+
+        const useCustomPushTarget = async () => {
+            if (appSettings.value.pushTargetMode !== 'custom' && customPushTargets.value.length > 0) {
+                appSettings.value.pushTargetMode = 'custom';
+                if (!appSettings.value.currentPushTargetId) appSettings.value.currentPushTargetId = customPushTargets.value[0].id;
+                syncLegacyCustomPushFields();
+                showToast(`已切换到 ${currentPushTargetName.value}`, 'success');
+                return true;
+            }
+            return await addCustomPushTarget();
+        };
+
+        const pushCardPathsToCurrentTarget = async (pathsToPush, options = {}) => {
+            const { clearAfter = false, sourceName = '角色卡' } = options;
+            const validPaths = Array.isArray(pathsToPush) ? pathsToPush.filter(Boolean) : [];
+            if (validPaths.length === 0) {
+                return nativeAlert(`未找到可推送的${sourceName}物理文件路径。`, 'warning');
             }
 
-            // 1. 检查或请求酒馆的本地绝对路径
-            let stRoot = appSettings.value.tavernLocalPath;
+            try {
+                if (appSettings.value.pushTargetMode === 'custom') {
+                    let targetDir = currentCustomPushTarget.value?.path || '';
+                    if (!targetDir) {
+                        const ok = await confirmDialog('当前未绑定自定义卡库目录，是否现在选择？');
+                        if (!ok) return;
+                        const bound = await addCustomPushTarget(true);
+                        if (!bound) return;
+                        targetDir = currentCustomPushTarget.value?.path || '';
+                    }
 
-            // ===== 如果还没有绑定路径：先智能嗅探，再手动选择兜底 =====
-            if (!stRoot) {
-                // 1) 先尝试让主进程静默嗅探常见位置
-                const autoDetected = await window.electronAPI.autoDetectTavernPath();
-                if (autoDetected) {
-                    const confirmAuto = await confirmDialog(`🎉 系统自动检测到了你的酒馆路径：\n\n${autoDetected}\n\n是否直接使用该路径？(选确定将自动永久绑定)`);
-                    if (confirmAuto) {
-                        stRoot = autoDetected;
-                        appSettings.value.tavernLocalPath = stRoot;
+                    const res = await window.electronAPI.pushToCustomDir(validPaths, targetDir);
+                    if (res && res.success) {
+                        nativeAlert(
+                            `🎉 推送完成！共 ${res.count} 张${sourceName}已发送到【${currentPushTargetName.value}】！` +
+                            ((res.overwritten && res.overwritten.length > 0)
+                                ? `\n其中 ${res.overwritten.length} 张同名卡已更新，旧版已存入回收站。` : '') +
+                            `\n目标目录：${targetDir}`, 'info');
+                        if (clearAfter) clearSelection();
+                    } else {
+                        if (res && res.error === '路径越界，操作被拒绝') {
+                            syncLegacyCustomPushFields();
+                            const reBind = await confirmDialog('目标卡库目录不在授权范围内（可能应用已重启或目录已变更）。\n是否重新选择该目录？');
+                            if (reBind) {
+                                const bound = await addCustomPushTarget(true);
+                                if (bound) {
+                                    showToast(`已重新绑定 ${currentPushTargetName.value}，正在重试推送…`, 'info');
+                                    return await pushCardPathsToCurrentTarget(validPaths, options);
+                                }
+                            }
+                        }
+                        nativeAlert(`推送失败：${(res && res.error) || '未知错误'}\n请重新确认自定义卡库目录。`, 'error');
+                    }
+                    return;
+                }
+
+                let stRoot = appSettings.value.tavernLocalPath;
+                if (!stRoot) {
+                    const autoDetected = await window.electronAPI.autoDetectTavernPath();
+                    if (autoDetected) {
+                        const confirmAuto = await confirmDialog(`🎉 系统自动检测到了你的酒馆路径：\n\n${autoDetected}\n\n是否直接使用该路径？(选确定将自动永久绑定)`);
+                        if (confirmAuto) {
+                            stRoot = autoDetected;
+                            appSettings.value.tavernLocalPath = stRoot;
+                            appSettings.value.pushTargetMode = 'sillytavern';
+                        }
                     }
                 }
 
-                // 2) 嗅探失败或用户拒绝 → 手动选择
                 if (!stRoot) {
                     const confirmManual = await confirmDialog('尚未绑定 SillyTavern 本地目录，且未自动检索到。\n是否现在手动选择你的酒馆【根文件夹】？\n(选对一次即可永久免密一键推送)');
                     if (!confirmManual) return;
-
-                    const folderPath = await window.electronAPI.selectGenericFolder();
-                    if (!folderPath) return; // 用户取消选择
-
-                    stRoot = folderPath;
-                    appSettings.value.tavernLocalPath = stRoot; // 自动持久化保存
+                    const bound = await rebindTavernPath(true);
+                    if (!bound) return;
+                    stRoot = appSettings.value.tavernLocalPath;
                 }
-            }
 
-            // 2. 收集目标文件的真实物理路径
-            const targetIds = [...selectedIds.value];
-            const pathsToPush = [];
-            for (const id of targetIds) {
-                const item = library.value.find(c => c.id === id);
-                if (item && item.path) pathsToPush.push(item.path);
-            }
-            if (pathsToPush.length === 0) {
-                return nativeAlert('未找到选中卡片的物理文件路径，无法推送。', 'warning');
-            }
-
-            // 3. 执行系统级物理推送
-            try {
-                const res = await window.electronAPI.pushToSillyTavernDir(pathsToPush, stRoot);
-
+                const res = await window.electronAPI.pushToSillyTavernDir(validPaths, stRoot);
                 if (res && res.success) {
                     nativeAlert(
-                        `🎉 推送完成！共 ${res.count} 张角色卡已发送至酒馆！` +
+                        `🎉 推送完成！共 ${res.count} 张${sourceName}已发送至酒馆！` +
                         ((res.overwritten && res.overwritten.length > 0)
                             ? `\n其中 ${res.overwritten.length} 张同名卡已更新，旧版已存入回收站。` : '') +
                         `\n请前往酒馆刷新角色列表查看。`, 'info');
-                    clearSelection();
+                    if (clearAfter) clearSelection();
                 } else {
-                    // 路径可能错误或版本不兼容，清空错误路径让用户下次重选
                     appSettings.value.tavernLocalPath = '';
                     nativeAlert(`推送失败：${(res && res.error) || '未知错误'}\n目录绑定已自动重置，请下次重新选择正确的 SillyTavern 根目录。`, 'error');
                 }
@@ -685,18 +880,39 @@ export default {
             }
         };
 
-        // 重新绑定酒馆本地目录（设置面板内使用）
-        const rebindTavernPath = async () => {
-            const folderPath = await window.electronAPI.selectGenericFolder();
-            if (folderPath) {
-                appSettings.value.tavernLocalPath = folderPath;
-                nativeAlert('酒馆目录已重新绑定：' + folderPath, 'info');
+        // 🚀 当前打开的卡片（未勾选任何卡片时，作为推送兜底对象）
+        const currentOpenCardItem = computed(() => {
+            if (!cardData.value) return null;
+            return library.value.find(item => item.data === cardData.value) || null;
+        });
+
+        const pushToTavern = async () => {
+            showExperimentalMenu.value = false;
+
+            let pathsToPush;
+            if (selectedIds.value.length > 0) {
+                // 有勾选 → 推送全部勾选卡片
+                pathsToPush = library.value
+                    .filter(c => selectedIds.value.includes(c.id))
+                    .map(c => c.path)
+                    .filter(Boolean);
+            } else if (currentOpenCardItem.value && currentOpenCardItem.value.path) {
+                // 未勾选 → 回退推送当前打开的卡片
+                pathsToPush = [currentOpenCardItem.value.path];
             }
+
+            if (!pathsToPush || pathsToPush.length === 0) {
+                return nativeAlert('请先勾选要推送的角色卡，或先打开一张卡片！', 'warning');
+            }
+
+            return await pushCardPathsToCurrentTarget(pathsToPush, { clearAfter: true, sourceName: '角色卡' });
         };
 
         // ================= [ 顶部菜单系统：视图选项与工具函数 ] =================
         // API 设置独立弹窗开关
         const showApiModal = ref(false);
+        // 🚀 推送目标选择对话框开关（顶部「推送(P)」菜单打开）
+        const showPushModal = ref(false);
         // 视图菜单控制状态（控制 Raw JSON 页签 / 立绘预览 / Token 分析栏的显隐）
         const viewOptions = ref({
             showSidebar: true,        // 左侧侧边栏（角色卡列表）
@@ -1516,12 +1732,24 @@ export default {
             if (!(await confirmDialog('是否确定重置界面字号与外观设置？（API 配置将保持不变）'))) return;
             // 保留酒馆推送地址，避免误重置
             const prevTavernUrl = appSettings.value.tavernUrl || 'http://127.0.0.1:8000';
+            const prevTavernLocalPath = appSettings.value.tavernLocalPath || '';
+            const prevPushTargetMode = appSettings.value.pushTargetMode || 'sillytavern';
+            const prevCustomPushPath = appSettings.value.customPushPath || '';
+            const prevCustomPushName = appSettings.value.customPushName || '';
+            const prevCustomPushTargets = Array.isArray(appSettings.value.customPushTargets) ? JSON.parse(JSON.stringify(appSettings.value.customPushTargets)) : [];
+            const prevCurrentPushTargetId = appSettings.value.currentPushTargetId || '';
             appSettings.value = {
                 fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif",
                 fontSize: 14,
                 fontWeight: 'normal',
                 uiFontSize: 13,
-                tavernUrl: prevTavernUrl
+                tavernUrl: prevTavernUrl,
+                tavernLocalPath: prevTavernLocalPath,
+                pushTargetMode: prevPushTargetMode,
+                customPushPath: prevCustomPushPath,
+                customPushName: prevCustomPushName,
+                customPushTargets: prevCustomPushTargets,
+                currentPushTargetId: prevCurrentPushTargetId
             };
             nativeAlert('界面外观设置已恢复默认！', 'info');
         };
@@ -2047,6 +2275,12 @@ export default {
                         }
                         openAITagModal();
                         addLog(`🤖 已为 [${card.name}] 唤起 AI 打标`, 'info');
+                        break;
+                    }
+
+                    case 'pushTarget': {
+                        await pushCardPathsToCurrentTarget([card.path], { sourceName: `角色卡【${card.name}】` });
+                        addLog(`🚀 已推送到当前目标: ${card.name}`, 'success');
                         break;
                     }
 
@@ -3683,7 +3917,8 @@ export default {
         // ===== SFC 化：构建全局上下文对象（provide 给 HeaderBar/SidebarPanel/EditorPanel 子组件共享） =====
         const ctx = {
             theme, toggleTheme, appSettings, showApiModal, resetPersonalizationSettings, resetApiSettings,
-            showExperimentalMenu, pushToTavern,
+            showExperimentalMenu, pushToTavern, showPushModal, currentOpenCardItem, currentPushTargetName, currentPushTargetHint, customPushTargets, currentCustomPushTarget,
+            useSillyTavernPushTarget, useCustomPushTarget, setCurrentCustomPushTarget, addCustomPushTarget, renameCurrentCustomPushTarget, removeCurrentCustomPushTarget,
             viewOptions, importFileInput, handleImportFiles, importCards, downloadCardFromUrl, selectAllCards, cleanGlobalTagsPrompt, sanitizeImportedTags,
             openBakFolder, openTrashFolder, openGlobalTrash, openChatTab,
             isScanningDisk, diskScanProgress, useSizeFilter, runDiskScan, showDiskScanModal,

@@ -1455,6 +1455,17 @@ app.whenReady().then(() => {
     return filePaths[0]; // 只返回纯字符串路径
   });
 
+  // IPC：选择自定义卡库目录（TT 酒馆等任意角色卡目录）
+  ipcMain.handle('dialog:selectPushFolder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: '选择自定义角色卡库目录'
+    });
+    if (canceled || filePaths.length === 0) return null;
+    addAllowedRoot(filePaths[0]);
+    return filePaths[0];
+  });
+
   // IPC：物理跨目录拷贝卡片到酒馆 characters 目录（本地直推，无需 API / 无 CORS / 无 403）
   ipcMain.handle('tavern:pushDir', async (event, sourcePaths, stRootPath) => {
     try {
@@ -1511,6 +1522,60 @@ app.whenReady().then(() => {
             overwritten.push(fileName);
           } catch (backupErr) {
             continue; // 备份失败绝不裸覆盖，跳过该卡
+          }
+        }
+        fs.copyFileSync(src, dest);
+        count++;
+      }
+      return { success: true, count, overwritten };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // IPC：物理拷贝卡片到任意自定义卡库目录（目标目录必须已通过弹窗显式授权）
+  ipcMain.handle('library:pushToFolder', async (event, sourcePaths, targetDir) => {
+    try {
+      if (!targetDir || typeof targetDir !== 'string') return { success: false, error: '目标卡库目录为空' };
+      // 【安全加固】对齐 tavern:pushDir / wb:scan 的白名单自扩权后门修复（v1.8.5 同款）：
+      //   旧版对「任意已存在目录」无条件 addAllowedRoot —— 被注入的渲染层脚本可把库内文件
+      //   写入任意目录，并借本 handler 把任意目录树塞进白名单，整个 isPathAllowed 安全模型被穿透。
+      //   现在：目标目录必须在白名单内（本会话经 dialog:selectPushFolder 弹窗真实选择加入），
+      //   否则一律拒绝；前端收到「路径越界，操作被拒绝」后引导用户重新弹窗选择该目录。
+      if (!isPathAllowed(targetDir)) return forbidden();
+      if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+        return { success: false, error: '目标卡库目录不存在或不是文件夹' };
+      }
+      for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
+        if (!isPathAllowed(src)) return forbidden();
+      }
+
+      let count = 0;
+      const overwritten = [];
+      const trashDir = path.join(app.getPath('userData'), 'jsTavern_Trash');
+      await fs.promises.mkdir(trashDir, { recursive: true }).catch(() => { });
+      let trashSeq = 0;
+
+      for (const src of (Array.isArray(sourcePaths) ? sourcePaths : [])) {
+        if (!src || !fs.existsSync(src)) continue;
+        const fileName = path.basename(src);
+        const dest = path.join(targetDir, fileName);
+        if (fs.existsSync(dest)) {
+          try {
+            const trashDest = path.join(trashDir, `${Date.now()}_${++trashSeq}_${fileName}`);
+            try {
+              await fs.promises.rename(dest, trashDest);
+            } catch (ex) {
+              if (ex && ex.code === 'EXDEV') {
+                await fs.promises.copyFile(dest, trashDest);
+                await fs.promises.unlink(dest);
+              } else {
+                throw ex;
+              }
+            }
+            overwritten.push(fileName);
+          } catch (backupErr) {
+            continue;
           }
         }
         fs.copyFileSync(src, dest);

@@ -41,6 +41,9 @@
             <button @click="$emit('export')" class="w-full text-left px-3 py-2 hover:bg-indigo-600 hover:text-white flex items-center gap-2 transition-colors">
                 <span class="text-sm">💾</span> 导出单张卡片 (PNG)
             </button>
+            <button @click.stop="$emit('push-target')" class="w-full text-left px-3 py-2 hover:bg-emerald-600 hover:text-white flex items-center gap-2 transition-colors">
+                <span class="text-sm">🚀</span> 推送到当前目标
+            </button>
             <button @click.stop="$emit('ai-tag')" class="w-full text-left px-3 py-2 hover:bg-amber-600 hover:text-white flex items-center gap-2 transition-colors">
                 <span class="text-sm">🤖</span> 单卡快捷 AI 打标...
             </button>
@@ -63,6 +66,6 @@ export default {
         y: { type: Number, default: 0 },
         item: { type: Object, default: null }
     },
-    emits: ['view', 'open-folder', 'duplicate', 'move-group', 'snapshots', 'replace-image', 'export', 'ai-tag', 'trash']
+    emits: ['view', 'open-folder', 'duplicate', 'move-group', 'snapshots', 'replace-image', 'export', 'push-target', 'ai-tag', 'trash']
 };
 </script>

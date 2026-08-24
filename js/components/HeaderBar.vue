@@ -56,6 +56,25 @@
                 </div>
 
                 <div class="relative group">
+                    <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-emerald-400 transition font-bold">🚀 推送(P)</button>
+                    <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[240px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
+                        <div class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold border-b border-zinc-700/50 mb-1">选择目标并推送勾选的卡片</div>
+                        <button @click="showPushModal = true" class="px-3 py-1.5 text-left hover:bg-emerald-600 hover:text-white font-medium">🚀 推送选中卡片...</button>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <div class="px-3 py-1.5 flex items-center justify-between gap-2">
+                            <span class="text-zinc-400">🎯 当前目标</span>
+                            <span class="px-1.5 py-0.5 rounded border text-[10px] whitespace-nowrap"
+                                  :class="appSettings.pushTargetMode === 'custom' ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'">
+                                {{ currentPushTargetName }}
+                            </span>
+                        </div>
+                        <div class="px-3 pb-1.5 text-[10px] text-zinc-500 truncate" :title="currentPushTargetHint">{{ currentPushTargetHint }}</div>
+                        <div class="h-px bg-zinc-700 my-1"></div>
+                        <button @click="addCustomPushTarget" class="px-3 py-1.5 text-left hover:bg-emerald-600 hover:text-white">🗂️ 新增卡库目标...</button>
+                    </div>
+                </div>
+
+                <div class="relative group">
                     <button class="px-2 py-1 rounded hover:bg-zinc-800 hover:text-zinc-100 transition">窗口(W)</button>
                     <div class="hidden group-hover:flex flex-col absolute top-full left-0 min-w-[220px] bg-zinc-800 border border-zinc-700 rounded shadow-xl py-1 z-50 text-xs">
                         <button @click="viewOptions.showSidebar = !viewOptions.showSidebar" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex justify-between items-center">
@@ -180,7 +199,6 @@
                         <button @click="showDiskScanModal = true" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🛰️ 全盘打捞卡片</button>
                         <div class="h-px bg-zinc-700 my-1"></div>
                         <button @click="openChatTab" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white font-medium">💬 本地 AI 对话测卡</button>
-                        <button @click="pushToTavern" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🚀 一键推送至酒馆</button>
                     </div>
                 </div>
             </nav>
@@ -262,7 +280,10 @@ export default {
             openGraphSmart: ctx.openGraphSmart,
             appMode: ctx.appMode,
             openChatTab: ctx.openChatTab,
-            pushToTavern: ctx.pushToTavern,
+            showPushModal: ctx.showPushModal,
+            currentPushTargetName: ctx.currentPushTargetName,
+            currentPushTargetHint: ctx.currentPushTargetHint,
+            addCustomPushTarget: ctx.addCustomPushTarget,
             showGlobalAssetModal: ctx.showGlobalAssetModal,
             importLibraryDB: ctx.importLibraryDB,
             exportLibraryDB: ctx.exportLibraryDB,
