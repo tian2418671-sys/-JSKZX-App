@@ -25,7 +25,7 @@ import { STATUSBAR_PROMPT_TEMPLATES, STATUSBAR_PROMPT_META, findStatusbarPrompt 
 // 解析脚本里的正则字符串 → RegExp；兼容 '/pattern/flags' 与裸 'pattern' 两种写法
 // 返回 null 表示非法正则（调用方跳过该脚本，绝不抛错卡死预览）
 // 🔒 安全加固：杜绝「模块片段 / 半截正则」被无脑当作有效正则导入
-function parseRegexPattern(str) {
+export function parseRegexPattern(str) {
     const raw = String(str || '').trim();
     if (!raw) return null;
 
@@ -64,6 +64,38 @@ function unescapeHtmlEntities(str) {
             .replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 }
 
+/**
+ * DOMPurify 白名单清洗（移动端状态栏预览与桌面共用同策略）
+ * 剥离 Markdown 代码块围栏 / loader 直链块，禁止外联 URL 与事件属性
+ */
+export function sanitizeStatusHtml(text) {
+    if (!text) return '';
+    let t = String(text);
+    // 🧹 剥离 Markdown 代码块围栏（```html ```json 等）
+    t = t.replace(/```[a-zA-Z]*\n?/gi, '').replace(/```/g, '');
+    // loader/script 直链块交给 iframe 渲染，清洗前先剥离（DOMPurify 必删 <script>，留着会出现空壳）
+    const textWithoutLoader = extractLoaderUrls(t).length > 0
+        ? t.replace(/\$\(\s*['"]body['"]\s*\)\s*\.\s*load\s*\(\s*['"][^'"]+['"]\s*\)\s*;?/gi, '')
+             .replace(/<script[^>]*>\s*\$\(\s*['"]body['"][\s\S]*?<\/script>/gi, '')
+             .replace(/<(?:script|iframe)[^>]+src\s*=\s*['"]https?:\/\/[^'"]+['"][^>]*>(?:[\s\S]*?<\/script>)?/gi, '')
+        : t;
+    return DOMPurify.sanitize(textWithoutLoader, {
+        ALLOWED_TAGS: [
+            'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span',
+            'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'img', 'hr',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'table', 'thead', 'tbody', 'tr', 'td', 'th',
+            'progress', 'details', 'summary', 'font', 'center', 'small', 'sub', 'sup'
+        ],
+        ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title', 'width', 'height',
+            'align', 'valign', 'colspan', 'rowspan', 'bgcolor', 'color', 'max', 'value'],
+        ALLOW_DATA_ATTR: false,
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'oninput', 'onanimationstart', 'onanimationend', 'onpointerdown', 'onpointerup', 'onpointermove', 'ondragstart', 'ondrop'],
+        // 允许内嵌 base64 图与相对路径，禁止 http(s) 外联（防追踪像素/内网探测）
+        ALLOWED_URI_REGEXP: /^(?:data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+    });
+}
+
 // =========================================================
 // 🧭 模板分类器：把脚本 replaceString 分为五类（杜绝「片段冒充模板」「代码形态漏检」）
 //   loader   — 外链 GUI：$('body').load('URL')（宽松：不要求 <body> 包裹）或 <iframe> src 直链
@@ -72,7 +104,7 @@ function unescapeHtmlEntities(str) {
 //   fragment — 片段级：单个简单标签的小修饰（<br>、<b>$1</b> 等），不构成完整模板，排除
 //   none     — 纯文本替换，与渲染无关
 // =========================================================
-function classifyTemplate(repStr) {
+export function classifyTemplate(repStr) {
     const raw = String(repStr || '');
     // 转义态识别：反转义后出现标签而原文没有 → 存储时被转义了，用反转义版本
     const unescaped = unescapeHtmlEntities(raw);
@@ -127,7 +159,7 @@ function classifyTemplate(repStr) {
 
 // 从文本中提取全部外链 GUI 的 URL（仅 http/https 直链；输入可能是 AI 原文或脚本替换后的结果）
 // 宽松策略：$('body').load('URL') 不要求 <body> 包裹；兼容 <script>/<iframe> src 直链
-function extractLoaderUrls(text) {
+export function extractLoaderUrls(text) {
     if (!text) return [];
     // 剥离 ``` 围栏（AI 输出常把 loader 块包在代码块里，酒馆渲染时围栏会被正则一并吃掉）
     const cleaned = String(text).replace(/```[a-zA-Z]*\n?/gi, '').replace(/```/g, '');
@@ -229,34 +261,7 @@ export function useStatusbarPreview({
     // =========================================================
 
     // DOMPurify 预览清洗（模板卡与链式预览共用同策略）
-    const sanitizePreviewHtml = (text) => {
-        if (!text) return '';
-        let t = String(text);
-        // 🧹 剥离 Markdown 代码块围栏（```html ```json 等）：AI 输出/世界书常把模板或状态块包在
-        //    代码块里，围栏是纯文本，DOMPurify 不清洗会原样显示「```html」等标记（与聊天渲染 cleanMarkdownFences 同策略）
-        t = t.replace(/```[a-zA-Z]*\n?/gi, '').replace(/```/g, '');
-        // loader/script 直链块交给 iframe 渲染，清洗前先剥离（DOMPurify 必删 <script>，留着会出现空壳）
-        const textWithoutLoader = extractLoaderUrls(t).length > 0
-            ? t.replace(/\$\(\s*['"]body['"]\s*\)\s*\.\s*load\s*\(\s*['"][^'"]+['"]\s*\)\s*;?/gi, '')
-                 .replace(/<script[^>]*>\s*\$\(\s*['"]body['"][\s\S]*?<\/script>/gi, '')
-                 .replace(/<(?:script|iframe)[^>]+src\s*=\s*['"]https?:\/\/[^'"]+['"][^>]*>(?:[\s\S]*?<\/script>)?/gi, '')
-            : t;
-        return DOMPurify.sanitize(textWithoutLoader, {
-            ALLOWED_TAGS: [
-                'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span',
-                'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'img', 'hr',
-                'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                'table', 'thead', 'tbody', 'tr', 'td', 'th',
-                'progress', 'details', 'summary', 'font', 'center', 'small', 'sub', 'sup'
-            ],
-            ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title', 'width', 'height',
-                'align', 'valign', 'colspan', 'rowspan', 'bgcolor', 'color', 'max', 'value'],
-            ALLOW_DATA_ATTR: false,
-            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'oninput', 'onanimationstart', 'onanimationend', 'onpointerdown', 'onpointerup', 'onpointermove', 'ondragstart', 'ondrop'],
-            // 允许内嵌 base64 图与相对路径，禁止 http(s) 外联（防追踪像素/内网探测）
-            ALLOWED_URI_REGEXP: /^(?:data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
-        });
-    };
+    const sanitizePreviewHtml = (text) => sanitizeStatusHtml(text);
 
     // =========================================================
     // 🔍 状态数据检测（核心）：数据源按「能否命中渲染脚本正则」筛选 ——

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- JSKZX 品牌主色:青色系 (light #06B6D4, dark #22D3EE) -->
+    <color name="colorPrimary">#06B6D4</color>
+    <color name="colorPrimaryDark">#0596aa</color>
+    <color name="colorAccent">#06B6D4</color>
+    <!-- 背景:透明状态栏,系统内容延展到刘海 -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <!-- 启动屏背景(浅色;深色变体见 values-night) -->
+    <color name="splash_background">#F7F8FA</color>
+</resources>

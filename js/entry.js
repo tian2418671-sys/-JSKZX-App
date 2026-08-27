@@ -1,11 +1,91 @@
 /**
  * SillyTavern 角色卡高级解析中心 - 前端入口（Vite）
  * 挂载 App.vue 根组件（全部界面与逻辑已迁入 SFC 结构）
+ * M0：按运行环境分流挂载——
+ *   ● Capacitor(Android WebView) → MobileApp 移动壳（4 Tab 骨架）
+ *   ● Electron / 浏览器           → App.vue 桌面版
  */
 import { createApp } from 'vue';
 import App from './components/App.vue';
+import MobileApp from './mobile/MobileApp.vue';
+import router from './mobile/router';
+import Vant from 'vant';
+import 'vant/lib/index.css';
+import { androidImpl } from './bridge/android';
 
-const app = createApp(App);
+// 是否运行在 Capacitor 原生容器内（Android/iOS WebView）
+const isNative = typeof window !== 'undefined'
+    && !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+
+const rootComponent = isNative ? MobileApp : App;
+const app = createApp(rootComponent);
+
+// 移动端:注册路由与 Vant(桌面端保持原有行为,零影响)
+if (isNative) {
+    // 注入桥接:渲染层所有 window.electronAPI.xxx 调用在 Android 上自动命中等价实现
+    window.electronAPI = androidImpl;
+    app.use(router);
+    app.use(Vant);
+
+    // 长按手势(任意元素):触屏 500ms 触发;触发后抑制随后的 click,避免误入详情页
+    app.directive('longpress', {
+        mounted(el, binding) {
+            const value = typeof binding.value === 'function' ? binding.value : null;
+            let timer = null;
+            let fired = false;
+            let sx = 0;
+            let sy = 0;
+            const clear = () => {
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+            };
+            const onStart = (e) => {
+                const t = e.changedTouches && e.changedTouches[0];
+                if (t) {
+                    sx = t.clientX;
+                    sy = t.clientY;
+                }
+                clear();
+                timer = setTimeout(() => {
+                    fired = true;
+                    // 触觉反馈:长按触发时轻震一下,提示手势已被识别
+                    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+                        try { navigator.vibrate(15); } catch (err) { /* 忽略设备不支持 */ }
+                    }
+                    if (value) value(e);
+                    setTimeout(() => { fired = false; }, 700);
+                }, 500);
+            };
+            const onMove = (e) => {
+                const t = e.changedTouches && e.changedTouches[0];
+                if (t && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) clear();
+            };
+            const onEnd = () => clear();
+            const onClick = (e) => {
+                if (fired) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            };
+            el.addEventListener('touchstart', onStart, { passive: true });
+            el.addEventListener('touchmove', onMove, { passive: true });
+            el.addEventListener('touchend', onEnd, { passive: true });
+            el.addEventListener('click', onClick, true);
+            el.__lpCleanup = () => {
+                clear();
+                el.removeEventListener('touchstart', onStart);
+                el.removeEventListener('touchmove', onMove);
+                el.removeEventListener('touchend', onEnd);
+                el.removeEventListener('click', onClick, true);
+            };
+        },
+        unmounted(el) {
+            if (el.__lpCleanup) el.__lpCleanup();
+        }
+    });
+}
 
 // Vue 全局错误兜底（原 js/app.js 末尾逻辑，迁移至此）
 app.config.errorHandler = (err, _instance, info) => {

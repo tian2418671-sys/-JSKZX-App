@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- JSKZX 品牌主色:与浅色一致 -->
+    <color name="colorPrimary">#06B6D4</color>
+    <color name="colorPrimaryDark">#0596aa</color>
+    <color name="colorAccent">#06B6D4</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <!-- 启动屏背景深色模式 -->
+    <color name="splash_background">#09090b</color>
+</resources>

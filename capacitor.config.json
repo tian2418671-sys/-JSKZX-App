@@ -1,0 +1,11 @@
+{
+  "appId": "com.sillytavern.cardmanager.android",
+  "appName": "SillyTavern 角色卡管理器",
+  "webDir": "web",
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "style": "LIGHT"
+    }
+  }
+}

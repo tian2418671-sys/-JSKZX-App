@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SillyTavern 角色卡管理器</string>
+    <string name="title_activity_main">SillyTavern 角色卡管理器</string>
+    <string name="package_name">com.sillytavern.cardmanager.android</string>
+    <string name="custom_url_scheme">com.sillytavern.cardmanager.android</string>
+</resources>

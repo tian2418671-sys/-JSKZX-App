@@ -11,11 +11,15 @@
     "dev": "vite",
     "start:dev": "set VITE_DEV_SERVER_URL=http://localhost:5173&& electron .",
     "build:web": "node -e \"require('fs').rmSync('web',{recursive:true,force:true})\" && vite build",
+    "sync:android": "npm run build:web && npx cap sync android && node scripts/post-cap-sync.mjs",
+    "build:android": "npm run sync:android && cd android && gradlew.bat assembleDebug",
     "start": "npm run build:web && electron .",
     "build": "npm run build:web && electron-builder -w",
     "test": "node --test"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "autoprefixer": "^10.5.4",
     "echarts": "^6.1.0",
@@ -61,8 +65,11 @@
     }
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.0",
     "dompurify": "3.4.13",
     "electron-updater": "6.8.9",
-    "sharp": "0.35.3"
+    "sharp": "0.35.3",
+    "vant": "^4.10.0",
+    "vue-router": "^5.2.0"
   }
 }
