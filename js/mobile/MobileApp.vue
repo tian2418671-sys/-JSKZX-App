@@ -10,7 +10,7 @@
         <router-view />
         <van-tabbar v-if="showTabbar" route safe-area-inset-bottom class="mobile-tabbar">
             <van-tabbar-item replace to="/" icon="apps-o">卡片库</van-tabbar-item>
-            <van-tabbar-item replace to="/worldbook" icon="bookmark-o">世界书</van-tabbar-item>
+            <van-tabbar-item replace to="/worldbook" icon="bookmark-o">世界书库</van-tabbar-item>
             <van-tabbar-item replace to="/settings" icon="setting-o">设置</van-tabbar-item>
         </van-tabbar>
     </div>

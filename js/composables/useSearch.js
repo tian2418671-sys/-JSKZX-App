@@ -14,7 +14,7 @@ import { extractBookEntries } from '../utils/cardLoader.js';
  * 覆盖：物理文件名/路径/分组、角色名/作者/描述/性格/场景/首条开场白/对话示例/作者备注、
  * 备选开场白列表、深度提示词/系统提示词、正则脚本、内嵌世界书全部词条（名称/注释/触发词/正文）
  */
-function extractCardSearchableText(item) {
+export function extractCardSearchableText(item) {
     const data = (item && item.data && item.data.data) || (item && item.data) || {};
     const textSegments = [];
     const push = (v) => { if (v !== undefined && v !== null && v !== '') textSegments.push(String(v)); };
@@ -79,7 +79,7 @@ function extractCardSearchableText(item) {
 /**
  * 提取卡片的所有标签数组（兼容数组/逗号分隔字符串/customTags/原生 tags）
  */
-function extractCardTags(item) {
+export function extractCardTags(item) {
     const data = (item && item.data && item.data.data) || (item && item.data) || {};
     const tags = new Set();
     const collect = (t) => {

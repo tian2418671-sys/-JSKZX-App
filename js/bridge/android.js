@@ -974,6 +974,23 @@ export const androidImpl = {
             return { files: [], error: (e && e.message) || '扫描失败' };
         }
     },
+    /** M4 世界书文件夹扫描:SAF 目录选择器 → 原生递归收集 .json 文件,返回列表 */
+    async scanTargetFolderJson() {
+        try {
+            const res = await LibraryFs.scanFolder({ ext: '.json', skipLarge: true });
+            if (!res.success) return { files: [], error: res.message || '扫描失败' };
+            const files = (res.files || []).map((o) => ({
+                path: o.path,
+                name: o.name,
+                size: o.size || 0
+            }));
+            if (res.treeUri) this._scanTreeUri = res.treeUri;
+            if (res.title) this._scanTitle = res.title;
+            return { files, treeUri: res.treeUri, title: res.title, error: undefined };
+        } catch (e) {
+            return { files: [], error: (e && e.message) || '扫描失败' };
+        }
+    },
     /** M4 扫描进度心跳(原生 scanProgress 事件),回调会在整个扫描期间持续收到(progress/finish) */
     onScanProgress(cb) {
         onNativeEvent(LibraryFs, 'scanProgress');

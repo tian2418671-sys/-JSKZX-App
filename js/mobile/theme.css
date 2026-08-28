@@ -1,0 +1,69 @@
+/**
+ * 移动端深色主题变量集
+ * 覆盖 Vant 4 全部 --van-* CSS 变量,由 theme.js 在 <html> 添加 .theme-dark 类时生效
+ * 浅色默认走 Vant 引入的浅色变量,此处只覆盖深色值
+ * 仅作用于 .mobile-shell 内部,桌面版(Electron)不受影响
+ */
+
+/* 字体栈:Bug 0.6,避免特殊字符在部分安卓 WebView 字体下渲染为方块 */
+.mobile-shell {
+    font-family: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+html.theme-dark {
+    /* 背景层级 */
+    --van-background: #101014;
+    --van-background-2: #1b1c22;
+    --van-gray-1: #1b1c22;
+    --van-gray-2: #26272e;
+    --van-gray-3: #34363f;
+    --van-gray-5: #52525b;
+    --van-gray-6: #8b8b95;
+    --van-border-color: #34363f;
+
+    /* 文字 */
+    --van-text-color: #e4e4e7;
+    --van-text-color-2: #a1a1aa;
+    --van-text-color-3: #71717a;
+    --van-active-color: #3f3f46;
+    --van-disabled-text-color: rgba(255, 255, 255, 0.35);
+    --van-disabled-opacity: 0.4;
+
+    /* 组件容器 */
+    --van-cell-background: #1b1c22;
+    --van-cell-group-background: transparent;
+    --van-cell-active-color: #26272e;
+    --van-field-background: transparent;
+    --van-field-input-text-color: #e4e4e7;
+    --van-field-placeholder-text-color: #52525b;
+    --van-popup-background: #16171c;
+    --van-nav-bar-background: #16171c;
+    --van-nav-bar-title-text-color: #e4e4e7;
+    --van-tabbar-background: #16171c;
+    --van-tabbar-item-text-color: #8b8b95;
+    --van-action-sheet-background: #16171c;
+    --van-action-sheet-cancel-text-color: #a1a1aa;
+    --van-dialog-background: #1b1c22;
+    --van-empty-description-color: #8b8b95;
+    --van-tag-background: rgba(6, 182, 212, 0.16);
+    --van-tag-primary-color: #06b6d4;
+
+    /* 输入/选项卡/下拉 */
+    --van-search-background: #1b1c22;
+    --van-collapse-item-content-background: #121318;
+    --van-collapse-item-title-background: #1b1c22;
+    --van-collapse-item-title-disabled-color: #34363f;
+    --van-tabs-bottom-bar-color: #06b6d4;
+    --van-tab-text-color: #8b8b95;
+    --van-tab-active-text-color: #e4e4e7;
+    --van-sticky-index-anchor-text-color: #71717a;
+
+    /* 按钮/开关 */
+    --van-button-default-background: #26272e;
+    --van-button-default-border-color: #34363f;
+    --van-switch-off-background: #34363f;
+
+    /* 遮罩/骨架 */
+    --van-mask-background: rgba(0, 0, 0, 0.7);
+    --van-skeleton-background: #26272e;
+}

@@ -14,6 +14,7 @@
  * 全局缓存避免重复读库;仅缓存 URL,由文档生命周期自行管理(数量受限)
  */
 const coverCache = new Map();
+export { coverCache };
 
 export default {
     name: 'MobileCardCover',

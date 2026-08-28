@@ -1,23 +1,31 @@
 # 🎴 SillyTavern 角色卡管理器
 
-> 本地桌面版 SillyTavern 角色卡高级解析与管理中心 —— 让几千张角色卡井井有条。
-> 完全离线可用（前端依赖已本地化），支持 OTA 静默自动更新。
+> SillyTavern（酒馆）角色卡高级解析与管理中心 —— 桌面版（Windows）与 Android APP 版双端复用，让几千张角色卡井井有条。
+> 双端共享同一套 Vue 3 渲染层：桌面由 Electron 承载（完全离线可用、OTA 静默更新），Android 由 Capacitor 8 壳承载（SAF 文件授权、系统化交互）。
 
 ---
 
 ## 📥 下载
 
-**🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限，支持 OTA 自动更新）：
+**🖥️ 推荐 · 桌面安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限，支持 OTA 自动更新）：
 
 [⬇️ 下载安装包 `sillytavern-card-manager-1.9.0.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
-**📦 绿色免安装版**（解压即用，无需安装）：
+**📦 桌面绿色免安装版**（解压即用，无需安装）：
 
 [⬇️ 下载绿色版 `sillytavern-card-manager-1.9.0.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
-> 💡 两个版本功能完全相同，任选其一即可。支持 Windows 10/11（64 位）。
+> 💡 桌面两个版本功能完全相同，任选其一即可。支持 Windows 10/11（64 位）。
 > 安装版内置 OTA 自动更新（检测 → 下载 → 静默安装 → 自动重启）；绿色版需手动下载新版覆盖。
 > 程序完全本地运行、无任何联网上传；若杀毒软件误报，请选择「允许 / 信任」。（更多见 [常见问题排查](#-常见问题排查)）
+
+**📱 Android APP 版**（signed APK，Android 10+ / 鸿蒙 7 卓易通模拟环境兼容）：
+
+[⬇️ 下载 APK `sillytavern-card-manager-1.9.0.apk`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+
+> 💡 APP 版与桌面版渲染逻辑对等：`卡片库 / 世界书 / 设置` 三 Tab 主界面 + 卡片详情页内「设定 / 世界书 / 正则 / 测卡」四大 Tab。
+> 文件访问基于 Android SAF（Storage Access Framework）目录树授权：授权一次即可读写整个角色卡库，支持系统文件多选导入、批量导出 ZIP 到 `Download/JSKZX`、磁盘扫描收编、OTA 检查更新。
+> 若 Release 未附带 APK 资产，可按 [Android APK 打包](#android-apk-打包) 章节本地构建。
 
 ---
 
@@ -26,11 +34,13 @@
 - [下载](#-下载)
 - [项目简介](#-项目简介)
 - [功能特性](#-功能特性)
+- [📱 Android APP 版](#-android-app-版)
 - [技术栈](#-技术栈)
 - [环境要求](#-环境要求)
 - [快速开始](#-快速开始)
 - [目录结构](#-目录结构)
 - [架构说明](#-架构说明)
+- [🎨 双端架构](#-双端架构)
 - [核心模块与关键坑](#-核心模块与关键坑)
 - [数据与安全机制](#-数据与安全机制)
 - [打包与发布](#-打包与发布)
@@ -42,7 +52,7 @@
 
 ## 🚀 项目简介
 
-本项目是一个面向 **SillyTavern（酒馆）** 玩家的本地角色卡管理工具，用于解决「卡片一多就乱」的核心痛点：
+本项目是一个面向 **SillyTavern（酒馆）** 玩家的角色卡管理工具（Windows 桌面版 + Android APP 版），用于解决「卡片一多就乱」的核心痛点：
 
 - 批量导入 / 解析 **PNG / JSON / WebP / JPEG** 格式的角色卡（兼容 `chara_card_v1 / v2 / v3` 规范）
 - 深度检索：名称、作者、简介、世界书条目、触发词、标签、**物理文件名/路径**全维度全文搜索
@@ -101,11 +111,37 @@
 
 ---
 
+## 📱 Android APP 版
+
+基于 **Capacitor 8.5** 打包的 Android 原生壳（`compileSdk 36 / minSdk 24`），复用桌面版 Vue 3 渲染层与卡片解析逻辑，通过 `js/bridge/` 桥接层把 Electron API 语义等价映射到 Android 原生能力：
+
+| 模块 | 说明 |
+|------|------|
+| 📂 三 Tab 主界面 | `卡片库 / 世界书 / 设置`（与桌面一致取消独立「聊天测试」主界面，聊天迁入详情页） |
+| 🎴 卡片详情 | 四大 Tab：**设定**（名称/标签/Token 估算/详细设定/开场白/场景/示例/备用开场白 + 状态栏预览）、**世界书**（词条 IDE）、**正则**（脚本编辑）、**测卡**（内嵌聊天，OpenAI/Anthropic 双协议） |
+| 🔐 SAF 文件授权 | Storage Access Framework 目录树授权，一次授权即可读写整个角色卡库；授权失效自动提示重新选择 |
+| 📥 系统导入 | 调用系统文件选择器多选导入 PNG/JSON/WebP 角色卡，零知识库引导选择目录 |
+| 📤 批量导出 | 单卡导出 / 多选批量打包 ZIP（发布到公共 `Download/JSKZX`，MIME `*/*` + 读授权，兼容鸿蒙 7 卓易通） |
+| 🔍 磁盘扫描 | 扫描任意文件夹（SAF 临时授权）递归识别 PNG/WebP 角色卡并导入（[DiskScanView.vue](js/mobile/views/DiskScanView.vue)） |
+| ♻️ 卡片查重 | 按内容哈希识别重复卡，保留最新版本、旧卡移入回收站（[DedupeModal.vue](js/mobile/components/DedupeModal.vue)） |
+| 🚚 推送到酒馆 | 卡片详情页弹出设置酒馆地址 + API 密码，multipart/form-data 直传 `/api/characters/import` |
+| 🔄 OTA 更新 | GitHub Releases（或自定义 JSON/version 地址）检查 → 下载 APK → 安装（FileProvider 授权） |
+| 🗑️ 回收站 | 库内 `.trash` 软删除机制（删除即移动、可找回、walk 自动跳过） |
+| 🖼️ 封面与性能 | 封面懒加载、失败徽标、列表增量渲染（24 首屏 + 滚动续载）、6 并发逐卡解析进度提示 |
+| 🌗 主题 / 交互 | Vant 4 深浅双主题（跟随系统）、长按动作单（含 15ms 震动反馈）、键盘安全区适配 |
+
+> 桌面版全部在线编辑核心（设定 / 世界书 / 正则 / 测卡）在 APP 版均可落地并**物理写回卡片文件**（PNG 原子写 chunk、JSON 重写），与桌面版功能对等、数据互通。
+
+---
+
 ## 🛠 技术栈
 
 | 层 | 技术 |
 |----|------|
 | 桌面框架 | [Electron](https://www.electronjs.org/) `43.x` |
+| 移动框架 | [Capacitor](https://capacitorjs.com/) `8.5`（Android 原生壳，`@capacitor/android` + `@capacitor/core`） |
+| 移动 UI | [Vant](https://vant-ui.github.io/vant/) `4.10`（移动端组件库） |
+| 移动路由 | [vue-router](https://router.vuejs.org/) `5.x`（Hash 模式，兼容 `file://` WebView） |
 | 前端框架 | [Vue 3](https://vuejs.org/) `3.5`（Composition API + SFC，Vite 构建） |
 | 构建工具 | [Vite](https://vitejs.dev/) `8.x` + `@vitejs/plugin-vue` |
 | 样式 | [Tailwind CSS](https://tailwindcss.com/) `3.4`（PostCSS 编译） |
@@ -119,14 +155,18 @@
 
 ## ⚙️ 环境要求
 
-| 项目 | 要求 |
-|------|------|
-| 系统 | Windows 10/11（64 位） |
-| Node.js | `>= 18`（开发构建用；**最终用户无需安装** Node/Electron/任何运行时） |
-| npm | 随 Node.js 附带 |
-| 网络 | 首次 `npm install` 需联网（Electron 二进制可配置镜像加速） |
+| 项目 | 桌面版要求 | Android 版要求 |
+|------|------|------|
+| 系统 | Windows 10/11（64 位） | Android 10+（API 24+，推荐 API 29+ 以获得 MediaStore 导出） |
+| Node.js | `>= 18`（开发构建用；**最终用户无需安装** Node/Electron/任何运行时） | 同左 |
+| npm | 随 Node.js 附带 | 同左 |
+| JDK | — | **JDK 21**（编译 Android 必需，`JAVA_HOME` 指向它；JRE 1.8 / JDK 17 会导致 Capacitor 8 构建失败） |
+| Android SDK | — | 含 platform android-36 + build-tools（`ANDROID_HOME` 配置） |
+| Gradle | — | android/gradlew 自带 wrapper（首次构建自动下载） |
+| 网络 | 首次 `npm install` 需联网（Electron 二进制可配置镜像加速） | 首次构建需联网下载依赖 |
 
-> ✅ **纯净环境兼容**：最终打包产物自带 Chromium + Node 运行时，用户端**不需要** .NET / VC++ / Python / WebView2。
+> ✅ **桌面纯净环境兼容**：最终打包产物自带 Chromium + Node 运行时，用户端**不需要** .NET / VC++ / Python / WebView2。
+> 📱 **Android 端**：APP 为原生壳 + WebView 渲染，无需额外运行时，鸿蒙 7 卓易通等安卓兼容环境中亦可运行。
 
 ---
 
@@ -185,6 +225,26 @@ npm run build
 - `dist/sillytavern-card-manager-1.9.0.exe` —— NSIS 安装包
 - `dist/latest.yml` —— **OTA 更新必需**（与 exe 一起上传 GitHub Release）
 
+### 4. Android APP 构建（APK）
+
+```bash
+# 一键：构建前端 → cap sync Android → 原生编译（产出 debug APK）
+npm run build:android
+```
+
+分步执行（便于排查）：
+```bash
+npm run build:web            # ① Vite 构建前端产物到 web/
+npx cap sync android         # ② 同步 web/ 到 android/app/src/main/assets
+node scripts/post-cap-sync.mjs  # ③ 收尾（由 sync:android 自动触发）
+cd android && gradlew.bat assembleDebug   # ④ 编译 debug APK
+```
+
+> 产出：`android/app/build/outputs/apk/debug/app-debug.apk`
+> 正式发布签 release（见 [Android APK 打包](#android-apk-打包)）：
+> `cd android && gradlew.bat assembleRelease` → `apk/release/app-release.apk`
+> ⚠️ **每次改动前端代码后必须重新执行 `sync:android`**（`assembleRelease` 不会自动同步 web 目录，漏同步会导致 APK 还是旧界面）。
+
 ---
 
 ## 📁 目录结构
@@ -192,16 +252,19 @@ npm run build
 ```
 ├── main.js                 # 主进程：窗口、app:// 协议、全部 IPC（58 通道）、PNG 写入、OTA、崩溃兜底
 ├── preload.js              # 预加载：contextBridge 安全暴露 electronAPI（~60 方法）
-├── index.html              # 渲染进程挂载壳（<div id="app"> + 入口脚本）
-├── package.json            # 项目配置 + electron-builder 打包配置 + publish（GitHub OTA）
+├── index.html              # 渲染进程挂载壳（<div id="app"> + 入口脚本，桌面/APP 共用）
+├── package.json            # 项目配置 + electron-builder 打包配置 + publish（GitHub OTA）+ Capacitor 脚本
+├── capacitor.config.json   # Capacitor 配置（appId / Android 壳）
 ├── vite.config.mjs         # Vite 构建配置（Vue 完整版别名、Tailwind、Vue DevTools）
 ├── tailwind.config.js      # Tailwind 内容扫描（index.html + js/**/*.{js,vue}）
 ├── css/
 │   ├── tailwind.css        # Tailwind 指令入口（@tailwind base/…）
 │   └── style.css           # 自定义样式（主题变量、过渡动画等）
+├── scripts/
+│   └── post-cap-sync.mjs   # cap sync 后收尾脚本（插件注册等）
 ├── js/
-│   ├── entry.js            # ★ 渲染进程入口：createApp(App) + 全局错误兜底
-│   ├── components/         # ★ 全部 Vue SFC 组件（30 个）
+│   ├── entry.js            # ★ 渲染进程入口：createApp(App) + 全局错误兜底 + 环境分流
+│   ├── components/         # ★ 桌面版 Vue SFC 组件（30 个）
 │   │   ├── App.vue         #   根组件：状态/逻辑中枢 + provide/inject 上下文
 │   │   ├── HeaderBar.vue   #   顶部菜单栏 + 紧凑工具栏
 │   │   ├── SidebarPanel.vue#   左侧资源管理器（角色卡/世界书库）+ 拖拽把手
@@ -209,14 +272,34 @@ npm run build
 │   │   ├── AITagModal.vue  #   AI 智能批量打标弹窗
 │   │   ├── GraphModal.vue  #   角色宇宙关系图谱（ECharts）
 │   │   ├── … （其余 24 个弹窗/菜单组件：批量标签/查重/Diff/磁盘扫描/快照/更新/世界书系列等）
-│   ├── composables/        # ★ 逻辑组合式函数（14 个：useAITools/useSearch/useGraph/useSnapshots…）
+│   ├── bridge/             # ★ 双端桥接层：渲染层统一 api.[method]（Electron API 等价映射）
+│   │   ├── api.js          #   入口：按运行环境注入 electronImpl / androidImpl
+│   │   ├── contract.js     #   API 契约定义（双端对齐基准）
+│   │   ├── electron.js     #   Electron preload 直通（window.electronAPI）
+│   │   └── android.js      #   Capacitor 实现（SAF 文件系统 / 网络 / 推送 / OTA / 快照）
+│   ├── mobile/             # ★ 移动端 Vue 视图层（Vant 4，与桌面渲染层同仓）
+│   │   ├── MobileApp.vue   #   壳（3 Tab 导航：卡片库/世界书/设置）
+│   │   ├── router.js       #   Hash 路由（卡片库/详情/世界书/设置/磁盘扫描）
+│   │   ├── useMobileLibrary.js # 移动端数据层（逐卡解析/分组/移动/删除/保存）
+│   │   ├── theme.js        #   深浅双主题切换（同步系统栏图标色）
+│   │   ├── components/     #   MobileCardCover.vue 等
+│   │   └── views/          #   CardLibraryView / CardDetailView（含测卡 Tab）/ WorldbookView / SettingsView / DiskScanView
+│   ├── composables/        # ★ 桌面逻辑组合式函数（14 个：useAITools/useSearch/useGraph/useSnapshots…）
 │   └── utils/
 │       ├── cardLoader.js   # 卡片读取、数据规范化（V1/V2/V3 兼容）、extractBookEntries 安全提取
 │       ├── pngParser.js    # PNG/WebP tEXt/iTXt 块解析、深度扫描提取 JSON
 │       └── tokenEstimate.js# Token 估算工具（App 与 TextModal 共享）
-├── test/                   # node:test 单元测试（33 个用例）
+├── android/                # ★ Capacitor Android 原生工程（compileSdk 36 / minSdk 24 / JDK 21）
+│   ├── app/src/main/java/com/sillytavern/cardmanager/android/  # 5 个原生插件
+│   │   ├── LibraryFsPlugin.java  # SAF 文件系统（扫描/读写/删除/复制/导入/打开/移动）
+│   │   ├── AppConfigPlugin.java  # 配置持久化 + 酒馆路径存储
+│   │   ├── HttpPlugin.java       # OkHttp 网络转发（GET/POST/multipart/downloadBytes）
+│   │   ├── UpdatePlugin.java     # APK 下载/校验/安装（FileProvider）
+│   │   └── KeystorePlugin.java   # AES-256-GCM 加密（TEE/StrongBox）
+│   └── gradlew.bat         # Gradle wrapper（Windows）
+├── test/                   # node:test 单元测试（33+ 用例，跨双端工具层）
 ├── build/                  # 打包资源（icon.ico、generate-icon.ps1）
-├── web/                    # Vite 构建产物（gitignore）
+├── web/                    # Vite 构建产物（gitignore，cap sync 时同步进 android/assets）
 └── dist/                   # electron-builder 打包产物（gitignore）
 ```
 
@@ -271,6 +354,48 @@ App.vue (setup 状态中枢 + provide ctx)
 ```
 
 > **新增 IPC 的三步套路**：`main.js` 注册 `ipcMain.handle` → `preload.js` 暴露 → `js/components/App.vue`（渲染进程）调用。
+
+---
+
+## 🎨 双端架构
+
+桌面版与 Android APP 版**共享同一套 Vue 3 渲染层源码**，通过「环境分流 + 桥接层抽象」实现一次开发、双端运行：
+
+```
+                    ┌──────────── 渲染层（Vue 3 SFC，同一份源码）────────────┐
+                    │  桌面 UI：js/components/*（App/HeaderBar/Editor…）     │
+                    │  APP UI： js/mobile/*（MobileApp + 5 个 views）        │
+                    │  共享逻辑：js/utils/*（cardLoader/pngParser/token…）    │
+                    │  入口分流：js/entry.js 检测 isNativePlatform 选择挂载根 │
+                    └───────────────────────┬──────────────────────────────┘
+                                            │ import { api } from '@/bridge'
+                    ┌───────────────────────▼───────────────────────────────┐
+                    │  js/bridge/api.js —— 按运行环境注入实现                 │
+                    ├───────────────────────┬───────────────────────────────┤
+   桌面（Electron）  │   electronImpl         │   androidImpl（Capacitor）     │  APP（Android）
+   main.js ──IPC──► │   = preload 桥         │   = registerPlugin(5 插件)     │
+   （文件/对话框/OTA）│   window.electronAPI   │   Capacitor Bridge ◄──回调────►│
+                    └───────────────────────┴───────────────────────────────┘
+                                                            │
+                                          ┌─────────────────▼─────────────────┐
+                                          │  Android 原生（java/…/android/）    │
+                                          │  LibraryFs（SAF）AppConfig(Http)   │
+                                          │  Update（OTA）Keystore（AES-256）  │
+                                          └───────────────────────────────────┘
+```
+
+| 层 | 桌面版 | Android APP 版 |
+|----|--------|----------------|
+| 渲染入口 | `js/entry.js` → 挂载 `App.vue` | `js/entry.js` → 检测 `window.Capacitor` 挂载 `MobileApp.vue` |
+| UI 组件 | Tailwind + 桌面组件（30 个） | Vant 4（`js/mobile/`，5 个视图 + 2 组件） |
+| 桥接实现 | `js/bridge/electron.js`（直通 preload） | `js/bridge/android.js`（Capacitor 插件封装，1377 行） |
+| 文件系统 | Node fs + 路径白名单 | SAF 目录树授权（`content://`），`.trash` 软删除 |
+| 网络 | 主进程 IPC 转发（绕过 CORS） | `HttpPlugin`（OkHttp）转发，跳过 CORS |
+| 持久化 | `userData/app_config.json` | 私有目录 `app_config.json`（`AppConfigPlugin`） |
+| 自动更新 | electron-updater（静默安装） | `UpdatePlugin`（下载 APK + FileProvider 安装） |
+| 安全 | app:// 协议 + CSP + 白名单 | Android Keystore **AES-256-GCM** + TEE/StrongBox 保护 |
+
+> **桥接契约**：`js/bridge/contract.js` 定义了双端必须对齐的方法签名，新增能力时先在契约登记，两端实现必须语义等价（渲染层无环境判断，只面向 `api` 接口）。
 
 ---
 
@@ -367,6 +492,33 @@ npm install <包名>
 
 ⚠️ 依赖安装到 `node_modules` 会自动参与 Vite 打包；若需在渲染进程直接 `import`，请确认其可被 Vite 正确处理（或配置 `resolve.alias`）。
 
+### 13. Capacitor/Android 跨平台关键坑
+
+#### 13.1 环境与构建
+- **JDK 21 是硬性要求**：Capacitor 8 编译 Android 需要 JDK 21（Gradle daemon 可能误选 32 位 JRE 1.8 / JDK 17 → 构建失败）。务必在环境变量/IDE 显式设置 `JAVA_HOME=D:\jdk21\jdk-21.0.2` 一类路径
+- **`cap sync` 不自动同步前端**：每次 `vite build` 后必须 `npx cap sync android`，再 `assembleRelease`，否则 APK 还是旧界面
+- **`capacitor.plugins.json` 可能被 `cap sync` 清空**（本地插件不在 node_modules）：必须在 `MainActivity.java` 显式 `registerPlugin(...)`，插件加载才可靠
+
+#### 13.2 文件系统（SAF）
+- Android 10+ scoped storage：**直接路径 IO 被禁**，必须 SAF 目录树授权（`ACTION_OPEN_DOCUMENT_TREE`）；授权 URI 持久化到私有目录 `app_config.json`，授权失效时提示重新选择
+- PNG 卡片解析**禁止整读进内存**（卡库大时 OOM）：流式只读取 `tEXt/zTXt/iTXt` 字符块，跳过 `IDAT` 图像数据
+- 删除 = 移入库根 `.trash`（保留相对子路径），丢弃系统回收站语义；遍历目录时跳过点开头目录
+
+#### 13.3 分享 / 导出兼容（鸿蒙 7 卓易通）
+- ZIP 等分享文件**必须先写入公共目录** `Download/JSKZX`（MediaStore，API 29+），私有 `content://` 在其他应用（鸿蒙模拟环境）无法访问
+- 分享 Intent 必须：`type = */*`、`setClipData` + `FLAG_GRANT_READ_URI_PERMISSION`，否则 HarmonyOS 7 卓易通无法解析文件授权
+- `WRITE_EXTERNAL_STORAGE` 仅对 API ≤ 28 声明：`android:maxSdkVersion="28"`，避免影响新系统
+
+#### 13.4 路由与布局
+- 卡片路径含 `/` 或中文 → **vue-router 用 `query` 传路径**（`/card?p=…`），`params` 会被编码/截断导致「卡片不存在」
+- 移动端滚动容器**禁用 `height:100%`**：flex 布局下用 `flex:1; min-height:0`，否则滚动高度算错、列表无法滚动
+- 自定义长按动作单需禁用系统原生复制菜单：`.mobile-shell { -webkit-touch-callout:none; user-select:none }`
+
+#### 13.5 交互细节
+- 长按卡片触发动作单：加 15ms 震动反馈（`navigator.vibrate(15)`）
+- 列表性能：24 张首屏 + `IntersectionObserver` 增量渲染 16 张/批；封面懒加载 + 失败徽标
+- 双主题切换需同步系统栏图标色（`theme.js` 在切换后调 SystemBars 样式），edge-to-edge 适配 `viewport-fit=cover`
+
 ---
 
 ## 🛡️ 数据与安全机制
@@ -384,6 +536,10 @@ npm install <包名>
 | 环路防护 | `main.js` | 4 处递归扫描 realpath 去重，符号链接/junction 环路不再死循环 |
 | 原子写入 | `main.js` | saveCard/世界书保存/PNG 升级统一 tmp 唯一命名 + rename，中断不产生半截文件 |
 | 集成包导出 | 用户自选目录 `${角色名}_Package/` | 主卡 + worldbook.json + regex_scripts.json |
+| Android 配置 | APP 私有目录 `app_config.json`（AppConfigPlugin） | SAF 授权 URI / 酒馆路径 / API 配置，不写入公共区 |
+| Android 加密 | Android Keystore（KeystorePlugin） | 敏感配置 AES-256-GCM 加密，密钥存 TEE/StrongBox 硬件区 |
+| Android 回收站 | 库根 `.trash/`（保留相对子路径） | 删除=移动（软删除），找回/一键清理由顶部菜单提供 |
+| Android 分享导出 | 公共 `Download/JSKZX/`（MediaStore） | ZIP 导出写公共目录，Intent `*/*` + 读授权，兼容鸿蒙卓易通 |
 
 ---
 
@@ -462,6 +618,37 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
 - `main.js` 使用 `electron-updater`：`autoDownload=false` + `autoInstallOnAppQuit=true`
 - `sys:installUpdate` 调用 `autoUpdater.quitAndInstall(true, true)`（`isSilent=true` 静默安装不弹向导，`isForceRunAfter=true` 装完自动重启）
 - **前提**：保持 per-user 安装（`perMachine` 勿设 true），否则无 UAC 提权静默写入会 EACCES
+
+### Android APK 打包
+
+**Debug 包**（日常自测）：
+```powershell
+npm run build:android          # 一键（build:web → cap sync → assembleDebug）
+# 产物：android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+**Release 签名包**（正式分发 / OTA 升级）：
+1. 准备签名文件并把密码写入 `android/app/keystore.properties`（已 gitignore，缺失时自动回退 debug 签名）：
+   ```properties
+   storeFile=../jszkx-release.jks
+   storePassword=***
+   keyAlias=jszkx
+   keyPassword=***
+   ```
+2. 编译并校验：
+   ```powershell
+   npm run build:android        # 或分开执行 build:web → cap sync android → gradlew assembleDebug
+   cd android
+   .\gradlew.bat assembleRelease    # 产物：app\build\outputs\apk\release\app-release.apk
+   .\gradlew.bat app:verifyReleaseSigning
+   ```
+3. 校验证书指纹与线上一致（覆盖升级要求签名一致）：
+   ```powershell
+   keytool -list -printcert -jarfile app-release.apk | Select-String "SHA256"
+   ```
+   > ⚠️ 若用新 keystore 重新签名，指纹会变，**无法覆盖升级**已安装的旧签名 APK（需卸载重装）。
+
+**发布到 GitHub Release**：与桌面版同 tag 上传 APK 资产，APP 内置 OTA 从 Releases（或自定义更新地址）检查新版本，下载后经 FileProvider 安装。
 
 ---
 
@@ -546,6 +733,14 @@ nativeAlert('保存成功', 'info');                   // type 仅支持 none/in
 | electron-builder 卡住不动 | 正在下载 Electron（本机 GitHub 慢）→ 用 `electronDist` 离线打包，勿误杀进程 |
 | 打包后无图标 | 确认 `build/icon.ico` 存在且 `package.json` `win.icon` 配置正确 |
 | 安装包被杀软报毒 | 未签名 + Electron 特征；建议代码签名 |
+| 打开卡片详情提示「卡片不存在」 | 路径含 `/`/中文走了 `params` → 用 `query`（`/card?p=…`）传路径 |
+| APP 列表无法滚动 | 滚动容器用了 `height:100%` → 改 `flex:1; min-height:0` |
+| 导入的卡片打开报错/卡顿 | PNG 解析整读内存导致 → 升级到含流式解析的版本（跳过 IDAT 只读文本块） |
+| 导出 ZIP 无法分享/对方打不开 | 文件必须写公共 `Download/JSKZX` + Intent `*/*` + 读授权（鸿蒙卓易通必须） |
+| 首页提示「库目录已失效」 | 授权目录被移动/删除或系统回收授权 → 重新选择库目录并重扫 |
+| Android 构建失败 | JDK 非 21（Gradle 误选 32 位 JRE1.8/17）→ 设 `JAVA_HOME` 为 JDK 21 后重试 |
+| APK 装的还是旧界面 | 忘记 `cap sync android` → 每次前端改动后重新 `npm run build:android` |
+| release 包无法覆盖升级 | 签名指纹与已装版本不一致 → 恢复原 jks，或用 debug 签名卸载重装 |
 
 ---
 

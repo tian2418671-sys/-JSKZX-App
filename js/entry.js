@@ -11,6 +11,7 @@ import MobileApp from './mobile/MobileApp.vue';
 import router from './mobile/router';
 import Vant from 'vant';
 import 'vant/lib/index.css';
+import './mobile/theme.css'; // 移动端深色主题变量集(.theme-dark),桌面不受影响
 import { androidImpl } from './bridge/android';
 
 // 是否运行在 Capacitor 原生容器内（Android/iOS WebView）

@@ -146,14 +146,15 @@ export async function renameCardTo(card, newName) {
     return { success: res && res.success, error: res && res.error };
 }
 
+/** 阶段 1.1:卡片删除进回收站(trashFiles 替代物理删除) */
 export async function removeCard(card) {
-    const res = await window.electronAPI.deleteFile(card.path);
+    const res = await window.electronAPI.trashFiles([card.path]);
     if (res && res.success) {
         const idx = mobileLibrary.library.findIndex((c) => c.path === card.path);
         if (idx >= 0) mobileLibrary.library.splice(idx, 1);
         return { success: true };
     }
-    return { success: false, error: (res && res.error) || '删除失败' };
+    return { success: false, error: (res && res.error) || '移入回收站失败' };
 }
 
 /** 保存卡片数据到物理文件(整体覆盖) */

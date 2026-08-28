@@ -68,6 +68,13 @@
                     is-link
                     @click="$router.push('/scan')"
                 />
+                <van-cell
+                    title="回收站"
+                    label="查看和管理已删除的文件"
+                    icon="delete-o"
+                    is-link
+                    @click="openTrash"
+                />
                 <van-cell title="更新源地址" label="GitHub Releases API 或 {version,url} JSON 地址">
                     <template #value>
                         <van-field
@@ -100,14 +107,14 @@
             <div class="ota-body">
                 <div class="ota-version">v{{ updateInfo && updateInfo.version }}</div>
                 <div v-if="updateInfo && updateInfo.name && updateInfo.name !== updateInfo.version" class="ota-name">
-                    {{ updateInfo.name }} · {{ fmtSize(updateInfo.size) }}
+                    {{ updateInfo.name }} ({{ fmtSize(updateInfo.size) }})
                 </div>
                 <div v-if="updateInfo && updateInfo.notes" class="ota-notes">{{ updateInfo.notes }}</div>
 
                 <div v-if="downloading" class="ota-progress">
                     <van-progress :percentage="downloadPercent" :show-pivot="false" stroke-width="6" />
                     <div class="ota-progress-text">
-                        {{ downloadPercent >= 0 ? `下载中 ${downloadPercent}%` : '下载中…' }}
+                        {{ downloadPercent >= 0 ? `下载中 ${downloadPercent}%` : '下载中...' }}
                     </div>
                 </div>
             </div>
@@ -197,7 +204,7 @@ export default {
                     showToast((res && res.error) || '下载失败');
                     return;
                 }
-                showToast('下载完成，正在拉起安装…');
+                showToast('下载完成，正在拉起安装...');
                 // 系统安装器结束后短暂停留再关闭弹窗,避免用户在系统界面操作时被遮挡
                 const inst = await api.installUpdate(res.filePath);
                 if (!inst.success) {
@@ -218,7 +225,7 @@ export default {
         const apiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
         const radioStyle = { marginRight: '16px' };
 
-        const libraryState = () => (granted.value ? '已授权 ✓' : (authLost.value ? '已失效' : '未授权'));
+        const libraryState = () => (granted.value ? '已授权' : (authLost.value ? '已失效' : '未授权'));
 
         async function refreshInfo() {
             const info = await api.libraryInfo();
@@ -267,6 +274,14 @@ export default {
             applyTheme(v ? 'dark' : 'light');
         }
 
+        // 阶段 2.6: 打开系统回收站目录
+        async function openTrash() {
+            const res = await api.openGlobalTrash();
+            if (!res || !res.success) {
+                showToast((res && res.error) || '无法打开回收站');
+            }
+        }
+
         onMounted(() => {
             refreshInfo();
             refreshStats();
@@ -275,7 +290,7 @@ export default {
         return {
             granted, authLost, rootUri, scanInfo, darkTheme,
             apiEndpoint, apiKey, apiModel, apiType, radioStyle,
-            libraryState, handlePickFolder, saveApi, onThemeChange,
+            libraryState, handlePickFolder, saveApi, onThemeChange, openTrash,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
             fmtSize, checkUpdate, doDownload
         };
