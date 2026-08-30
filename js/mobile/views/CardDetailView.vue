@@ -66,6 +66,8 @@
                     <!-- 高级设定(折叠) -->
                     <van-collapse v-model="advancedOpen" class="adv-collapse">
                         <van-collapse-item title="高级设定" name="adv">
+                            <van-field v-model="d.creator_notes" type="textarea" rows="2" autosize label="创建者备注" placeholder="仅作者可见的备注(creator_notes)" />
+                            <van-field :model-value="d.character_version || ''" @update:model-value="d.character_version = $event" label="卡版本" placeholder="如 1.0.0" />
                             <van-field v-model="d.first_mes" type="textarea" rows="3" autosize label="开场白" />
                             <van-field v-model="d.scenario" type="textarea" rows="3" autosize label="场景" />
                             <van-field v-model="d.mes_example" type="textarea" rows="5" autosize label="示例对话" />
@@ -73,6 +75,15 @@
                                 :model-value="greetingsText" label="备用开场白"
                                 type="textarea" rows="3" autosize
                                 @update:model-value="greetingsText = $event"
+                            />
+                            <van-field v-model="d.system_prompt" type="textarea" rows="2" autosize label="系统提示" placeholder="system_prompt(卡内覆写,酒馆兼容)" />
+                            <van-field v-model="d.post_history_instructions" type="textarea" rows="2" autosize label="对话后注入" placeholder="post_history_instructions(酒馆兼容)" />
+                            <van-field
+                                :model-value="depthPromptText"
+                                @update:model-value="depthPromptText = $event"
+                                type="textarea" rows="2" autosize
+                                label="深度提示"
+                                placeholder="extensions.depth_prompt.prompt"
                             />
                         </van-collapse-item>
                         <van-collapse-item title="状态栏预览" name="status">
@@ -138,6 +149,8 @@
                             <div class="wb-head">
                                 <van-switch v-model="e.enabled" size="20px" />
                                 <van-field v-model="e.comment" placeholder="条目名(comment)" class="wb-name" />
+                                <van-icon name="arrow-up" size="14" class="wb-op" @click="moveWbEntry(key, -1)" />
+                                <van-icon name="arrow-down" size="14" class="wb-op" @click="moveWbEntry(key, 1)" />
                                 <van-icon name="arrow" :class="['wb-arrow', { 'wb-arrow-open': wbExpanded[key] }]" size="14" @click="toggleWbExpand(key)" />
                                 <van-icon name="delete-o" color="#ee0a24" size="18" @click="removeWbEntry(key)" />
                             </div>
@@ -191,6 +204,16 @@
                             </div>
                         </div>
                         <van-empty v-if="!regexList || !regexList.length" description="无正则脚本" image-size="60" />
+                    </div>
+                </van-tab>
+
+                <van-tab title="JSON" name="raw">
+                    <div class="tab-pad">
+                        <div class="raw-bar">
+                            <span class="raw-size">{{ rawJsonText.length }} 字符</span>
+                            <van-button size="mini" plain type="primary" @click="copyRawJson">复制全部</van-button>
+                        </div>
+                        <pre class="raw-json">{{ rawJsonText }}</pre>
                     </div>
                 </van-tab>
 
@@ -507,6 +530,46 @@ export default {
         }
         function removeWbEntry(key) {
             delete wbEntries.value[key];
+            saved.value = false;
+        }
+
+        // 深度提示 prompt(存于 extensions.depth_prompt)
+        const depthPromptText = computed({
+            get() {
+                const dp = d.value.extensions && d.value.extensions.depth_prompt;
+                return (dp && dp.prompt) || '';
+            },
+            set(v) {
+                if (!d.value.extensions) d.value.extensions = {};
+                if (!d.value.extensions.depth_prompt || typeof d.value.extensions.depth_prompt !== 'object') {
+                    d.value.extensions.depth_prompt = { prompt: '', depth: 4, role: 'system' };
+                }
+                d.value.extensions.depth_prompt.prompt = v;
+                saved.value = false;
+            }
+        });
+
+        // 卡内世界书条目排序:按键序重建 entries 对象(上下移)
+        function moveWbEntry(key, dir) {
+            const entries = wbEntries.value;
+            const keys = Object.keys(entries);
+            const idx = keys.indexOf(key);
+            const next = idx + dir;
+            if (idx < 0 || next < 0 || next >= keys.length) return;
+            // 交换 insertion_order(物理持久层) + 重建键序(显示层)
+            // 若两条 order 相同,交换后视觉无变化 → 强制产生 ±1 差异保证移动可见
+            const a = entries[keys[idx]];
+            const b = entries[keys[next]];
+            const oa = Number(a.insertion_order) || 0;
+            const ob = Number(b.insertion_order) || 0;
+            a.insertion_order = (dir < 0) ? Math.min(oa, ob) - 1 : Math.max(oa, ob) + 1;
+            b.insertion_order = (dir < 0) ? Math.max(oa, ob) : Math.min(oa, ob);
+            const rebuilt = {};
+            const order = keys.slice();
+            order[next] = keys[idx];
+            order[idx] = keys[next];
+            order.forEach((k) => { rebuilt[k] = entries[k]; });
+            d.value.extensions.world_book.entries = rebuilt;
             saved.value = false;
         }
 
@@ -1084,6 +1147,23 @@ export default {
             return (dd.choices && dd.choices[0] && dd.choices[0].message && dd.choices[0].message.content) || '';
         }
 
+        // Raw JSON 只读查看(对齐桌面 raw 页签)
+        const rawJsonText = computed(() => {
+            try {
+                return JSON.stringify(card.value ? (card.value.data || {}) : {}, null, 2);
+            } catch (e) {
+                return String(e);
+            }
+        });
+        async function copyRawJson() {
+            try {
+                await navigator.clipboard.writeText(rawJsonText.value);
+                showSuccessToast('已复制到剪贴板');
+            } catch (e) {
+                showToast('复制失败: ' + (e.message || e));
+            }
+        }
+
         // ================= AI 智能工具（单卡：打标 / 汉化 / 重构 + 规则表） =================
         const showAiTools = ref(false);
         const aiMode = ref('');
@@ -1300,6 +1380,7 @@ export default {
             d, tags, greetingsText, wbEntries, regexList,
             tokenText, tokenDetailText,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
+            moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,
             presetTagList, tagLangMode, togglePresetTag, toggleTagLang,
             customTagPool, toggleCustomTag, addCustomTag, manageCustomTags,
@@ -1367,6 +1448,27 @@ export default {
 .wb-name :deep(.van-field__control) { font-size: 14px; }
 .wb-arrow { color: var(--van-gray-5, #c8c9cc); transition: transform .2s; cursor: pointer; flex-shrink: 0; }
 .wb-arrow-open { transform: rotate(90deg); }
+.wb-op { color: var(--van-gray-6, #969799); cursor: pointer; flex-shrink: 0; }
+.wb-op:active { color: var(--van-primary-color, #1989fa); }
+.raw-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+}
+.raw-size { font-size: 12px; color: var(--van-gray-6, #969799); }
+.raw-json {
+    margin: 0;
+    padding: 10px;
+    border: 1px solid var(--van-gray-3, #ebedf0);
+    border-radius: 8px;
+    background: var(--van-background-2, #fff);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 62vh;
+    overflow-y: auto;
+    color: var(--van-text-color, #323233);
+}
 .st-tpl-list {
     margin-top: 10px;
     border: 1px solid var(--van-gray-3, #ebedf0);

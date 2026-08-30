@@ -13,7 +13,8 @@
 > 5. ✅ readTextBatch + 内嵌缓存：Java 层新增 readTextBatch（单次 IPC 批量拉 json）；库目录 .jskzx_cache.json 缓存解析结果（path+mtime+size 指纹，上限 12000 条，扫描器跳过 .jskzx 前缀）→ 二次启动秒开
 > 6. ✅ 预设管理引擎：桥接层 scanExternalPresets（复用 SAF scanWbTree，isValidPreset 校验排除角色卡/世界书）+ saveExternalPreset/renameExternalPreset/deleteExternalPreset/createExternalPreset + PresetsView（选目录/扫描/搜索/新建/JSON 编辑器/复制副本/删除，localStorage 记忆目录）+ 设置页入口
 > 7. ✅ 内容指纹查重：DedupeModal 第三模式（MinHash 96 位签名 + LSH 8 band 候选 + 85% 阈值 + 并查集聚类，对齐桌面算法），Tab 切换 同名查重/内容指纹/世界书，相似度百分比展示，复用 trashFiles 清理与 Diff 对比
-> 8. ⏳ 向量引擎（待桌面 WASM 实测后再定）
+> 8. ⛔ 向量引擎（已定案：移动端不做，见 §三）
+> 9. ⏳ Worker 并行解析加速（移动端加载加速项，不依赖万卡规模，普通千卡库亦受益，见 §三）
 
 ---
 
@@ -42,10 +43,11 @@ origin/master 已整体删除 `js/mobile/`、`js/bridge/`、`android/` —— �
 
 | 桌面功能 | 桌面依赖 | 移动端替代方案 |
 |---|---|---|
-| **本地向量引擎（三层漏斗第二层）** | Node `@xenova/transformers` + Worker 线程 + 113MB 本地模型 + vector:* IPC | **方案A（推荐）**：三层漏斗降为两层——第一层规则匹配（#1 直接移植，零成本离线）+ 第三层 LLM（移动端 AiToolModal 已有）。第二层向量暂缓，等 WASM 版 transformers.js 在 WebView 的内存实测再定；**方案B**：transformers.js (ONNX Runtime Web/WASM) 直接在 WebView 推理 + HttpPlugin 下载模型分片 + Cache Storage 缓存，风险是低端机内存与 113MB 包体 |
+| **本地向量引擎（三层漏斗第二层）** | Node `@xenova/transformers` + Worker 线程 + 113MB 本地模型 + vector:* IPC | ⛔ **已定案：移动端不做**。理由：① MiniLM-L12 加载进 WebView WASM 堆后峰值内存 300–500MB+，中低端机 OOM 杀进程；② onnxruntime-web 多线程后端需 `SharedArrayBuffer`+`crossOriginIsolated`，Capacitor file:// 加载产物默认开不了；③ 113MB 模型打包进 assets 后 file:// 下 fetch 有 MIME/跨域问题；④ 桌面向量层为万卡批量预计算设计，移动端单卡打标无此场景。**替代（低成本免费离线）**：复用已实现的 MinHash+LSH 做「标签↔卡片」近似匹配 + 规则关键词同义词表扩展；三层漏斗降为两层（规则 + LLM）。
 | **预设管理扫描/文件接口** | main.js `preset:scan` + isValidPreset 主进程校验 + 缓存 | SAF 目录树授权已可读任意目录 → LibraryFsPlugin.listFiles 已有递归列举，android.js 增加 `scanPresets`（JSON 过滤 + isValidPreset 前端校验 + mtime 增量缓存到 localStorage）；预设 UI（列表/编辑/重命名/复制/入回收站）直接复用移动端现有模式 |
-| **files:readTextBatch / readEmbeddedBatch** | 主进程批量 IPC（128 分批） | android.js 增加 `readTextBatch`（循环 listFiles/readTextFile 即可，JS 层 256 一批），万卡收益显著 |
-| **PNG 内嵌缓存落盘（12000 上限）** | 主进程扫描缓存文件 | AppConfigPlugin 已有原子 JSON 落盘 → android.js 增加 `loadScanCache/saveScanCache`（config 目录 scan_cache.json），PNG 提取结果按 path+mtime 缓存 |
+| **files:readTextBatch / readEmbeddedBatch** | 主进程批量 IPC（128 分批） | ✅ 已做：android.js 新增 readTextBatch（单次 IPC 批量拉 json），JS 层 256 一批 |
+| **PNG 内嵌缓存落盘（12000 上限）** | 主进程扫描缓存文件 | ✅ 已做：库目录 `.jskzx_cache.json`（path+mtime+size 指纹，上限 12000，扫描器跳过 .jskzx 前缀） |
+| **Web Worker 并行解析（cardParseWorker）** | 主进程 Worker 线程 + 拉取/解析流水线 | ⏳ **移动端加载加速项（建议做，不依赖万卡规模）**：移动端 loadLibrary 现为渲染线程逐卡解析（CONCURRENCY=6），大库会卡 UI。可将 PNG/JSON 解析移入 Web Worker（Capacitor WebView 支持 Worker），6→并行提升、配合已落地的 readTextBatch+内嵌缓存，普通千卡库二次启动秒开、首扫不冻结 |
 
 ## 四、建议落地顺序（第三轮迁移）
 

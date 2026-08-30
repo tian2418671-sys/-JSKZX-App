@@ -132,22 +132,17 @@ async function parseCard(file, prefetchedText, cache) {
     if (cache && fp && cache.items[fp]) {
         try {
             const cached = cache.items[fp];
-            const normalized = normalizeCardData(cached, true);
-            if (typeof localStorage !== 'undefined' && localStorage.getItem('jsmobile-ignore-import-tags') === '1') {
-                if (normalized.data) normalized.data.tags = [];
-            }
-            // 独立世界书不缓存,需要重新识别(压入 mobileLibrary.worldbooks)
-            if (name.endsWith('.json')) {
-                const parsed = cached;
-                const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
-                if (wb && typeof wb.entries === 'object' && wb.entries) {
-                    mobileLibrary.worldbooks.push({
-                        path: file.path, name: file.name, wb,
-                        wrapped: !!(parsed.extensions && parsed.extensions.world_book)
-                    });
+            // 缓存命中也必须校验角色卡合法性:防止历史版本误存入的世界书/非卡 JSON 被重建为卡片
+            if (!isCharacterCardData(cached)) {
+                delete cache.items[fp];
+                scheduleCacheFlush();
+            } else {
+                const normalized = normalizeCardData(cached, true);
+                if (typeof localStorage !== 'undefined' && localStorage.getItem('jsmobile-ignore-import-tags') === '1') {
+                    if (normalized.data) normalized.data.tags = [];
                 }
+                return buildCardInfo(file, normalized, (cached.data && cached.data.name) || cached.name);
             }
-            return buildCardInfo(file, normalized, parsed && parsed.name);
         } catch (e) { /* 缓存损坏落重新解析 */ }
     }
     try {
