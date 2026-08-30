@@ -69,6 +69,64 @@ function scheduleCacheFlush() {
     }, 2000);
 }
 
+// ---------- 卡片解析 Worker(大库加载加速:原始解析移出主线程) ----------
+// 关键容错:Worker 创建失败/加载失败/超时,一律回退主线程同步解析(与旧逻辑等价)
+let parseWorker = null;
+let parseWorkerFailed = false;
+let parseReqId = 0;
+const parsePending = new Map();
+
+function getParseWorker() {
+    if (parseWorkerFailed) return null;
+    if (parseWorker) return parseWorker;
+    try {
+        parseWorker = new Worker(new URL('./cardParseWorker.js', import.meta.url), { type: 'module' });
+        parseWorker.onmessage = (e) => {
+            const { id, ok, parsed } = e.data || {};
+            const p = parsePending.get(id);
+            if (p) { parsePending.delete(id); p(ok ? parsed : null); }
+        };
+        parseWorker.onerror = () => {
+            parseWorkerFailed = true;
+            try { parseWorker.terminate(); } catch (e) { /* 忽略 */ }
+            parseWorker = null;
+            parsePending.forEach((resolve) => resolve(null));
+            parsePending.clear();
+        };
+    } catch (e) {
+        parseWorkerFailed = true;
+        return null;
+    }
+    return parseWorker;
+}
+
+/** 主线程同步回退解析(Worker 不可用时) */
+function parseRawSync(kind, raw) {
+    try {
+        return kind === 'json' ? JSON.parse(raw) : (parsePNGChunk(raw) || deepScanForJSON(raw));
+    } catch (e) {
+        return null;
+    }
+}
+
+/** 经 Worker 解析原始数据,失败/超时回退主线程 */
+function parseViaWorker(kind, raw) {
+    const w = getParseWorker();
+    if (!w) return Promise.resolve(parseRawSync(kind, raw));
+    return new Promise((resolve) => {
+        const id = ++parseReqId;
+        parsePending.set(id, resolve);
+        // 超时保护:5s 未响应则回退主线程(避免个别卡拖死整体加载)
+        const timer = setTimeout(() => {
+            if (parsePending.has(id)) {
+                parsePending.delete(id);
+                resolve(parseRawSync(kind, raw));
+            }
+        }, 5000);
+        w.postMessage({ id, kind, raw });
+    });
+}
+
 export async function loadLibrary() {
     mobileLibrary.loading = true;
     mobileLibrary.error = '';
@@ -155,8 +213,8 @@ async function parseCard(file, prefetchedText, cache) {
                 text = (r && r.success && typeof r.text === 'string') ? r.text : null;
             }
             if (text == null) return null;
-            let parsed;
-            try { parsed = JSON.parse(text); } catch (e) { return null; }
+            const parsed = await parseViaWorker('json', text);
+            if (!parsed) return null;
             if (!isCharacterCardData(parsed)) {
                 // 非角色卡:识别独立世界书文件
                 const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
@@ -179,7 +237,8 @@ async function parseCard(file, prefetchedText, cache) {
             const r = await window.electronAPI.readBuffer(file.path);
             if (r && r.success && r.buffer) {
                 const buf = r.buffer;
-                parsedData = parsePNGChunk(buf) || deepScanForJSON(buf);
+                parsedData = await parseViaWorker('png', buf);
+                if (!parsedData) return null;
                 rawForCache = parsedData;
             } else return null;
         }
