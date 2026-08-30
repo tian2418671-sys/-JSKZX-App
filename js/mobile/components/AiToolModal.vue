@@ -35,7 +35,8 @@
 
             <!-- 功能按钮 -->
             <van-cell-group inset title="单卡功能（作用于当前卡片）">
-                <van-cell title="🏷️ AI 智能打标" label="提取/补充角色标签（可选候选池）" is-link @click="$emit('tag')" />
+                <van-cell title="🏷️ AI 智能打标" label="规则表命中 + AI 提取（可选候选池）" is-link @click="$emit('tag')" />
+                <van-cell title="⚙️ 打标规则表" label="系统预设规则开关 + 自定义正则规则（免费优先）" is-link @click="$emit('rules')" />
                 <van-cell title="🌐 一键汉化" label="翻译设定/开场白/场景/示例对话" is-link @click="$emit('translate')" />
                 <van-cell title="✨ 提示词重构" label="W++/JSON 重构为紧凑 Markdown" is-link @click="$emit('refactor')" />
             </van-cell-group>
@@ -78,7 +79,7 @@ export default {
         running: { type: Boolean, default: false },
         progress: { type: String, default: '' }
     },
-    emits: ['close', 'update:endpoint', 'update:key', 'update:model', 'update:apiType', 'tag', 'translate', 'refactor', 'add-candidate', 'remove-candidate'],
+    emits: ['close', 'update:endpoint', 'update:key', 'update:model', 'update:apiType', 'tag', 'rules', 'translate', 'refactor', 'add-candidate', 'remove-candidate'],
     data() {
         return { candidateInput: '' };
     },

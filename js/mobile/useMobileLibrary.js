@@ -26,6 +26,49 @@ let flavorCallback = null; // 用于在分组移动后刷新"分组管理"等 UI
 
 export function onLibraryChanged(fn) { flavorCallback = fn; }
 
+// ---------- 内嵌解析结果落盘缓存（万卡二次启动优化,对齐桌面 v2.1.0 PNG 内嵌缓存） ----------
+// 键: 文件 path+mtime+size 指纹;值: 卡片数据 JSON。缓存文件存库目录 .jskzx_cache.json
+const CACHE_FILE = '/library/.jskzx_cache.json';
+const CACHE_VERSION = 1;
+let embeddedCache = null; // { version, items: { [fingerprint]: cardDataJson } }
+
+function cacheFingerprint(file) {
+    return `${file.path}|${file.mtime || 0}|${file.size || 0}`;
+}
+
+async function loadEmbeddedCache() {
+    if (embeddedCache) return embeddedCache;
+    try {
+        const r = await window.electronAPI.readText(CACHE_FILE);
+        if (r && r.success && r.text) {
+            const parsed = JSON.parse(r.text);
+            if (parsed && parsed.version === CACHE_VERSION && parsed.items) {
+                embeddedCache = parsed;
+                return embeddedCache;
+            }
+        }
+    } catch (e) { /* 首次无缓存 */ }
+    embeddedCache = { version: CACHE_VERSION, items: {} };
+    return embeddedCache;
+}
+
+let cacheFlushTimer = null;
+function scheduleCacheFlush() {
+    if (cacheFlushTimer) return;
+    cacheFlushTimer = setTimeout(async () => {
+        cacheFlushTimer = null;
+        if (!embeddedCache) return;
+        try {
+            // 限制缓存体积:最多保留 12000 条(对齐桌面上限)
+            const keys = Object.keys(embeddedCache.items);
+            if (keys.length > 12000) {
+                for (const k of keys.slice(0, keys.length - 12000)) delete embeddedCache.items[k];
+            }
+            await window.electronAPI.writeText(CACHE_FILE, JSON.stringify(embeddedCache));
+        } catch (e) { /* 缓存写失败不影响主流程 */ }
+    }, 2000);
+}
+
 export async function loadLibrary() {
     mobileLibrary.loading = true;
     mobileLibrary.error = '';
@@ -43,14 +86,37 @@ export async function loadLibrary() {
         const staging = [];
         const CONCURRENCY = 6;
         mobileLibrary.progress = { done: 0, total: files.length };
-        for (let i = 0; i < files.length; i += CONCURRENCY) {
-            const batch = files.slice(i, i + CONCURRENCY);
-            const results = await Promise.all(batch.map(parseCard));
+
+        // 🚀 万卡优化:json 卡先批量拉文本(单次 IPC 一次拉一批),PNG/WebP 走内嵌缓存
+        const cache = await loadEmbeddedCache();
+        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE);
+        const otherFiles = files.filter((f) => !jsonFiles.includes(f));
+
+        // json 批量拉取:每批 40 个
+        const jsonTextMap = new Map();
+        for (let i = 0; i < jsonFiles.length; i += 40) {
+            const batch = jsonFiles.slice(i, i + 40);
+            const br = await window.electronAPI.readTextBatch(batch.map((f) => f.path));
+            if (br && br.success && Array.isArray(br.results)) {
+                br.results.forEach((item) => { if (item.success) jsonTextMap.set(item.path, item.value); });
+            }
+            mobileLibrary.progress.done = Math.min(i + 40, jsonFiles.length);
+        }
+
+        // json 卡解析(带缓存)
+        const jsonResults = await Promise.all(jsonFiles.map((f) => parseCard(f, jsonTextMap.get(f.path), cache)));
+        staging.push(...jsonResults.filter(Boolean));
+
+        // PNG/WebP 逐批解析(带内嵌缓存)
+        for (let i = 0; i < otherFiles.length; i += CONCURRENCY) {
+            const batch = otherFiles.slice(i, i + CONCURRENCY);
+            const results = await Promise.all(batch.map((f) => parseCard(f, null, cache)));
             staging.push(...results.filter(Boolean));
-            mobileLibrary.progress.done = Math.min(i + CONCURRENCY, files.length);
+            mobileLibrary.progress.done = jsonFiles.length + Math.min(i + CONCURRENCY, otherFiles.length);
         }
         mobileLibrary.library = staging;
         mobileLibrary.ready = true;
+        scheduleCacheFlush();
     } catch (e) {
         mobileLibrary.error = '加载失败: ' + (e.message || e);
     } finally {
@@ -59,60 +125,104 @@ export async function loadLibrary() {
     }
 }
 
-async function parseCard(file) {
+async function parseCard(file, prefetchedText, cache) {
     const name = (file.name || '').toLowerCase();
+    const fp = cache ? cacheFingerprint(file) : null;
+    // 🚀 内嵌缓存命中:直接从缓存重建卡片对象,免读文件免解析
+    if (cache && fp && cache.items[fp]) {
+        try {
+            const cached = cache.items[fp];
+            const normalized = normalizeCardData(cached, true);
+            if (typeof localStorage !== 'undefined' && localStorage.getItem('jsmobile-ignore-import-tags') === '1') {
+                if (normalized.data) normalized.data.tags = [];
+            }
+            // 独立世界书不缓存,需要重新识别(压入 mobileLibrary.worldbooks)
+            if (name.endsWith('.json')) {
+                const parsed = cached;
+                const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
+                if (wb && typeof wb.entries === 'object' && wb.entries) {
+                    mobileLibrary.worldbooks.push({
+                        path: file.path, name: file.name, wb,
+                        wrapped: !!(parsed.extensions && parsed.extensions.world_book)
+                    });
+                }
+            }
+            return buildCardInfo(file, normalized, parsed && parsed.name);
+        } catch (e) { /* 缓存损坏落重新解析 */ }
+    }
     try {
         let parsedData = null;
+        let rawForCache = null;
         if (name.endsWith('.json')) {
-            const r = await window.electronAPI.readText(file.path);
-            if (r && r.success && typeof r.text === 'string') {
-                const parsed = JSON.parse(r.text);
-                if (!isCharacterCardData(parsed)) {
-                    // 非角色卡:识别独立世界书文件(含 extensions.world_book 或顶层 entries 的世界书容器)
-                    const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
-                    if (wb && typeof wb.entries === 'object' && wb.entries) {
-                        mobileLibrary.worldbooks.push({
-                            path: file.path,
-                            name: file.name,
-                            wb,
-                            wrapped: !!(parsed.extensions && parsed.extensions.world_book)
-                        });
-                    }
-                    return null;
+            let text = prefetchedText;
+            if (typeof text !== 'string') {
+                const r = await window.electronAPI.readText(file.path);
+                text = (r && r.success && typeof r.text === 'string') ? r.text : null;
+            }
+            if (text == null) return null;
+            let parsed;
+            try { parsed = JSON.parse(text); } catch (e) { return null; }
+            if (!isCharacterCardData(parsed)) {
+                // 非角色卡:识别独立世界书文件
+                const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
+                if (wb && typeof wb.entries === 'object' && wb.entries) {
+                    mobileLibrary.worldbooks.push({
+                        path: file.path,
+                        name: file.name,
+                        wb,
+                        wrapped: !!(parsed.extensions && parsed.extensions.world_book)
+                    });
                 }
-                parsedData = parsed;
-            } else return null;
+                return null;
+            }
+            parsedData = parsed;
+            rawForCache = parsed;
         } else if (file.embeddedData && typeof file.embeddedData === 'object') {
             parsedData = file.embeddedData;
+            rawForCache = file.embeddedData;
         } else {
             const r = await window.electronAPI.readBuffer(file.path);
             if (r && r.success && r.buffer) {
                 const buf = r.buffer;
                 parsedData = parsePNGChunk(buf) || deepScanForJSON(buf);
+                rawForCache = parsedData;
             } else return null;
         }
         if (!parsedData) return null;
+        // 🚀 写入内嵌缓存(下次启动直接命中)
+        if (cache && fp && rawForCache) {
+            try {
+                cache.items[fp] = JSON.parse(JSON.stringify(rawForCache));
+                scheduleCacheFlush();
+            } catch (e) { /* 缓存写入失败不影响主流程 */ }
+        }
         const normalized = normalizeCardData(parsedData);
-        // 导入行为:用户开启「忽略自带标签」时清空卡内预置标签
         if (typeof localStorage !== 'undefined' && localStorage.getItem('jsmobile-ignore-import-tags') === '1') {
             if (normalized.data) normalized.data.tags = [];
         }
-        return {
-            id: file.path,
-            path: file.path,
-            fileName: file.name,
-            name: (normalized.data && normalized.data.name) || parsedData.name || '未命名',
-            creator: (normalized.data && normalized.data.creator) || '未知',
-            avatar: null, // 封面懒加载(MobileCardCover)
-            data: normalized,
-            category: file.category || (file.subFolder ? file.subFolder.split('/')[0] : '未分类'),
-            customTags: [],
-            subFolder: file.subFolder || '',
-            _mtime: file.mtime || 0
-        };
+        return buildCardInfo(file, normalized, (parsedData.data && parsedData.data.name) || parsedData.name);
     } catch (e) {
         return null;
     }
+}
+
+function buildCardInfo(file, normalized, displayName) {
+    return {
+        id: file.path,
+        path: file.path,
+        fileName: file.name,
+        name: displayName || (normalized.data && normalized.data.name) || '未命名',
+        creator: (normalized.data && normalized.data.creator) || '未知',
+        avatar: null, // 封面懒加载(MobileCardCover)
+        data: normalized,
+        category: file.category || (file.subFolder ? file.subFolder.split('/')[0] : '未分类'),
+        customTags: [],
+        subFolder: file.subFolder || '',
+        _mtime: file.mtime || 0,
+        _ctime: file.birthtime || file.mtime || 0, // SAF 无 birthtime,回退 mtime
+        _size: file.size || 0,
+        _importTime: file.mtime || Date.now() // 移动端暂以 mtime 充当导入时间
+    };
 }
 
 // 按 path 取卡片

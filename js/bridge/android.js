@@ -341,6 +341,14 @@ export const androidImpl = {
         const res = await LibraryFs.readText({ path: rel });
         return res && res.success ? { success: true, text: res.value || '' } : { success: false, error: (res && res.error) || '读取失败' };
     },
+    /** 批量读文本(万卡优化:单次 IPC 拉取多个 json 文件,减少桥接往返) */
+    async readTextBatch(paths) {
+        const rels = (paths || []).map(toRelativePath).filter((p) => p !== null);
+        if (!rels.length) return { success: true, results: [] };
+        const res = await LibraryFs.readTextBatch({ paths: rels });
+        if (!res || !res.success) return { success: false, error: (res && res.error) || '批量读取失败' };
+        return { success: true, results: res.results || [] };
+    },
     async saveCard(filePath, updatedJson) {
         const rel = toRelativePath(filePath);
         if (rel === null) return { success: false, error: '路径无效' };

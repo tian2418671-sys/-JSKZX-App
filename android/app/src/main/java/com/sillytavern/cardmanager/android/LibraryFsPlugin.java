@@ -360,6 +360,8 @@ public class LibraryFsPlugin extends Plugin {
                         ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT)
                         : "";
                 if (!ext.equals("png") && !ext.equals("webp") && !ext.equals("json")) continue;
+                // 跳过应用自身缓存文件(避免被当成卡片/世界书扫描)
+                if (name.startsWith(".jskzx")) continue;
                 JSObject o = new JSObject();
                 o.put("name", name);
                 o.put("path", "/library/" + relDir + name);
@@ -367,6 +369,7 @@ public class LibraryFsPlugin extends Plugin {
                 o.put("url", JSObject.NULL);
                 o.put("mtime", queryLastModified(child));
                 o.put("birthtime", 0);
+                o.put("size", child.length()); // 文件字节数(排序用,对齐桌面 _size)
                 o.put("subFolder", relDir.replaceAll("/+$", ""));
                 o.put("category", relDir.isEmpty() ? "未分类" : relDir.split("/")[0]);
                 if (ext.equals("png")) {
@@ -707,6 +710,50 @@ public class LibraryFsPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("success", true);
         ret.put("value", text);
+        call.resolve(ret);
+    }
+
+    /**
+     * 批量读文本（万卡优化：单次 IPC 拉取多个 json 文件，减少桥接往返）。
+     * 入参 paths: ["/library/a.json", ...]；返回 results: [{path, success, value|error}]
+     */
+    @PluginMethod()
+    public void readTextBatch(PluginCall call) {
+        com.getcapacitor.JSArray paths = call.getArray("paths");
+        if (paths == null || paths.length() == 0) {
+            call.resolve(new JSObject());
+            return;
+        }
+        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
+        for (int i = 0; i < paths.length(); i++) {
+            String p;
+            try {
+                p = paths.getString(i);
+            } catch (org.json.JSONException e) {
+                continue;
+            }
+            if (p == null) continue;
+            JSObject item = new JSObject();
+            item.put("path", p);
+            DocumentFile f = fileByRelPath(p);
+            if (f == null || !f.canRead()) {
+                item.put("success", false);
+                item.put("error", "文件不存在或不可读");
+            } else {
+                String text = readStream(f.getUri(), false, 0);
+                if (text == null) {
+                    item.put("success", false);
+                    item.put("error", "读取失败");
+                } else {
+                    item.put("success", true);
+                    item.put("value", text);
+                }
+            }
+            results.put(item);
+        }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("results", results);
         call.resolve(ret);
     }
 

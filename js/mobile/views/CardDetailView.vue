@@ -334,21 +334,37 @@
             @update:model="chatApiModel = $event"
             @update:apiType="chatApiType = $event"
             @tag="startAiTagging"
+            @rules="showAutoTagRules = true"
             @translate="startAiTranslate"
             @refactor="startAiRefactor"
             @add-candidate="addAICandidate"
             @remove-candidate="removeAICandidate"
+        />
+
+        <!-- 自动打标规则表弹窗 -->
+        <AutoTagRulesModal
+            :show="showAutoTagRules"
+            :system-rules="defaultAutoTagRules"
+            :disabled-rules="disabledRuleNames"
+            :custom-rules="customAutoTagRules"
+            :keyword-candidates="autoTagKeywordCandidates"
+            @close="showAutoTagRules = false"
+            @toggle-system="toggleSystemRule"
+            @add-custom="addCustomRule"
+            @remove-custom="removeCustomRule"
         />
     </div>
 </template>
 
 <script>
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
+import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules } from '../../utils/cardLoader.js';
 import { useRoute } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
+import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
 import { findCard, saveCardData, loadLibrary } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
@@ -362,7 +378,7 @@ const LS_TAVERN_KEY = 'jsmobile-tavern-key';
 
 export default {
     name: 'CardDetailView',
-    components: { MobileCardCover, SnapshotModal, AiToolModal },
+    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal },
     setup() {
         const route = useRoute();
         const id = ref('');
@@ -1068,12 +1084,64 @@ export default {
             return (dd.choices && dd.choices[0] && dd.choices[0].message && dd.choices[0].message.content) || '';
         }
 
-        // ================= AI 智能工具（单卡：打标 / 汉化 / 重构） =================
+        // ================= AI 智能工具（单卡：打标 / 汉化 / 重构 + 规则表） =================
         const showAiTools = ref(false);
         const aiMode = ref('');
         const aiRunning = ref(false);
         const aiProgress = ref('');
         const aiCandidates = ref([]);
+
+        // ---------- 自动打标规则表（对齐桌面 v2.1.0：38 条系统规则 + 自定义 + 关键词候选） ----------
+        const LS_AUTOTAG_DISABLED = 'jsmobile-autotag-disabled';
+        const LS_AUTOTAG_CUSTOM = 'jsmobile-autotag-custom';
+        const disabledRuleNames = ref((() => {
+            try { return JSON.parse(localStorage.getItem(LS_AUTOTAG_DISABLED) || '[]'); } catch (e) { return []; }
+        })());
+        const customAutoTagRules = ref((() => {
+            try { return JSON.parse(localStorage.getItem(LS_AUTOTAG_CUSTOM) || '[]'); } catch (e) { return []; }
+        })());
+        function saveAutoTagConfig() {
+            try {
+                localStorage.setItem(LS_AUTOTAG_DISABLED, JSON.stringify(disabledRuleNames.value));
+                localStorage.setItem(LS_AUTOTAG_CUSTOM, JSON.stringify(customAutoTagRules.value));
+            } catch (e) { /* 忽略 */ }
+        }
+        // 编译后的完整规则表（系统未禁用 + 自定义）；逐条 try/catch，非法正则只跳过该条
+        const compiledRules = computed(() => {
+            const sys = defaultAutoTagRules
+                .filter((r) => !disabledRuleNames.value.includes(r.name))
+                .map((r) => ({ name: r.name, regex: r.regex }));
+            return compileAutoTagRules([...sys, ...customAutoTagRules.value]);
+        });
+        // 第一层漏斗：规则匹配（零成本，命中标签追加到 arr）
+        function applyRuleTags(fullText, arr) {
+            let added = 0;
+            for (const [tag, re] of Object.entries(compiledRules.value)) {
+                try {
+                    if (re.test(fullText) && !arr.includes(tag)) { arr.push(tag); added++; }
+                } catch (e) { /* 单条正则异常跳过 */ }
+            }
+            return added;
+        }
+
+        // 规则表弹窗状态
+        const showAutoTagRules = ref(false);
+        function toggleSystemRule({ name, enabled }) {
+            const i = disabledRuleNames.value.indexOf(name);
+            if (enabled && i >= 0) disabledRuleNames.value.splice(i, 1);
+            else if (!enabled && i < 0) disabledRuleNames.value.push(name);
+            saveAutoTagConfig();
+        }
+        function addCustomRule({ name, regex }) {
+            if (customAutoTagRules.value.some((r) => r.name === name)) { showToast('同名规则已存在'); return; }
+            customAutoTagRules.value.push({ name, regex });
+            saveAutoTagConfig();
+            showSuccessToast('规则已添加');
+        }
+        function removeCustomRule(i) {
+            customAutoTagRules.value.splice(i, 1);
+            saveAutoTagConfig();
+        }
 
         function openAiTools() {
             if (!card.value) { showToast('卡片未加载'); return; }
@@ -1126,18 +1194,25 @@ export default {
                     temperature: 0.2
                 }));
                 let newTags = [];
+                // 第一层漏斗：规则匹配免费先行（对齐桌面 v2.1.0 三层漏斗第二层以 LLM 兜底）
+                const fullText = [d.description, d.personality, d.scenario, d.first_mes, d.mes_example]
+                    .filter(Boolean).join('\n');
+                applyRuleTags(fullText, newTags);
+                const ruleHit = newTags.length;
                 const jsonMatch = reply.replace(/```json/gi, '').replace(/```/g, '').match(/\[[\s\S]*\]/);
                 if (jsonMatch) {
-                    try { newTags = JSON.parse(jsonMatch[0]); } catch (e) { /* 落兜底 */ }
+                    try { newTags = newTags.concat(JSON.parse(jsonMatch[0])); } catch (e) { /* 落兜底 */ }
                 }
-                if (!Array.isArray(newTags) || !newTags.length) {
-                    newTags = reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean);
+                if (!jsonMatch) {
+                    newTags = newTags.concat(reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean));
                 }
                 if (newTags.length) {
+                    const uniq = [...new Set(newTags.map((t) => String(t).trim()).filter(Boolean))];
                     const tagArr = tags.value;
-                    newTags.forEach(t => { const c = String(t).trim(); if (c && !tagArr.includes(c)) tagArr.push(c); });
+                    let addedCount = 0;
+                    uniq.forEach((t) => { if (!tagArr.includes(t)) { tagArr.push(t); addedCount++; } });
                     saved.value = false;
-                    showSuccessToast(`AI 打标完成，新增 ${newTags.length} 个标签`);
+                    showSuccessToast(`打标完成：规则命中 ${ruleHit} 个，共新增 ${addedCount} 个标签`);
                 } else {
                     showToast('AI 未返回有效标签');
                 }
@@ -1242,6 +1317,7 @@ export default {
             availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
             fetchAvailableModels, pickModel, onApiTypeChange,
             showAiTools, aiMode, aiRunning, aiProgress, aiCandidates, openAiTools,
+            showAutoTagRules, disabledRuleNames, customAutoTagRules, toggleSystemRule, addCustomRule, removeCustomRule,
             addAICandidate, removeAICandidate, startAiTagging, startAiTranslate, startAiRefactor
         };
     }
