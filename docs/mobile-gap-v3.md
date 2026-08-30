@@ -4,6 +4,14 @@
 > 桌面端：origin/master = 095b5d5（v2.1.0，force push，31组件/19组合式/47单测，已删除 js/mobile 与 android/ —— 移动端代码迁往 jskapp 仓库）
 > 移动端：本地 master = fa38cf0（P0-P4 + S1-S9 + 第二轮 A-D/F 组全部完成，46 测全绿）
 > ⚠️ jskapp 远程另有一条平行移动端实现（8b4a1bf "V3 方案阶段 0-5"），与本地已大幅分叉，见 §五。
+>
+> **✅ 第三轮迁移执行记录（2026-08-30 下午，第 1-5 项全部完成，构建过/46测全绿）**
+> 1. ✅ 中文分词搜索：searchIndex.js（已修复方括号 bug 版）+ useSearch.js 桌面同款引擎接入 CardLibraryView（倒排索引 + 多词 AND + tag:/author:/file:/wb: 高级语法 + 9种排序内核）
+> 2. ✅ AI 打标规则表：defaultAutoTagRules 38 条系统规则 + AutoTagRulesModal（系统规则开关/自定义规则/关键词候选，localStorage 持久化）+ 三层漏斗第一层免费先行（applyRuleTags 规则命中后 LLM 兜底）
+> 3. ✅ PNG 快扫 + 写盘降噪：pngParser.js 前 1MB 策略版已迁移；移动端显式保存模式天然无重复写盘
+> 4. ✅ 9 种排序：CardLibraryView sortBy 下拉（本地文件最新/导入/创建/修改/A-Z 正倒序/大小双序/Token），拼音+数字自然排序，稳定链兜底；Java 层补 size 字段，前端补 _ctime/_importTime 回退
+> 5. ✅ readTextBatch + 内嵌缓存：Java 层新增 readTextBatch（单次 IPC 批量拉 json）；库目录 .jskzx_cache.json 缓存解析结果（path+mtime+size 指纹，上限 12000 条，扫描器跳过 .jskzx 前缀）→ 二次启动秒开
+> 6. ⏳ 预设管理引擎（大工程单独立项）　7. ⏳ 内容指纹查重　8. ⏳ 向量引擎（待桌面 WASM 实测后再定）
 
 ---
 
