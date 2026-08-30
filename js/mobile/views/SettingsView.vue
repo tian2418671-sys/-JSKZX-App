@@ -82,6 +82,13 @@
                     @click="$router.push('/scan')"
                 />
                 <van-cell
+                    title="⚙️ 预设管理"
+                    label="管理酒馆 Presets 目录 JSON 预设（扫描/编辑/重命名/复制/删除）"
+                    icon="apps-o"
+                    is-link
+                    @click="$router.push('/presets')"
+                />
+                <van-cell
                     title="回收站"
                     label="浏览并恢复已删除的卡片"
                     icon="delete-o"

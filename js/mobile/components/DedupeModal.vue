@@ -7,8 +7,15 @@
         @update:show="(v) => emit('update:modelValue', v)"
     >
         <div class="ddm-head">
-            <span class="ddm-title">{{ mode === 'card' ? '角色卡查重' : '世界书查重' }}</span>
+            <span class="ddm-title">{{ mode === 'card' ? '角色卡查重' : mode === 'worldbook' ? '世界书查重' : '内容指纹查重（跨名称）' }}</span>
             <van-icon name="cross" size="18" @click="emit('update:modelValue', false)" />
+        </div>
+
+        <!-- 模式切换 Tab -->
+        <div class="ddm-tabs">
+            <div class="ddm-tab" :class="{ active: mode === 'card' }" @click="$emit('switch-mode', 'card')">同名查重</div>
+            <div class="ddm-tab" :class="{ active: mode === 'content' }" @click="$emit('switch-mode', 'content')">内容指纹</div>
+            <div class="ddm-tab" :class="{ active: mode === 'worldbook' }" @click="$emit('switch-mode', 'worldbook')">世界书</div>
         </div>
 
         <div class="ddm-body">
@@ -25,6 +32,7 @@
                 <div class="ddm-group-title">
                     {{ group.name }}
                     <van-tag round type="danger">{{ group.cards.length }} 个版本</van-tag>
+                    <van-tag v-if="group.kind === 'content'" round type="warning" plain>内容指纹聚类</van-tag>
                 </div>
 
                 <div
@@ -78,9 +86,9 @@ export default {
     components: { DiffModal },
     props: {
         modelValue: { type: Boolean, default: false },
-        mode: { type: String, default: 'card' } // 'card' | 'worldbook'
+        mode: { type: String, default: 'card' } // 'card' | 'worldbook' | 'content'
     },
-    emits: ['update:modelValue', 'cleaned'],
+    emits: ['update:modelValue', 'cleaned', 'switch-mode'],
     setup(props, { emit }) {
         const scanning = ref(false);
         const pending = ref('');
@@ -99,10 +107,168 @@ export default {
             return kArr.map((k) => String(k).trim().toLowerCase()).filter(Boolean);
         }
 
+        // ================= 内容指纹查重（跨名称，对齐桌面 v2.1.0 MinHash+LSH 引擎） =================
+        // 1) 提取可比对正文
+        const extractContentText = (item) => {
+            const d = (item.data && (item.data.data || item.data)) || {};
+            return [d.description, d.personality, d.scenario, d.first_mes, d.mes_example]
+                .filter(Boolean).join('\n');
+        };
+        // 2) 文本规范化（去空白/标点，转小写）
+        const normalizeText = (t) => String(t || '')
+            .replace(/\s+/g, ' ')
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .toLowerCase()
+            .trim();
+        // 3) 字符 4-gram shingle 集合
+        const getShingles = (text) => {
+            const set = new Set();
+            for (let i = 0; i + 4 <= text.length; i++) set.add(text.slice(i, i + 4));
+            return set;
+        };
+        // 4) 确定性 MinHash 哈希族（固定种子，同一文本签名稳定）
+        const MINHASH_HASHES = 96;
+        const LSH_BANDS = 8;
+        const LSH_ROWS = MINHASH_HASHES / LSH_BANDS; // 12
+        const minhashSeeds = (() => {
+            const seeds = [];
+            let s = 0x9e3779b9;
+            for (let i = 0; i < MINHASH_HASHES; i++) {
+                s = (s * 1103515245 + 12345) & 0x7fffffff;
+                seeds.push(s);
+            }
+            return seeds;
+        })();
+        const hashString = (str, seed) => {
+            let h = seed >>> 0;
+            for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+            return h;
+        };
+        const computeMinHash = (shingles) => {
+            const sig = new Array(MINHASH_HASHES).fill(0x7fffffff);
+            shingles.forEach((sh) => {
+                for (let i = 0; i < MINHASH_HASHES; i++) {
+                    const h = hashString(sh, minhashSeeds[i]);
+                    if (h < sig[i]) sig[i] = h;
+                }
+            });
+            return sig;
+        };
+        // 5) Jaccard 估计 = 签名相同分量比
+        const estimateSimilarity = (a, b) => {
+            let same = 0;
+            for (let i = 0; i < a.length; i++) if (a[i] === b[i]) same++;
+            return same / a.length;
+        };
+        // 6) LSH band 分桶 key
+        const bandKey = (sig, band) => {
+            let key = '';
+            for (let r = 0; r < LSH_ROWS; r++) key += sig[band * LSH_ROWS + r].toString(16).padStart(8, '0');
+            return key;
+        };
+        // 7) Union-Find 并查集
+        const unionFind = (n) => {
+            const parent = Array.from({ length: n }, (_, i) => i);
+            const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+            const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; };
+            return { find, union };
+        };
+
+        async function runContentScan() {
+            const items = [...mobileLibrary.library];
+            if (!items.length) { emptyText.value = '卡片库为空，无法进行版本查重'; return; }
+
+            // 规范化文本，内容过短（<20 字符）无法可靠判定，跳过
+            const valid = [];
+            items.forEach((item, idx) => {
+                const text = normalizeText(extractContentText(item));
+                if (text.length < 20) return;
+                valid.push({ item, idx, text });
+            });
+            if (valid.length < 2) {
+                emptyText.value = '未发现可判定的内容重复项（内容过短的项已跳过）';
+                return;
+            }
+
+            // MinHash 签名 + LSH 候选 + 精确相似度确认（阈值 85%）
+            const sigs = valid.map((v) => computeMinHash(getShingles(v.text)));
+            const buckets = new Map();
+            valid.forEach((_, i) => {
+                for (let b = 0; b < LSH_BANDS; b++) {
+                    const k = bandKey(sigs[i], b);
+                    if (!buckets.has(k)) buckets.set(k, []);
+                    buckets.get(k).push(i);
+                }
+            });
+            const THRESHOLD = 0.85;
+            const uf = unionFind(valid.length);
+            const seenPairs = new Set();
+            buckets.forEach((list) => {
+                if (list.length < 2) return;
+                for (let x = 0; x < list.length; x++) {
+                    for (let y = x + 1; y < list.length; y++) {
+                        const a = list[x], b = list[y];
+                        const pk = a < b ? a + ':' + b : b + ':' + a;
+                        if (seenPairs.has(pk)) continue;
+                        seenPairs.add(pk);
+                        if (estimateSimilarity(sigs[a], sigs[b]) >= THRESHOLD) uf.union(a, b);
+                    }
+                }
+            });
+
+            // 聚类分组（单例忽略）
+            const clusters = new Map();
+            valid.forEach((_, i) => {
+                const root = uf.find(i);
+                if (!clusters.has(root)) clusters.set(root, []);
+                clusters.get(root).push(i);
+            });
+            const rawGroups = [];
+            clusters.forEach((members) => {
+                if (members.length >= 2) rawGroups.push(members.map((i) => valid[i]));
+            });
+            if (!rawGroups.length) {
+                emptyText.value = '未发现内容高度相似的重复项 🎉';
+                return;
+            }
+
+            // 批量获取物理状态用于展示
+            const flatPaths = rawGroups.flat().map((v) => v.item.path);
+            let stats = {};
+            try {
+                const sr = await window.electronAPI.getFileStats(flatPaths);
+                if (sr && sr.success) stats = sr.data || {};
+            } catch (e) { /* 降级无物理状态 */ }
+
+            groups.value = rawGroups.map((list) => {
+                list.forEach((v) => {
+                    const st = stats[v.item.path] || {};
+                    v._sizeKb = st.size ? (st.size / 1024).toFixed(1) : '?';
+                    v._mtime = st.mtimeMs || Date.now();
+                    v._dateStr = new Date(v._mtime).toLocaleString('zh-CN', {
+                        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                    });
+                    v._tokens = estimateTokens(v.text);
+                });
+                // 内容最长者排最前（更可能是完整版）
+                list.sort((a, b) => b.text.length - a.text.length);
+                const master = list[0];
+                list.forEach((v) => {
+                    v._simPct = v === master ? 100 : Math.round(estimateSimilarity(v.sig, master.sig) * 100);
+                    const d = (v.item.data && (v.item.data.data || v.item.data)) || {};
+                    v._name = d.name || v.item.name || v.item.path.split(/[\/]/).pop();
+                    v._diffInfo = v === master ? '👑 内容最完整（推荐保留）'
+                        : (v._simPct >= 98 ? '🧬 内容几乎完全一致' : '⚠️ 高度相似，细节有差异');
+                });
+                return { name: master._name, cards: list, kind: 'content' };
+            });
+        }
+
         async function runScan() {
             scanning.value = true;
             groups.value = [];
             try {
+                if (props.mode === 'content') { await runContentScan(); return; }
                 const list = props.mode === 'card'
                     ? [...mobileLibrary.library]
                     : mobileLibrary.worldbooks.map((w) => ({ ...w }));
@@ -126,7 +292,7 @@ export default {
                     return;
                 }
 
-                // 2. 批量获取物理文件状态
+                // 2. 批量获取物理文件状态（内容模式已在 runContentScan 内处理,此处不会到达）
                 const paths = potentials.flatMap(([, arr]) => arr.map((it) => it.path));
                 let stats = {};
                 try {
@@ -192,6 +358,9 @@ export default {
         }
 
         function metaText(item) {
+            if (props.mode === 'content') {
+                return `🧬 相似度 ${item._simPct}% · ${item._sizeKb} KB · ${item._tokens} tokens`;
+            }
             return props.mode === 'card'
                 ? `${item._tokens} tokens`
                 : `${item._entryCount} 条` + (item._size ? ' · ' + fmtSize(item._size) : '');
@@ -368,6 +537,25 @@ export default {
     border-bottom: 1px solid var(--van-gray-3, #ebedf0);
 }
 .ddm-title { font-size: 16px; font-weight: 600; }
+.ddm-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--van-gray-2, #f2f3f5);
+}
+.ddm-tab {
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--van-gray-6, #969799);
+    background: var(--van-gray-1, #f7f8fa);
+    cursor: pointer;
+}
+.ddm-tab.active {
+    color: #fff;
+    background: var(--van-primary-color, #1989fa);
+    font-weight: 600;
+}
 .ddm-body { flex: 1; overflow-y: auto; padding: 10px 12px 18px; }
 .ddm-status { padding: 48px 0; text-align: center; }
 .ddm-group {

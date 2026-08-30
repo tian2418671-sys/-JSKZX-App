@@ -9,7 +9,8 @@ const routes = [
     { path: '/card', name: 'cardDetail', component: () => import('./views/CardDetailView.vue'), meta: { title: '卡片详情', tabbar: false } },
     { path: '/worldbook', name: 'worldbook', component: () => import('./views/WorldbookView.vue'), meta: { title: '世界书' } },
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { title: '设置' } },
-    { path: '/scan', name: 'scan', component: () => import('./views/DiskScanView.vue'), meta: { title: '磁盘扫描', tabbar: false } }
+    { path: '/scan', name: 'scan', component: () => import('./views/DiskScanView.vue'), meta: { title: '磁盘扫描', tabbar: false } },
+    { path: '/presets', name: 'presets', component: () => import('./views/PresetsView.vue'), meta: { title: '预设管理', tabbar: false } }
 ];
 
 const router = createRouter({

@@ -179,7 +179,7 @@
         </van-popup>
 
         <!-- 查重弹窗(角色卡) -->
-        <DedupeModal v-model:show="showDedupe" mode="card" @cleaned="onDedupeCleaned" />
+        <DedupeModal v-model:show="showDedupe" :mode="dedupeMode" @cleaned="onDedupeCleaned" @switch-mode="dedupeMode = $event" />
 
         <!-- 分组管理 -->
         <van-popup v-model:show="showGroupManage" position="bottom" round>
@@ -278,6 +278,7 @@ export default {
         const showGroupSheet = ref(false);
         const showExportSheet = ref(false);
         const showDedupe = ref(false);
+        const dedupeMode = ref('card'); // 'card' | 'content' | 'worldbook'
         // 增量渲染:首次只渲染 24 张,触底每次加 16 张
         const BATCH_STEP = 16;
         const renderCount = ref(24);
@@ -791,7 +792,7 @@ export default {
             showGraph, jumpFromGraph, mobileLibrary,
             showUrlImport, urlInput, urlImporting, doUrlImport, onUrlImportClose,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
-            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete
+            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, dedupeMode
         };
     }
 };

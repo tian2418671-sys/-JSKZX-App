@@ -17,6 +17,27 @@ const Keystore = registerPlugin('KeystorePlugin');
 // 虚拟库根:渲染层眼中的"绝对路径"前缀(与桌面 file:// 语义对齐)
 export const LIBRARY_ROOT = '/library';
 
+/**
+ * 智能校验:是否为酒馆预设 JSON(OpenAI Settings / Presets 目录下的 .json)。
+ * 对齐桌面 main.js isValidPreset:排除角色卡/世界书,要求含预设常见字段。
+ */
+function isValidPreset(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+    // 排除角色卡
+    if (data.spec === 'chara_card_v2' || data.spec === 'chara_card_v3') return false;
+    if (data.data && (data.data.description !== undefined || data.data.first_mes !== undefined)) return false;
+    // 排除世界书
+    if (data.entries && typeof data.entries === 'object') return false;
+    if (data.extensions && data.extensions.world_book) return false;
+    // 预设常见字段(prompts/prompt_order/temperature/max_tokens 等)
+    const presetKeys = ['prompts', 'prompt_order', 'temperature', 'max_tokens', 'max_context', 'rep_pen', 'openai_max_tokens', 'wrap_in_quotes', 'names_behavior'];
+    const hasPresetField = presetKeys.some((k) => k in data);
+    if (!hasPresetField) return false;
+    // prompts 必须是数组或对象
+    if (data.prompts !== undefined && !Array.isArray(data.prompts) && typeof data.prompts !== 'object') return false;
+    return true;
+}
+
 /** 把渲染层路径换算为库内相对路径(供 SAF 寻址);路径不在库根内则不合法 */
 export function toRelativePath(p) {
     if (!p || typeof p !== 'string') return null;
@@ -1231,6 +1252,81 @@ export const androidImpl = {
             return { success: !!(res && res.success), notExist: !!(res && res.notExist), error: (res && !res.success && res.error) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '删除失败' };
+        }
+    },
+
+    /**
+     * ============ 预设管理(酒馆 Presets 目录,对齐桌面 usePresets) ============
+     * 预设 = OpenAI Settings JSON(prompts/prompt_order/temperature 等)。
+     * 完整复用外部世界书目录的 SAF 桥接(scanWbTree/readWbText/writeWbText/renameWbFile/deleteWbFile),
+     * 仅在 JS 层加预设智能校验(排除世界书/角色卡)。
+     */
+    async scanExternalPresets(treeUri) {
+        if (!treeUri) return { presets: [], error: '未选择预设目录' };
+        try {
+            const scan = await LibraryFs.scanWbTree({ treeUri });
+            if (!scan || !scan.success) return { presets: [], error: (scan && scan.error) || '扫描失败' };
+            const files = scan.files || [];
+            const presets = [];
+            for (const f of files) {
+                try {
+                    const r = await LibraryFs.readWbText({ treeUri, path: f.path });
+                    if (!r || !r.success || !r.value) continue;
+                    const parsed = JSON.parse(r.value);
+                    if (!isValidPreset(parsed)) continue;
+                    presets.push({
+                        path: 'expst://' + f.path,
+                        treeUri,
+                        rel: f.path,
+                        name: f.name,
+                        data: parsed,
+                        external: true
+                    });
+                } catch (e) { /* 跳过损坏/非标准 JSON */ }
+            }
+            return { presets, title: scan.title || '', error: undefined };
+        } catch (e) {
+            return { presets: [], error: (e && e.message) || '扫描失败' };
+        }
+    },
+    /** 保存外部预设(整包覆写) */
+    async saveExternalPreset({ treeUri, rel, data }) {
+        if (!treeUri || !rel) return { success: false, error: '缺少目录授权' };
+        try {
+            const res = await LibraryFs.writeWbText({ treeUri, path: rel, content: JSON.stringify(data, null, 2) });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '保存失败' };
+        }
+    },
+    /** 重命名外部预设物理文件 */
+    async renameExternalPreset({ treeUri, rel, newName }) {
+        if (!treeUri || !rel || !newName) return { success: false, error: '参数缺失' };
+        try {
+            const res = await LibraryFs.renameWbFile({ treeUri, path: rel, newName });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '重命名失败' };
+        }
+    },
+    /** 删除外部预设物理文件 */
+    async deleteExternalPreset({ treeUri, rel }) {
+        if (!treeUri || !rel) return { success: false, error: '参数缺失' };
+        try {
+            const res = await LibraryFs.deleteWbFile({ treeUri, path: rel });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '删除失败' };
+        }
+    },
+    /** 新建预设文件 */
+    async createExternalPreset({ treeUri, rel, data }) {
+        if (!treeUri || !rel) return { success: false, error: '缺少目录授权' };
+        try {
+            const res = await LibraryFs.writeWbText({ treeUri, path: rel, content: JSON.stringify(data, null, 2) });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '创建失败' };
         }
     },
     /** 创建世界书:在库内新建 .json 文件并写入 */
