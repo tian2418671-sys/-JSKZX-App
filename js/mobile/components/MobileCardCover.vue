@@ -15,6 +15,18 @@
  */
 const coverCache = new Map();
 
+/** 清除指定卡片或全部封面缓存(换卡图后强制重新加载) */
+export function clearCoverCache(cardPath) {
+    if (cardPath) {
+        const url = coverCache.get(cardPath);
+        if (url) { try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ } }
+        coverCache.delete(cardPath);
+    } else {
+        coverCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ } });
+        coverCache.clear();
+    }
+}
+
 export default {
     name: 'MobileCardCover',
     props: {

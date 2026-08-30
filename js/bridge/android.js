@@ -503,8 +503,10 @@ export const androidImpl = {
     async deleteFile(filePath) {
         const rel = toRelativePath(filePath);
         if (rel === null) return { success: false, error: '路径无效' };
-        const res = await LibraryFs.delete({ path: rel });
-        return { success: !!(res && res.success), error: (res && res.error) };
+        // 对齐桌面语义:软删除到库根 .trash(支持在回收站找回)
+        const { failed } = await trashByMove([rel]);
+        if (!failed.length) return { success: true };
+        return { success: false, error: (failed[0] && failed[0].error) || '删除失败' };
     },
     // ---------- 配置持久化 ----------
     async loadAppConfig() {
@@ -951,6 +953,24 @@ export const androidImpl = {
             return { success: false, error: (e && e.message) || '复制文件失败' };
         }
     },
+    /** M4.5 弹出系统图片选择器,返回 { success, base64, mime } 或 { success:false, error } */
+    async pickImage() {
+        try {
+            const res = await LibraryFs.pickImage({});
+            if (!res || !res.success) return { success: false, error: (res && (res.error || res.message)) || '未选择图片' };
+            return { success: true, base64: res.base64, mime: res.mime || 'image/png' };
+        } catch (e) {
+            const msg = String((e && e.message) || e || '');
+            if (/取消/i.test(msg)) return { success: false, cancelled: true };
+            return { success: false, error: msg || '选择图片失败' };
+        }
+    },
+    /** M4.5 换卡图:pickImage → replaceCardImage 一站式调用,返回 { success, newPath, format } */
+    async changeCardImage(filePath) {
+        const pick = await this.pickImage();
+        if (!pick.success) return pick;
+        return await this.replaceCardImage({ filePath, imageBase64: pick.base64, imageType: pick.mime });
+    },
     /** M4 批量导出世界书:多选世界书文件打包 ZIP → 下载目录 → 系统分享(filePaths 为库根相对路径) */
     async exportWorldbooksBatch(filePaths) {
         return await this.exportBatchPackage(filePaths);
@@ -1115,6 +1135,96 @@ export const androidImpl = {
             return { success: false, error: (e && e.message) || '保存失败' };
         }
     },
+    /**
+     * ============ 外部世界书目录(独立 SAF 树) ============
+     * 桌面端「打开世界书目录」的移动端等价:选择一个任意目录树,扫描/读写其中的世界书 .json。
+     * 授权为持久化授权(原生 pickPushFolder 内已 takePersistableUriPermission),
+     * uri 字符串由 JS 侧持久化到 AppConfig,重启后可直接复用无需重新选择。
+     */
+    async pickExternalWbDir() {
+        try {
+            const res = await LibraryFs.pickPushFolder();
+            return { success: !!(res && res.success), uri: res && res.uri, title: res && res.title, error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '选择目录失败' };
+        }
+    },
+    /** 扫描外部目录树中的世界书 .json(排除角色卡,要求含 entries) */
+    async scanExternalWorldbooks(treeUri) {
+        if (!treeUri) return { worldbooks: [], error: '未选择世界书目录' };
+        try {
+            const scan = await LibraryFs.scanWbTree({ treeUri });
+            if (!scan || !scan.success) return { worldbooks: [], error: (scan && scan.error) || '扫描失败' };
+            const files = scan.files || [];
+            const worldbooks = [];
+            for (const f of files) {
+                try {
+                    const r = await LibraryFs.readWbText({ treeUri, path: f.path });
+                    if (!r || !r.success || !r.value) continue;
+                    const parsed = JSON.parse(r.value);
+                    // 排除角色卡(与桌面 scanWorldbooks 同口径)
+                    if (parsed.spec === 'chara_card_v2' || parsed.spec === 'chara_card_v3') continue;
+                    if (parsed.data && (parsed.data.description !== undefined || parsed.data.first_mes !== undefined)) continue;
+                    const wb = (parsed.extensions && parsed.extensions.world_book) || parsed;
+                    if (!wb || typeof wb.entries !== 'object' || wb.entries === null) continue;
+                    // 归一化:extensions.world_book 包装形态记录标志,保存时按原结构回写
+                    worldbooks.push({
+                        path: 'extwb://' + f.path, // 外部世界书虚拟路径(与库内 /library 前缀区分)
+                        treeUri,
+                        rel: f.path,
+                        name: f.name,
+                        wb,
+                        wrapped: !!(parsed.extensions && parsed.extensions.world_book),
+                        external: true
+                    });
+                } catch (e) { /* 跳过损坏/非标准 JSON */ }
+            }
+            return { worldbooks, title: scan.title || '', error: undefined };
+        } catch (e) {
+            return { worldbooks: [], error: (e && e.message) || '扫描失败' };
+        }
+    },
+    /** 保存外部世界书(按原结构回写:wrapped 时重新包 extensions.world_book) */
+    async saveExternalWorldbook({ treeUri, rel, wb, wrapped }) {
+        if (!treeUri || !rel) return { success: false, error: '缺少目录授权' };
+        try {
+            const body = wrapped ? { extensions: { world_book: wb } } : wb;
+            const res = await LibraryFs.writeWbText({ treeUri, path: rel, content: JSON.stringify(body, null, 2) });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '保存失败' };
+        }
+    },
+    /** 在外部目录树中新建世界书文件 */
+    async createExternalWorldbook({ treeUri, rel, wb }) {
+        if (!treeUri || !rel) return { success: false, error: '缺少目录授权' };
+        try {
+            const res = await LibraryFs.writeWbText({ treeUri, path: rel, content: JSON.stringify(wb, null, 2) });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '创建失败' };
+        }
+    },
+    /** 重命名外部世界书物理文件 */
+    async renameExternalWbFile({ treeUri, rel, newName }) {
+        if (!treeUri || !rel || !newName) return { success: false, error: '参数缺失' };
+        try {
+            const res = await LibraryFs.renameWbFile({ treeUri, path: rel, newName });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '重命名失败' };
+        }
+    },
+    /** 删除外部世界书物理文件(物理删除;外部树无库根回收站语义,调用方先确认) */
+    async deleteExternalWbFile({ treeUri, rel }) {
+        if (!treeUri || !rel) return { success: false, error: '参数缺失' };
+        try {
+            const res = await LibraryFs.deleteWbFile({ treeUri, path: rel });
+            return { success: !!(res && res.success), notExist: !!(res && res.notExist), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '删除失败' };
+        }
+    },
     /** 创建世界书:在库内新建 .json 文件并写入 */
     async createWorldbook({ path, name, wb }) {
         const rel = toRelativePath(path);
@@ -1214,6 +1324,71 @@ export const androidImpl = {
             return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '无法打开回收站' };
+        }
+    },
+    /** 列出回收站内容:递归扫描 .trash,返回 { success, items:[{name, path, relPath, size, mtimeMs}] } */
+    async listTrash() {
+        try {
+            const items = [];
+            const walk = async (dirRel) => {
+                const scanRes = await LibraryFs.scan({ path: dirRel });
+                const files = (scanRes && scanRes.files) || [];
+                for (const f of files) {
+                    const rel = dirRel ? `${dirRel}/${f.name}` : f.name;
+                    if (f.isDirectory) {
+                        await walk(rel);
+                    } else {
+                        items.push({
+                            name: f.name,
+                            path: LIBRARY_ROOT + '/' + rel,
+                            relPath: rel.slice(TRASH_DIR.length + 1),
+                            size: f.size || 0,
+                            mtimeMs: f.mtime || 0
+                        });
+                    }
+                }
+            };
+            await walk(TRASH_DIR);
+            items.sort((a, b) => b.mtimeMs - a.mtimeMs);
+            return { success: true, items };
+        } catch (e) {
+            return { success: false, items: [], error: (e && e.message) || '读取回收站失败' };
+        }
+    },
+    /** 恢复回收站条目:把 .trash/<relPath> 移回原相对路径 */
+    async restoreTrashItem(trashPath) {
+        const rel = toRelativePath(trashPath);
+        if (!rel || !rel.startsWith(TRASH_DIR + '/')) return { success: false, error: '非法回收站路径' };
+        const origRel = rel.slice(TRASH_DIR.length + 1);
+        try {
+            const parentIdx = origRel.lastIndexOf('/');
+            if (parentIdx > 0) {
+                const parentDir = origRel.slice(0, parentIdx);
+                await LibraryFs.mkdir({ path: parentDir }).catch(() => {});
+            }
+            const res = await LibraryFs.move({ path: rel, newPath: origRel });
+            if (res && res.success) return { success: true };
+            // 移动失败:目标目录需先创建后重试
+            const parentDir = parentIdx > 0 ? origRel.slice(0, parentIdx) : '';
+            if (parentDir) {
+                const mk = await LibraryFs.mkdir({ path: parentDir });
+                if (mk && mk.success) {
+                    const retry = await LibraryFs.move({ path: rel, newPath: origRel });
+                    if (retry && retry.success) return { success: true };
+                }
+            }
+            return { success: false, error: (res && res.error) || '恢复失败' };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '恢复失败' };
+        }
+    },
+    /** 清空回收站:递归删除 .trash 目录内容 */
+    async emptyTrash() {
+        try {
+            const res = await LibraryFs.delete({ path: TRASH_DIR, recursive: true });
+            return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '清空回收站失败' };
         }
     },
     /** M4 扫描收编:把扫描结果中勾选的文件复制入库(destFolder 为库根或分组相对路径),同名跳过不覆盖 */

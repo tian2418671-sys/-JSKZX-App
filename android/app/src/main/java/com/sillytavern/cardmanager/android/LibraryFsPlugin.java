@@ -156,6 +156,44 @@ public class LibraryFsPlugin extends Plugin {
         startActivityForResult(call, intent, "pickFolderResult");
     }
 
+    /**
+     * M4.5 弹出系统图片选择器(单选,返回 base64 + MIME 类型)。
+     * 用于「换卡图」:选中新封面后,JS 侧把 base64 传给 replaceCardImage。
+     */
+    @PluginMethod()
+    public void pickImage(final PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        startActivityForResult(call, intent, "pickImageResult");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void pickImageResult(PluginCall call, ActivityResult result) {
+        if (result == null || result.getResultCode() != android.app.Activity.RESULT_OK
+                || result.getData() == null) {
+            call.reject("用户取消选择");
+            return;
+        }
+        Uri uri = result.getData().getData();
+        if (uri == null) {
+            call.reject("未获取到图片");
+            return;
+        }
+        String b64 = readStream(uri, true, 20 * 1024 * 1024);
+        if (b64 == null) {
+            call.reject("读取图片失败或文件过大(>20MB)");
+            return;
+        }
+        String mime = getContext().getContentResolver().getType(uri);
+        if (mime == null || mime.isEmpty()) mime = "image/png";
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("base64", b64);
+        ret.put("mime", mime);
+        call.resolve(ret);
+    }
+
     /** pickFolder 回调;call 由 Capacitor 在 @ActivityCallback 返回后自动 resolve/reject */
     @com.getcapacitor.annotation.ActivityCallback
     private void pickFolderResult(PluginCall call, ActivityResult result) {
@@ -1452,6 +1490,213 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("无法打开回收站: " + e.getMessage());
+        }
+    }
+
+    // endregion
+
+    // region 外部世界书目录(独立 SAF 树:扫描/读/写/重命名/删除)
+
+    /** 外部 SAF 树内按相对路径定位文件(越权一律 null) */
+    private DocumentFile resolveWithin(DocumentFile root, String rel) {
+        if (root == null || rel == null) return null;
+        String norm = rel.replace('\\', '/').replaceAll("^/+", "");
+        if (norm.isEmpty()) return root;
+        DocumentFile cur = root;
+        for (String seg : norm.split("/")) {
+            if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) return null;
+            cur = cur.findFile(seg);
+            if (cur == null) return null;
+        }
+        return cur;
+    }
+
+    /**
+     * 递归扫描外部目录树的 .json 文件(世界书候选),返回相对路径列表。
+     * 跳过隐藏目录与 >10MB 大文件,单次上限 3000 个文件。
+     */
+    @PluginMethod()
+    public void scanWbTree(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        if (treeUri == null || treeUri.isEmpty()) {
+            call.reject("缺少目录授权");
+            return;
+        }
+        try {
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            if (root == null || !root.isDirectory() || !root.canRead()) {
+                JSObject err = new JSObject();
+                err.put("success", false);
+                err.put("error", "目录不可读(授权可能已失效)");
+                call.resolve(err);
+                return;
+            }
+            JSArray files = new JSArray();
+            java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
+            stack.push(root);
+            long collected = 0;
+            while (!stack.isEmpty()) {
+                DocumentFile dir = stack.pop();
+                DocumentFile[] children = dir.listFiles();
+                if (children == null) continue;
+                for (DocumentFile c : children) {
+                    if (c.isDirectory()) {
+                        String nm = c.getName();
+                        if (nm != null && !nm.startsWith(".")) stack.push(c);
+                        continue;
+                    }
+                    if (collected >= 3000) break;
+                    String n = c.getName();
+                    if (n == null) continue;
+                    if (!n.toLowerCase(Locale.ROOT).endsWith(".json")) continue;
+                    if (c.length() > 10L * 1024 * 1024) continue;
+                    String rel = relPathWithin(root, c);
+                    if (rel == null) continue;
+                    JSObject o = new JSObject();
+                    o.put("path", rel);
+                    o.put("name", n);
+                    o.put("size", c.length());
+                    o.put("mtime", queryLastModified(c));
+                    files.put(o);
+                    collected++;
+                }
+            }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("title", root.getName());
+            ret.put("count", collected);
+            ret.put("files", files);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("扫描失败: " + e.getMessage());
+        }
+    }
+
+    /** 读取外部树内指定相对路径文件的文本内容 */
+    @PluginMethod()
+    public void readWbText(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        String rel = call.getString("path");
+        if (treeUri == null || rel == null) {
+            call.reject("参数缺失");
+            return;
+        }
+        try {
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            DocumentFile f = resolveWithin(root, rel);
+            if (f == null || !f.isFile() || !f.canRead()) {
+                call.reject("文件不存在或不可读");
+                return;
+            }
+            String text = readStream(f.getUri(), false, 10 * 1024 * 1024);
+            if (text == null) {
+                call.reject("读取失败或文件过大");
+                return;
+            }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("value", text);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("读取失败: " + e.getMessage());
+        }
+    }
+
+    /** 写入外部树内指定相对路径文件(不存在则创建,父目录必须存在) */
+    @PluginMethod()
+    public void writeWbText(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        String rel = call.getString("path");
+        String content = call.getString("content");
+        if (treeUri == null || rel == null || content == null) {
+            call.reject("参数缺失");
+            return;
+        }
+        try {
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            if (root == null || !root.canWrite()) {
+                call.reject("目录不可写(授权可能已失效)");
+                return;
+            }
+            DocumentFile f = resolveWithin(root, rel);
+            if (f == null) {
+                String norm = rel.replace('\\', '/').replaceAll("^/+", "");
+                int idx = norm.lastIndexOf('/');
+                DocumentFile parent = idx > 0 ? resolveWithin(root, norm.substring(0, idx)) : root;
+                String name = idx > 0 ? norm.substring(idx + 1) : norm;
+                if (parent == null || !parent.isDirectory() || name.isEmpty()) {
+                    call.reject("父目录不存在或文件名无效");
+                    return;
+                }
+                f = parent.createFile("application/json", name);
+                if (f == null) {
+                    call.reject("创建文件失败");
+                    return;
+                }
+            }
+            boolean ok = writeStream(f.getUri(), content);
+            JSObject ret = new JSObject();
+            ret.put("success", ok);
+            ret.put("error", ok ? JSObject.NULL : "写入失败");
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("写入失败: " + e.getMessage());
+        }
+    }
+
+    /** 重命名外部树内文件 */
+    @PluginMethod()
+    public void renameWbFile(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        String rel = call.getString("path");
+        String newName = call.getString("newName");
+        if (treeUri == null || rel == null || newName == null || newName.isEmpty()) {
+            call.reject("参数缺失");
+            return;
+        }
+        try {
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            DocumentFile f = resolveWithin(root, rel);
+            if (f == null || !f.isFile()) {
+                call.reject("文件不存在");
+                return;
+            }
+            boolean ok = f.renameTo(newName);
+            JSObject ret = new JSObject();
+            ret.put("success", ok);
+            ret.put("error", ok ? JSObject.NULL : "重命名失败");
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("重命名失败: " + e.getMessage());
+        }
+    }
+
+    /** 删除外部树内文件(物理删除,由调用方先做确认) */
+    @PluginMethod()
+    public void deleteWbFile(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        String rel = call.getString("path");
+        if (treeUri == null || rel == null) {
+            call.reject("参数缺失");
+            return;
+        }
+        try {
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            DocumentFile f = resolveWithin(root, rel);
+            if (f == null || !f.isFile()) {
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("notExist", true);
+                call.resolve(ret);
+                return;
+            }
+            boolean ok = f.delete();
+            JSObject ret = new JSObject();
+            ret.put("success", ok);
+            ret.put("error", ok ? JSObject.NULL : "删除失败");
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("删除失败: " + e.getMessage());
         }
     }
 

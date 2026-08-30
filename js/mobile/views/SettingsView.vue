@@ -52,9 +52,22 @@
 
             <!-- 外观 -->
             <van-cell-group inset title="外观">
-                <van-cell title="深色主题" label="深浅双主题即时切换">
+                <van-cell title="界面主题" label="白昼 / 暗夜 / 青灰三主题即时切换">
                     <template #value>
-                        <van-switch v-model="darkTheme" @change="onThemeChange" />
+                        <van-radio-group :model-value="theme" direction="horizontal" @update:model-value="onThemePick">
+                            <van-radio name="light" :style="radioStyle">白昼</van-radio>
+                            <van-radio name="dark" :style="radioStyle">暗夜</van-radio>
+                            <van-radio name="slate">青灰</van-radio>
+                        </van-radio-group>
+                    </template>
+                </van-cell>
+                <van-cell title="界面字号" label="全局界面文字缩放，对齐桌面字号系统">
+                    <template #value>
+                        <van-radio-group :model-value="uiFs" direction="horizontal" @update:model-value="onFsPick">
+                            <van-radio :name="12" :style="radioStyle">小</van-radio>
+                            <van-radio :name="14" :style="radioStyle">标准</van-radio>
+                            <van-radio :name="16">大</van-radio>
+                        </van-radio-group>
                     </template>
                 </van-cell>
             </van-cell-group>
@@ -67,6 +80,13 @@
                     icon="scan"
                     is-link
                     @click="$router.push('/scan')"
+                />
+                <van-cell
+                    title="回收站"
+                    label="浏览并恢复已删除的卡片"
+                    icon="delete-o"
+                    is-link
+                    @click="openTrash"
                 />
                 <van-cell title="更新源地址" label="GitHub Releases API 或 {version,url} JSON 地址">
                     <template #value>
@@ -84,12 +104,52 @@
                 </van-cell>
             </van-cell-group>
 
+            <!-- 快照与备份 -->
+            <van-cell-group inset title="快照与备份">
+                <van-cell title="自动快照" label="覆盖保存前自动备份旧版本到 .bak_history">
+                    <template #value>
+                        <van-switch v-model="snapAuto" @change="saveSnapshotConfig" />
+                    </template>
+                </van-cell>
+                <van-cell title="冷却间隔(秒)">
+                    <template #value>
+                        <van-stepper v-model="snapCooldown" min="0" max="3600" integer @change="saveSnapshotConfig" />
+                    </template>
+                </van-cell>
+                <van-cell title="最大保留数">
+                    <template #value>
+                        <van-stepper v-model="snapMaxKeep" min="1" max="100" integer @change="saveSnapshotConfig" />
+                    </template>
+                </van-cell>
+                <van-cell title="清理孤儿快照" label="删除不属于任何现存卡片的快照" icon="delete-o" is-link @click="cleanOrphan" />
+                <van-cell title="清理全部快照" label="删除所有快照文件（不影响卡片本体）" icon="delete" is-link @click="cleanAll" />
+            </van-cell-group>
+
+            <!-- 导入行为 -->
+            <van-cell-group inset title="导入行为">
+                <van-cell title="忽略自带标签" label="导入卡片时不读取卡内预置标签">
+                    <template #value>
+                        <van-switch v-model="ignoreImportTags" @change="onIgnoreTagsChange" />
+                    </template>
+                </van-cell>
+            </van-cell-group>
+
             <!-- 关于 -->
             <van-cell-group inset title="关于">
                 <van-cell title="版本" value="v1.9.0 (移动端 M4)" />
                 <van-cell title="数据存储" :label="rootUri || '使用系统文件夹(SAF 目录树授权)'" />
             </van-cell-group>
         </div>
+
+        <!-- 回收站弹窗 -->
+        <TrashModal
+            :show="showTrash"
+            :items="trashItems"
+            :loading="trashLoading"
+            @close="showTrash = false"
+            @restore="restoreTrashItem"
+            @empty="emptyTrash"
+        />
 
         <!-- OTA 更新弹窗 -->
         <van-popup v-model:show="showUpdate" position="center" round class="ota-popup">
@@ -121,10 +181,11 @@
 
 <script>
 import { ref, onMounted } from 'vue';
-import { showToast, showSuccessToast } from 'vant';
+import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 import { loadLibrary } from '../useMobileLibrary';
-import { applyTheme, currentTheme } from '../theme';
+import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
+import TrashModal from '../components/TrashModal.vue';
 
 // 与卡片详情页「测卡」Tab 共用的 API 配置存储键
 const LS_ENDPOINT = 'stc-api-endpoint';
@@ -136,12 +197,25 @@ const LS_FEED = 'jsmobile-update-feed';
 
 export default {
     name: 'SettingsView',
+    components: { TrashModal },
     setup() {
         const granted = ref(false);
         const authLost = ref(false);
         const rootUri = ref('');
         const scanInfo = ref('');
-        const darkTheme = ref(currentTheme() === 'dark');
+        const darkTheme = ref(currentTheme() !== 'light');
+        const theme = ref(currentTheme());
+        const uiFs = ref(currentFs());
+        const radioStyle = { marginRight: '12px' };
+        function onThemePick(v) {
+            theme.value = v;
+            darkTheme.value = v !== 'light';
+            applyTheme(v);
+        }
+        function onFsPick(v) {
+            uiFs.value = applyFs(v);
+            showSuccessToast('字号已调整');
+        }
 
         // ---------- OTA ----------
         const updateFeed = ref(localStorage.getItem(LS_FEED) || '');
@@ -216,7 +290,6 @@ export default {
         const apiKey = ref(localStorage.getItem(LS_KEY) || '');
         const apiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const apiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
-        const radioStyle = { marginRight: '16px' };
 
         const libraryState = () => (granted.value ? '已授权 ✓' : (authLost.value ? '已失效' : '未授权'));
 
@@ -264,7 +337,7 @@ export default {
         }
 
         function onThemeChange(v) {
-            applyTheme(v ? 'dark' : 'light');
+            onThemePick(v ? 'dark' : 'light');
         }
 
         onMounted(() => {
@@ -272,12 +345,132 @@ export default {
             refreshStats();
         });
 
+        // ---------- 回收站 ----------
+        const showTrash = ref(false);
+        const trashItems = ref([]);
+        const trashLoading = ref(false);
+
+        async function openTrash() {
+            showTrash.value = true;
+            await loadTrash();
+        }
+
+        async function loadTrash() {
+            trashLoading.value = true;
+            try {
+                const res = await api.listTrash();
+                trashItems.value = (res && res.success && res.items) || [];
+            } catch (e) {
+                trashItems.value = [];
+            } finally {
+                trashLoading.value = false;
+            }
+        }
+
+        async function restoreTrashItem(item) {
+            try {
+                await showConfirmDialog({
+                    title: '恢复文件',
+                    message: `将「${item.name}」恢复到原位置。\n${item.relPath || ''}`,
+                    confirmButtonText: '恢复',
+                    confirmButtonColor: '#06b6d4'
+                });
+            } catch (e) { return; }
+            const res = await api.restoreTrashItem(item.path);
+            if (res && res.success) {
+                showSuccessToast('已恢复');
+                await loadTrash();
+                await refreshStats();
+                loadLibrary();
+            } else {
+                showToast((res && res.error) || '恢复失败');
+            }
+        }
+
+        async function emptyTrash() {
+            try {
+                await showConfirmDialog({
+                    title: '清空回收站',
+                    message: '将永久删除回收站内所有文件，不可恢复。',
+                    confirmButtonText: '清空',
+                    confirmButtonColor: '#ee0a24'
+                });
+            } catch (e) { return; }
+            const res = await api.emptyTrash();
+            if (res && res.success) {
+                showSuccessToast('已清空');
+                trashItems.value = [];
+            } else {
+                showToast((res && res.error) || '清空失败');
+            }
+        }
+
+        // ---------- 快照配置与清理 ----------
+        const snapAuto = ref(true);
+        const snapCooldown = ref(30);
+        const snapMaxKeep = ref(10);
+
+        onMounted(async () => {
+            try {
+                const cfg = await api.loadAppConfig();
+                const sc = (cfg && cfg.snapshotConfig) || {};
+                if (typeof sc.enabled === 'boolean') snapAuto.value = sc.enabled;
+                if (typeof sc.cooldownMs === 'number') snapCooldown.value = Math.round(sc.cooldownMs / 1000);
+                if (typeof sc.maxKeep === 'number') snapMaxKeep.value = sc.maxKeep;
+            } catch (e) { /* 使用默认值 */ }
+        });
+
+        async function saveSnapshotConfig() {
+            const res = await api.updateSnapshotConfig({
+                enabled: snapAuto.value,
+                cooldownMs: Math.max(0, snapCooldown.value) * 1000,
+                maxKeep: snapMaxKeep.value
+            });
+            if (res && res.success) showSuccessToast('快照配置已保存');
+            else showToast((res && res.error) || '保存失败');
+        }
+
+        async function cleanOrphan() {
+            try {
+                await showConfirmDialog({ title: '清理孤儿快照', message: '将删除不属于任何现存卡片的快照文件。', confirmButtonText: '清理' });
+            } catch (e) { return; }
+            const res = await api.cleanOrphanSnapshots();
+            if (res && res.success) showSuccessToast(`已清理 ${res.count || 0} 个孤儿快照`);
+            else showToast((res && res.error) || '清理失败');
+        }
+
+        async function cleanAll() {
+            try {
+                await showConfirmDialog({
+                    title: '清理全部快照',
+                    message: '将删除所有快照文件（不影响卡片本体），不可恢复。',
+                    confirmButtonText: '清理',
+                    confirmButtonColor: '#ee0a24'
+                });
+            } catch (e) { return; }
+            const res = await api.cleanAllSnapshots();
+            if (res && res.success) showSuccessToast(`已清理 ${res.count || 0} 个快照`);
+            else showToast((res && res.error) || '清理失败');
+        }
+
+        // ---------- 导入行为:忽略自带标签 ----------
+        const LS_IGNORE_TAGS = 'jsmobile-ignore-import-tags';
+        const ignoreImportTags = ref(localStorage.getItem(LS_IGNORE_TAGS) === '1');
+
+        function onIgnoreTagsChange(v) {
+            localStorage.setItem(LS_IGNORE_TAGS, v ? '1' : '0');
+            showSuccessToast(v ? '导入时将忽略自带标签' : '导入时保留自带标签');
+        }
+
         return {
-            granted, authLost, rootUri, scanInfo, darkTheme,
+            granted, authLost, rootUri, scanInfo, darkTheme, theme, uiFs, onThemePick, onFsPick,
             apiEndpoint, apiKey, apiModel, apiType, radioStyle,
             libraryState, handlePickFolder, saveApi, onThemeChange,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
-            fmtSize, checkUpdate, doDownload
+            fmtSize, checkUpdate, doDownload,
+            showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
+            snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
+            ignoreImportTags, onIgnoreTagsChange
         };
     }
 };

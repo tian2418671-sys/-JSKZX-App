@@ -42,6 +42,7 @@
                         <div class="ddm-row-meta">{{ item._dateStr }} · {{ metaText(item) }}</div>
                     </div>
                     <div v-if="ii > 0" class="ddm-row-ops">
+                        <van-button size="mini" plain type="primary" @click="openDiff(gi, ii)">对比</van-button>
                         <van-button size="mini" type="danger" plain @click="trashOne(gi, ii)">清此版</van-button>
                     </div>
                 </div>
@@ -53,6 +54,15 @@
                 </div>
             </div>
         </div>
+
+        <!-- 版本差异比对弹窗 -->
+        <DiffModal
+            :show="showDiff"
+            :master-name="diffMasterName"
+            :compare-name="diffCompareName"
+            :field-results="diffFieldResults"
+            @close="showDiff = false"
+        />
     </van-popup>
 </template>
 
@@ -61,9 +71,11 @@ import { ref, watch } from 'vue';
 import { showToast } from 'vant';
 import { mobileLibrary } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
+import DiffModal from './DiffModal.vue';
 
 export default {
     name: 'DedupeModal',
+    components: { DiffModal },
     props: {
         modelValue: { type: Boolean, default: false },
         mode: { type: String, default: 'card' } // 'card' | 'worldbook'
@@ -189,6 +201,101 @@ export default {
             return n > 1048576 ? (n / 1048576).toFixed(1) + 'MB' : (n / 1024).toFixed(0) + 'KB';
         }
 
+        // ---------- 版本差异比对(复用桌面 useDedupe 的 diff 算法) ----------
+        const showDiff = ref(false);
+        const diffMasterName = ref('');
+        const diffCompareName = ref('');
+        const diffFieldResults = ref([]);
+
+        const chunkTextForDiff = (text) => {
+            if (!text) return [];
+            try {
+                return text.split(/(?<=[。！？.!?\n]+)/).map((s) => s.trim()).filter(Boolean);
+            } catch (e) {
+                return text.split('\n').map((s) => s.trim()).filter(Boolean);
+            }
+        };
+        const computeTextDiffLines = (str1 = '', str2 = '') => {
+            const chunks1 = chunkTextForDiff(str1);
+            const chunks2 = chunkTextForDiff(str2);
+            const set1 = new Set(chunks1);
+            const set2 = new Set(chunks2);
+            const res1 = chunks1.map((chunk) => ({ text: chunk, type: set2.has(chunk) ? 'same' : 'removed' }));
+            const res2 = chunks2.map((chunk) => ({ text: chunk, type: set1.has(chunk) ? 'same' : 'added' }));
+            return { masterLines: res1, compareLines: res2 };
+        };
+
+        function openDiff(gi, ii) {
+            const group = groups.value[gi];
+            if (!group) return;
+            const master = group.cards[0];
+            const compare = group.cards[ii];
+            if (!master || !compare) return;
+
+            diffMasterName.value = master.name || master.fileName || '未知';
+            diffCompareName.value = compare.name || compare.fileName || '未知';
+            diffFieldResults.value = [];
+
+            const mData = (master.data && (master.data.data || master.data)) || {};
+            const cData = (compare.data && (compare.data.data || compare.data)) || {};
+
+            if (props.mode === 'worldbook') {
+                const e1 = (master.wb && master.wb.entries) ? (Array.isArray(master.wb.entries) ? master.wb.entries : Object.values(master.wb.entries)) : [];
+                const e2 = (compare.wb && compare.wb.entries) ? (Array.isArray(compare.wb.entries) ? compare.wb.entries : Object.values(compare.wb.entries)) : [];
+                diffFieldResults.value.push({
+                    label: '📚 词条总数',
+                    isSame: e1.length === e2.length,
+                    len1: `${e1.length} 条`, len2: `${e2.length} 条`
+                });
+                const getKeys = (entries) => entries.map((e) => (Array.isArray(e.key) ? e.key.join(', ') : e.key)).filter(Boolean);
+                const k1 = new Set(getKeys(e1));
+                const k2 = new Set(getKeys(e2));
+                diffFieldResults.value.push({
+                    label: '🔑 触发词池覆盖差异',
+                    isSame: k1.size === k2.size && [...k1].every((k) => k2.has(k)),
+                    isTags: true,
+                    onlyMasterTags: [...k1].filter((k) => !k2.has(k)),
+                    onlyCompareTags: [...k2].filter((k) => !k1.has(k))
+                });
+                const t1 = e1.map((e) => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
+                const t2 = e2.map((e) => (e && typeof e === 'object') ? String(e.content || '') : '').join('\n');
+                const same = t1 === t2;
+                diffFieldResults.value.push({
+                    label: '📝 词条正文总集比对',
+                    isSame: same, len1: `${t1.length} 字`, len2: `${t2.length} 字`,
+                    diffText: same ? null : computeTextDiffLines(t1, t2)
+                });
+            } else {
+                const fields = [
+                    { key: 'description', label: '📝 角色描述' },
+                    { key: 'personality', label: '🎭 性格设定' },
+                    { key: 'scenario', label: '🎬 当前场景' },
+                    { key: 'first_mes', label: '💬 开场首句' },
+                    { key: 'mes_example', label: '🗣️ 示例对话' }
+                ];
+                diffFieldResults.value = fields.map((f) => {
+                    const v1 = String(mData[f.key] || master[f.key] || '');
+                    const v2 = String(cData[f.key] || compare[f.key] || '');
+                    const same = v1.trim() === v2.trim();
+                    return {
+                        label: f.label, isSame: same,
+                        len1: `${v1.length} 字`, len2: `${v2.length} 字`,
+                        diffText: same ? null : computeTextDiffLines(v1, v2)
+                    };
+                });
+                const t1 = new Set([...(master.customTags || []), ...((mData && mData.tags) || [])]);
+                const t2 = new Set([...(compare.customTags || []), ...((cData && cData.tags) || [])]);
+                diffFieldResults.value.push({
+                    label: '🏷️ 标签',
+                    isSame: t1.size === t2.size && [...t1].every((t) => t2.has(t)),
+                    isTags: true,
+                    onlyMasterTags: [...t1].filter((t) => !t2.has(t)),
+                    onlyCompareTags: [...t2].filter((t) => !t1.has(t))
+                });
+            }
+            showDiff.value = true;
+        }
+
         async function doTrash(paths, keepCount) {
             const res = await window.electronAPI.trashFiles(paths);
             if (!res || !res.success) {
@@ -238,7 +345,8 @@ export default {
 
         return {
             scanning, pending, emptyText, groups, busyKey,
-            metaText, trashOne, trashRest
+            metaText, trashOne, trashRest,
+            showDiff, diffMasterName, diffCompareName, diffFieldResults, openDiff
         };
     }
 };

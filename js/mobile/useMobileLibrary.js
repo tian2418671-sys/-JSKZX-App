@@ -93,6 +93,10 @@ async function parseCard(file) {
         }
         if (!parsedData) return null;
         const normalized = normalizeCardData(parsedData);
+        // 导入行为:用户开启「忽略自带标签」时清空卡内预置标签
+        if (typeof localStorage !== 'undefined' && localStorage.getItem('jsmobile-ignore-import-tags') === '1') {
+            if (normalized.data) normalized.data.tags = [];
+        }
         return {
             id: file.path,
             path: file.path,
