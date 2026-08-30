@@ -11,7 +11,9 @@
 > 3. ✅ PNG 快扫 + 写盘降噪：pngParser.js 前 1MB 策略版已迁移；移动端显式保存模式天然无重复写盘
 > 4. ✅ 9 种排序：CardLibraryView sortBy 下拉（本地文件最新/导入/创建/修改/A-Z 正倒序/大小双序/Token），拼音+数字自然排序，稳定链兜底；Java 层补 size 字段，前端补 _ctime/_importTime 回退
 > 5. ✅ readTextBatch + 内嵌缓存：Java 层新增 readTextBatch（单次 IPC 批量拉 json）；库目录 .jskzx_cache.json 缓存解析结果（path+mtime+size 指纹，上限 12000 条，扫描器跳过 .jskzx 前缀）→ 二次启动秒开
-> 6. ⏳ 预设管理引擎（大工程单独立项）　7. ⏳ 内容指纹查重　8. ⏳ 向量引擎（待桌面 WASM 实测后再定）
+> 6. ✅ 预设管理引擎：桥接层 scanExternalPresets（复用 SAF scanWbTree，isValidPreset 校验排除角色卡/世界书）+ saveExternalPreset/renameExternalPreset/deleteExternalPreset/createExternalPreset + PresetsView（选目录/扫描/搜索/新建/JSON 编辑器/复制副本/删除，localStorage 记忆目录）+ 设置页入口
+> 7. ✅ 内容指纹查重：DedupeModal 第三模式（MinHash 96 位签名 + LSH 8 band 候选 + 85% 阈值 + 并查集聚类，对齐桌面算法），Tab 切换 同名查重/内容指纹/世界书，相似度百分比展示，复用 trashFiles 清理与 Diff 对比
+> 8. ⏳ 向量引擎（待桌面 WASM 实测后再定）
 
 ---
 
