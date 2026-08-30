@@ -14,7 +14,10 @@
 > 6. ✅ 预设管理引擎：桥接层 scanExternalPresets（复用 SAF scanWbTree，isValidPreset 校验排除角色卡/世界书）+ saveExternalPreset/renameExternalPreset/deleteExternalPreset/createExternalPreset + PresetsView（选目录/扫描/搜索/新建/JSON 编辑器/复制副本/删除，localStorage 记忆目录）+ 设置页入口
 > 7. ✅ 内容指纹查重：DedupeModal 第三模式（MinHash 96 位签名 + LSH 8 band 候选 + 85% 阈值 + 并查集聚类，对齐桌面算法），Tab 切换 同名查重/内容指纹/世界书，相似度百分比展示，复用 trashFiles 清理与 Diff 对比
 > 8. ⛔ 向量引擎（已定案：移动端不做，见 §三）
-> 9. ⏳ Worker 并行解析加速（移动端加载加速项，不依赖万卡规模，普通千卡库亦受益，见 §三）
+> 9. ✅ 推送目标模式：详情页推送弹窗二态（酒馆 API / 卡库目录），卡库目录多目标管理（命名保存/单选/删除，localStorage 持久化），复用 SAF copyToFolder 同名覆盖
+> 10. ✅ 批量推送：卡片库批量模式新增「推送」按钮，批量复制选中卡到共享卡库目录目标
+> 11. ✅ 字段级 Token 分析栏：详情页 Token 明细升级为带占比进度条的分析栏（6 字段彩色条 + 合计）
+> 12. 🐞 滚动修复（真机反馈）：详情页 van-tabs 高度链不完整导致整页无法滑动——补齐 .van-tabs{flex:1;min-height:0;overflow:hidden} + .van-tabs__content/.van-tab__panel；世界书/设置/卡片库/磁盘扫描页 .view-body 统一补 min-height:0
 
 ---
 
