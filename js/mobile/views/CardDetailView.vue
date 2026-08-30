@@ -53,7 +53,18 @@
                         </div>
                         <div class="sec-label">Token 估算</div>
                         <van-field :model-value="tokenText" readonly is-link center @click="showTokenDetail = !showTokenDetail" />
-                        <div v-if="showTokenDetail" class="token-detail">{{ tokenDetailText }}</div>
+                        <!-- 字段级 Token 分析栏(对齐桌面 Token 分析) -->
+                        <div v-if="showTokenDetail" class="token-analysis">
+                            <div v-for="row in tokenRows" :key="row.label" class="ta-row">
+                                <span class="ta-label">{{ row.label }}</span>
+                                <div class="ta-bar-wrap">
+                                    <div class="ta-bar" :style="{ width: row.pct + '%', background: row.color }" />
+                                </div>
+                                <span class="ta-num">{{ row.value }}</span>
+                            </div>
+                            <div class="ta-total">合计 ≈ {{ tokenTotal }} tokens（酒馆上下文按 4 字符 ≈ 1 token 估算）</div>
+                        </div>
+                        <div v-else class="token-detail">{{ tokenDetailText }}</div>
 
                         <van-field
                             v-model="d.description"
@@ -244,30 +255,77 @@
         <!-- 推送酒馆弹窗 -->
         <van-popup v-model:show="showPush" position="center" round class="push-popup">
             <div class="push-head">
-                <span class="push-title">推送到酒馆</span>
+                <span class="push-title">推送到目标</span>
                 <van-icon name="cross" size="18" @click="showPush = false" />
             </div>
             <div class="push-body">
-                <van-field
-                    v-model="tavernUrl"
-                    label="酒馆地址"
-                    placeholder="http://192.168.1.100:8000"
-                    @update:model-value="savePushConfig"
-                />
-                <van-field
-                    v-model="tavernKey"
-                    label="API 密码"
-                    type="password"
-                    placeholder="留空 = 未开启 API 扩展"
-                    @update:model-value="savePushConfig"
-                />
-                <div class="push-tip">
-                    将向 {{ tavernUrl || '酒馆地址' }}/api/characters/import 以角色名「{{ card ? card.name : '' }}」推送本卡片。
-                    若酒馆开启了 API 扩展（设置 → Extensions → API），需要填写 API 密码。
-                </div>
+                <!-- 目标类型切换 -->
+                <van-cell-group inset>
+                    <van-cell title="目标类型">
+                        <template #value>
+                            <van-radio-group :model-value="pushTargetMode" direction="horizontal" @update:model-value="switchPushMode">
+                                <van-radio name="sillytavern">酒馆 API</van-radio>
+                                <van-radio name="custom">卡库目录</van-radio>
+                            </van-radio-group>
+                        </template>
+                    </van-cell>
+                </van-cell-group>
+
+                <!-- 酒馆 API 模式 -->
+                <template v-if="pushTargetMode === 'sillytavern'">
+                    <van-field
+                        v-model="tavernUrl"
+                        label="酒馆地址"
+                        placeholder="http://192.168.1.100:8000"
+                        @update:model-value="savePushConfig"
+                    />
+                    <van-field
+                        v-model="tavernKey"
+                        label="API 密码"
+                        type="password"
+                        placeholder="留空 = 未开启 API 扩展"
+                        @update:model-value="savePushConfig"
+                    />
+                    <div class="push-tip">
+                        将向 {{ tavernUrl || '酒馆地址' }}/api/characters/import 以角色名「{{ card ? card.name : '' }}」推送本卡片。
+                        若酒馆开启了 API 扩展（设置 → Extensions → API），需要填写 API 密码。
+                    </div>
+                </template>
+
+                <!-- 卡库目录模式:多目标管理 -->
+                <template v-else>
+                    <van-cell-group inset>
+                        <van-cell
+                            v-for="t in pushTargets"
+                            :key="t.id"
+                            :title="t.name"
+                            :label="t.title || t.uri"
+                            clickable
+                            @click="currentPushTargetId = t.id; savePushTargets()"
+                        >
+                            <template #icon>
+                                <van-icon
+                                    :name="currentPushTargetId === t.id ? 'checked' : 'circle'"
+                                    :color="currentPushTargetId === t.id ? '#06b6d4' : '#c8c9cc'"
+                                    size="20"
+                                    style="margin: 12px"
+                                />
+                            </template>
+                            <template #value>
+                                <van-icon name="delete-o" size="16" @click.stop="removePushTarget(t.id)" />
+                            </template>
+                        </van-cell>
+                        <van-cell title="添加卡库目录" icon="plus" clickable @click="addPushTarget" />
+                    </van-cell-group>
+                    <div class="push-tip">
+                        直接把卡片文件复制到所选目录（同名覆盖，与桌面推送一致）；无需酒馆开启 API。
+                    </div>
+                </template>
             </div>
             <div class="push-ops">
-                <van-button block type="primary" :loading="pushing" @click="doPush">推送到酒馆</van-button>
+                <van-button block type="primary" :loading="pushing" @click="doPush">
+                    {{ pushTargetMode === 'sillytavern' ? '推送到酒馆' : '复制到所选目录' }}
+                </van-button>
             </div>
         </van-popup>
 
@@ -420,16 +478,80 @@ export default {
             localStorage.setItem(LS_TAVERN_URL, tavernUrl.value.trim());
             localStorage.setItem(LS_TAVERN_KEY, tavernKey.value.trim());
         }
-        async function doPush() {
-            if (!card.value) return;
-            const url = tavernUrl.value.trim().replace(/\/+$/, '');
-            if (!url) {
-                showToast('请先填写酒馆地址');
+
+        // ---------- 推送目标管理(对齐桌面 PushModal:酒馆 API / 自定义卡库目录多目标) ----------
+        const LS_PUSH_TARGETS = 'jsmobile-push-targets'; // { mode, currentId, targets: [{id,name,uri,title}] }
+        const pushTargetMode = ref('sillytavern');
+        const pushTargets = ref([]);
+        const currentPushTargetId = ref('');
+        try {
+            const saved = JSON.parse(localStorage.getItem(LS_PUSH_TARGETS) || '{}');
+            if (saved.mode) pushTargetMode.value = saved.mode;
+            if (Array.isArray(saved.targets)) pushTargets.value = saved.targets;
+            if (saved.currentId) currentPushTargetId.value = saved.currentId;
+        } catch (e) { /* 首次无配置 */ }
+        function savePushTargets() {
+            localStorage.setItem(LS_PUSH_TARGETS, JSON.stringify({
+                mode: pushTargetMode.value,
+                currentId: currentPushTargetId.value,
+                targets: pushTargets.value
+            }));
+        }
+        function switchPushMode(m) {
+            pushTargetMode.value = m;
+            savePushTargets();
+        }
+        async function addPushTarget() {
+            const res = await api.selectPushFolder();
+            if (!res || !res.success || !res.path) {
+                showToast((res && res.error) || '未选择目录');
                 return;
             }
+            const name = window.prompt('目标名称：', res.title || '卡库目录');
+            if (name === null) return; // 用户取消
+            const target = {
+                id: 'pt_' + Date.now().toString(36),
+                name: (String(name).trim() || '卡库目录'),
+                uri: res.path,
+                title: res.title || ''
+            };
+            pushTargets.value.push(target);
+            currentPushTargetId.value = target.id;
+            savePushTargets();
+            showSuccessToast('已添加推送目标');
+        }
+        function removePushTarget(id) {
+            pushTargets.value = pushTargets.value.filter((t) => t.id !== id);
+            if (currentPushTargetId.value === id) {
+                currentPushTargetId.value = pushTargets.value.length ? pushTargets.value[0].id : '';
+            }
+            savePushTargets();
+        }
+        async function doPush() {
+            if (!card.value) return;
             pushing.value = true;
             try {
-                const res = await api.pushToTavern({
+                    if (pushTargetMode.value === 'custom') {
+                        const target = pushTargets.value.find((t) => t.id === currentPushTargetId.value);
+                        if (!target) {
+                            showToast('请先添加并选择卡库目录');
+                            return;
+                        }
+                        const res2 = await api.pushToCustomDir({ filePaths: [card.value.path], targetDir: target.uri });
+                        if (res2 && res2.success) {
+                            showPush.value = false;
+                            showSuccessToast('已复制到「' + target.name + '」');
+                        } else {
+                            showToast((res2 && res2.error) || '复制失败');
+                        }
+                        return;
+                    }
+                    const url = tavernUrl.value.trim().replace(/\/+$/, '');
+                    if (!url) {
+                        showToast('请先填写酒馆地址');
+                        return;
+                    }
+                    const res = await api.pushToTavern({
                     filePath: card.value.path,
                     targetUrl: url,
                     apiKey: tavernKey.value.trim(),
@@ -792,6 +914,20 @@ export default {
             + t(d.value.scenario) + t(d.value.mes_example) + t(greetingsText.value)
         );
         const tokenText = computed(() => `≈ ${tokenTotal.value} tokens`);
+        // 字段级 Token 分析(带占比进度条)
+        const tokenRows = computed(() => {
+            const rows = [
+                { label: '详细设定', value: t(d.value.description), color: '#1989fa' },
+                { label: '性格', value: t(d.value.personality), color: '#07c160' },
+                { label: '开场白', value: t(d.value.first_mes), color: '#ff976a' },
+                { label: '场景', value: t(d.value.scenario), color: '#ee0a24' },
+                { label: '示例对话', value: t(d.value.mes_example), color: '#7232dd' },
+                { label: '备用开场白', value: t(greetingsText.value), color: '#00b8d4' }
+            ];
+            const total = rows.reduce((s, r) => s + r.value, 0) || 1;
+            rows.forEach((r) => { r.pct = Math.max(r.value ? 2 : 0, Math.round((r.value / total) * 100)); });
+            return rows.filter((r) => r.value > 0 || r.label === '详细设定');
+        });
         const tokenDetailText = computed(() =>
             `详细设定: ${t(d.value.description)}\n性格: ${t(d.value.personality)}\n开场白: ${t(d.value.first_mes)}\n场景: ${t(d.value.scenario)}\n示例对话: ${t(d.value.mes_example)}\n备用开场白: ${t(greetingsText.value)}\n合计: ${tokenTotal.value}`
         );
@@ -1378,7 +1514,7 @@ export default {
         return {
             card, id, activeTab, advancedOpen, showTokenDetail, saved,
             d, tags, greetingsText, wbEntries, regexList,
-            tokenText, tokenDetailText,
+            tokenText, tokenDetailText, tokenRows,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
             moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,
@@ -1392,6 +1528,7 @@ export default {
             statusInput, previewText, statusScripts, statusApplied, statusHtml, resetStatusDemo,
             showStatusTemplates, STATUSBAR_TEMPLATES, STATUSBAR_PROMPT_TEMPLATES, injectStatusTemplate, injectPromptTemplate,
             showPush, pushing, tavernUrl, tavernKey, savePushConfig, doPush,
+            pushTargetMode, pushTargets, currentPushTargetId, switchPushMode, addPushTarget, removePushTarget,
             chatMessages, chatDraft, chatSending, chatListEl, showChatApi,
             chatApiEndpoint, chatApiKey, chatApiModel, chatApiType, radioStyle,
             saveChatApi, sendChat, clearChat,
@@ -1445,6 +1582,15 @@ export default {
     white-space: pre-line; font-size: 12px; color: var(--van-gray-6);
     background: var(--van-gray-1); border-radius: 8px; padding: 8px; margin-bottom: 8px;
 }
+.token-analysis {
+    background: var(--van-gray-1); border-radius: 8px; padding: 10px; margin-bottom: 8px;
+}
+.ta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ta-label { width: 62px; flex-shrink: 0; font-size: 11px; color: var(--van-gray-6); }
+.ta-bar-wrap { flex: 1; height: 8px; background: var(--van-gray-2); border-radius: 4px; overflow: hidden; }
+.ta-bar { height: 100%; border-radius: 4px; transition: width .25s; }
+.ta-num { width: 40px; flex-shrink: 0; text-align: right; font-size: 11px; color: var(--van-text-color); font-variant-numeric: tabular-nums; }
+.ta-total { font-size: 10px; color: var(--van-gray-6); margin-top: 4px; }
 .adv-collapse { margin: 8px 0; }
 .tab-pad { padding: 12px; }
 .wb-item, .regex-item {

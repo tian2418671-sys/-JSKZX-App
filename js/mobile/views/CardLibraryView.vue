@@ -129,6 +129,7 @@
             <van-button size="small" plain @click="selectAllBatch">全选</van-button>
             <van-button size="small" plain type="primary" :disabled="!batchSet.size" @click="showBatchTag = true">批量标签</van-button>
             <van-button size="small" plain type="warning" :disabled="!batchSet.size" @click="showBatchGroup = true">批量分组</van-button>
+            <van-button size="small" plain type="success" :disabled="!batchSet.size" @click="onBatchPush">推送</van-button>
             <van-button size="small" plain type="danger" :disabled="!batchSet.size" @click="onBatchDelete">删除</van-button>
             <van-button size="small" @click="exitBatch">退出</van-button>
         </div>
@@ -566,6 +567,40 @@ export default {
             showSuccessToast(`批量标签完成 ${okCount}/${cards.length} 张`);
         }
 
+        /** 批量推送:复制选中卡片到共享推送目标(卡库目录模式);酒馆模式引导去详情页配地址 */
+        const LS_PUSH_TARGETS = 'jsmobile-push-targets';
+        async function onBatchPush() {
+            const cards = batchSelectedCards();
+            if (!cards.length) return;
+            let cfg = null;
+            try { cfg = JSON.parse(localStorage.getItem(LS_PUSH_TARGETS) || 'null'); } catch (e) { cfg = null; }
+            if (!cfg || cfg.mode !== 'custom' || !(cfg.currentId)) {
+                showToast('请先在卡片详情页推送弹窗中配置卡库目录目标');
+                return;
+            }
+            const target = (cfg.targets || []).find((t) => t.id === cfg.currentId);
+            if (!target) {
+                showToast('推送目标不存在，请重新配置');
+                return;
+            }
+            try {
+                await showConfirmDialog({
+                    title: '批量推送',
+                    message: `将选中的 ${cards.length} 张卡片复制到「${target.name}」？同名文件将被覆盖。`
+                });
+            } catch (e) { return; }
+            const res = await window.electronAPI.pushToCustomDir({
+                filePaths: cards.map((c) => c.path),
+                targetDir: target.uri
+            });
+            if (res && res.success) {
+                const failCount = (res.failed || []).length;
+                showSuccessToast(`已推送 ${res.count || cards.length - failCount} 张` + (failCount ? `，失败 ${failCount} 张` : ''));
+            } else {
+                showToast((res && res.error) || '批量推送失败');
+            }
+        }
+
         async function onBatchDelete() {
             const cards = batchSelectedCards();
             if (!cards.length) return;
@@ -792,7 +827,7 @@ export default {
             showGraph, jumpFromGraph, mobileLibrary,
             showUrlImport, urlInput, urlImporting, doUrlImport, onUrlImportClose,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
-            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, dedupeMode
+            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode
         };
     }
 };
