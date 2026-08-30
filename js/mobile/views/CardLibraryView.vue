@@ -802,7 +802,7 @@ export default {
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nav-actions .van-icon { margin-left: 14px; }
 .flex-1 { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-.view-body { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+.view-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
 
 .cat-scroll {
     display: flex;

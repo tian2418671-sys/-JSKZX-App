@@ -1407,7 +1407,18 @@ export default {
 
 <style scoped>
 .detail-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.detail-page :deep(.van-tabs__content) { flex: 1; overflow-y: auto; padding-bottom: 24px; }
+/* 滚动修复:补齐 van-tabs 高度链——根节点不控高度会被内容撑开,超出部分被
+   .mobile-shell{overflow:hidden} 裁剪 → 整页无法上下滑动 */
+.detail-page :deep(.van-tabs) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.detail-page :deep(.van-tabs__content) { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 24px; }
+/* 单面板占满,保证子滚动容器可用 */
+.detail-page :deep(.van-tab__panel) { min-height: 100%; }
 .basic-wrap { padding: 4px 12px; }
 .id-row { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 4px; }
 .id-cover-wrap { position: relative; width: 84px; flex-shrink: 0; }

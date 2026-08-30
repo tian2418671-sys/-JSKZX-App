@@ -172,7 +172,7 @@ export default {
 
 <style scoped>
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.view-body { flex: 1; overflow-y: auto; padding: 12px 0 24px; }
+.view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 0 24px; }
 .scan-tip {
     margin: 10px 16px 4px;
     font-size: 12px;
