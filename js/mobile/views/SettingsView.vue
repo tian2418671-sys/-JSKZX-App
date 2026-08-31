@@ -7,7 +7,7 @@
             <van-cell-group inset title="卡片库">
                 <van-cell
                     title="库目录"
-                    :value="libraryState"
+                    :value="libraryState()"
                     icon="location-o"
                     :is-link="!granted || true"
                     @click="handlePickFolder"
@@ -82,13 +82,6 @@
                     @click="$router.push('/scan')"
                 />
                 <van-cell
-                    title="⚙️ 预设管理"
-                    label="管理酒馆 Presets 目录 JSON 预设（扫描/编辑/重命名/复制/删除）"
-                    icon="apps-o"
-                    is-link
-                    @click="$router.push('/presets')"
-                />
-                <van-cell
                     title="回收站"
                     label="浏览并恢复已删除的卡片"
                     icon="delete-o"
@@ -143,7 +136,7 @@
 
             <!-- 关于 -->
             <van-cell-group inset title="关于">
-                <van-cell title="版本" value="v1.9.0 (移动端 M4)" />
+                <van-cell title="版本" value="v1.10.0 (移动端)" />
                 <van-cell title="数据存储" :label="rootUri || '使用系统文件夹(SAF 目录树授权)'" />
             </van-cell-group>
         </div>

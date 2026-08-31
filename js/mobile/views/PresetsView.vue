@@ -7,7 +7,7 @@
 <template>
     <div class="presets-view">
         <!-- 顶部 -->
-        <van-nav-bar :title="title" left-arrow @click-left="$router.back()" />
+        <van-nav-bar :title="title" safe-area-inset-top />
 
         <div class="pv-body">
             <!-- 未授权 / 空目录 -->
@@ -273,7 +273,7 @@ export default {
 </script>
 
 <style scoped>
-.presets-view { display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--van-background, #f7f8fa); }
+.presets-view { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--van-background, #f7f8fa); }
 .pv-body { flex: 1; overflow-y: auto; }
 .pv-btn { width: 200px; margin-top: 8px; }
 .pv-tip { margin-top: 12px; font-size: 12px; color: var(--van-gray-6, #969799); }
