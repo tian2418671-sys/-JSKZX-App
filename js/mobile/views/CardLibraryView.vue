@@ -3,17 +3,14 @@
         <van-nav-bar title="卡片库" safe-area-inset-top>
             <template #right>
                 <div class="nav-actions">
-                    <van-icon name="cluster-o" size="20" @click="showGraph = true" />
-                    <van-icon name="cluster" size="20" style="margin-left: 12px" @click="onDedupe" />
-                    <van-icon name="plus" size="20" style="margin-left: 12px" @click="onImport" />
-                    <van-icon name="link-o" size="19" style="margin-left: 12px" @click="showUrlImport = true" />
-                    <van-icon name="share-o" size="19" style="margin-left: 12px" @click="showExportSheet = true" />
-                    <van-icon name="replay" size="20" style="margin-left: 12px" @click="onRefresh" />
+                    <van-icon name="plus" size="20" @click="onImport" />
+                    <van-icon name="replay" size="20" style="margin-left: 14px" @click="onRefresh" />
+                    <van-icon name="ellipsis" size="22" style="margin-left: 14px" @click="showMore = true" />
                 </div>
             </template>
         </van-nav-bar>
 
-        <van-pull-refresh :key="pullRefKey" v-model="refreshing" @refresh="onRefresh" class="flex-1" :pull-distance="80">
+        <van-pull-refresh :key="pullRefKey" :disabled="pullDisabled" v-model="refreshing" @refresh="onRefresh" class="flex-1" :pull-distance="80">
             <div class="view-body">
                 <!-- 未授权引导：整页覆盖，隐藏工具条，引导完成 SAF 目录授权 -->
                 <div v-if="!libraryReady && !loading && needsAuth" class="auth-guide">
@@ -102,9 +99,11 @@
                             <div v-else class="c-desc">{{ snippet(card) }}</div>
                         </div>
                     </div>
-                    <!-- 增量渲染哨兵:触底扩展渲染数量,大库避免一次性渲染全部 DOM -->
-                    <div v-if="filtered.length > renderCount" v-load-more="extendRender" class="load-more-hint">
-                        上滑加载更多…
+                    <div
+                        v-if="filtered.length > renderCount"
+                        class="load-more-hint"
+                    >
+                        <van-loading size="20">下滑加载更多…</van-loading>
                     </div>
                 </div>
                 <div class="bottom-pad" />
@@ -119,6 +118,16 @@
             cancel-text="取消"
             @select="onSheetSelect"
             @cancel="showSheet = false"
+        />
+
+        <!-- 顶部「更多」操作菜单 -->
+        <van-action-sheet
+            v-model:show="showMore"
+            :actions="moreActions"
+            cancel-text="取消"
+            description="更多操作"
+            @select="onMoreSelect"
+            @cancel="showMore = false"
         />
 
         <!-- 批量模式底部操作栏 -->
@@ -224,7 +233,7 @@
 </template>
 
 <script>
-import { computed, ref, reactive, onMounted, watch } from 'vue';
+import { computed, ref, reactive, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useRouter, onBeforeRouteLeave } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
@@ -241,20 +250,8 @@ export default {
     name: 'CardLibraryView',
     components: { MobileCardCover, DedupeModal, GraphModal },
     directives: {
-        // 触底哨兵:进入视口附近即扩展增量渲染,断开避免重复触发
-        'load-more': {
-            mounted(el, binding) {
-                if (!('IntersectionObserver' in window)) return;
-                const obs = new IntersectionObserver((entries) => {
-                    if (entries[0].isIntersecting) binding.value();
-                }, { rootMargin: '600px' });
-                obs.observe(el);
-                el.__lmObs__ = obs;
-            },
-            unmounted(el) {
-                if (el.__lmObs__) { el.__lmObs__.disconnect(); el.__lmObs__ = null; }
-            }
-        }
+        // (已移除) 原 IntersectionObserver 触底哨兵在 pull-refresh 回弹时会被误判为上滑触发,
+        // 改为基于滚动方向的 scroll 监听,见 setup 内触底加载逻辑。
     },
     setup() {
         const router = useRouter();
@@ -270,6 +267,7 @@ export default {
         }
         const refreshing = ref(false);
         const pullRefKey = ref(0);
+        const pullDisabled = ref(false);
         onBeforeRouteLeave(() => { pullRefKey.value += 1; });
         const loading = ref(false);
         const libraryReady = ref(false);
@@ -280,6 +278,21 @@ export default {
         const showExportSheet = ref(false);
         const showDedupe = ref(false);
         const dedupeMode = ref('card'); // 'card' | 'content' | 'worldbook'
+        // 顶部「更多」菜单
+        const showMore = ref(false);
+        const moreActions = [
+            { name: '角色宇宙图谱', value: 'graph', icon: 'cluster-o' },
+            { name: '查重', value: 'dedupe', icon: 'cluster' },
+            { name: '从网址导入', value: 'urlimport', icon: 'link-o' },
+            { name: '批量导出 ZIP', value: 'export', icon: 'share-o' }
+        ];
+        function onMoreSelect(action) {
+            showMore.value = false;
+            if (action.value === 'graph') showGraph.value = true;
+            else if (action.value === 'dedupe') onDedupe();
+            else if (action.value === 'urlimport') showUrlImport.value = true;
+            else if (action.value === 'export') showExportSheet.value = true;
+        }
         // 增量渲染:首次只渲染 24 张,触底每次加 16 张
         const BATCH_STEP = 16;
         const renderCount = ref(24);
@@ -289,12 +302,40 @@ export default {
             renderCount.value += BATCH_STEP;
             if (renderCount.value > filtered.value.length) renderCount.value = filtered.value.length;
         }
-        let activeCard = null;
-
-        // 搜索词/分组切换时重置增量渲染,保证立即看到首屏结果
-        watch([query, selected], () => {
-            renderCount.value = 24;
+        // 触底加载:基于滚动方向判定,避免 van-pull-refresh 回弹导致哨兵反复触发。
+        // 只在大于 lastScrollTop 且距底部 < 180px 时加载;筛选/搜索/分组切换时重置 scrollTop。
+        let lastScrollTop = 0;
+        let sentinelGuard = false;
+        let scrollListener = null;
+        const sentinelThreshold = 180;
+        onMounted(() => {
+            const scroller = document.querySelector('.van-pull-refresh__track');
+            if (!scroller) return;
+            scrollListener = () => {
+                const st = scroller.scrollTop;
+                pullDisabled.value = st > 5; // 不在顶部 → 禁用下拉刷新
+                if (sentinelGuard) return;
+                if (st < lastScrollTop) { lastScrollTop = st; return; } // 上滑忽略
+                lastScrollTop = st;
+                const sh = scroller.scrollHeight;
+                const ch = scroller.clientHeight;
+                if (sh - st - ch < sentinelThreshold) {
+                    sentinelGuard = true;
+                    extendRender();
+                    setTimeout(() => { sentinelGuard = false; }, 250);
+                }
+            };
+            scroller.addEventListener('scroll', scrollListener, { passive: true });
         });
+        onBeforeUnmount(() => {
+            if (scrollListener) {
+                const scroller = document.querySelector('.van-pull-refresh__track');
+                if (scroller) scroller.removeEventListener('scroll', scrollListener);
+                scrollListener = null;
+            }
+        });
+        watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
+        let activeCard = null;
 
         /** 查重入口(角色卡) */
         function onDedupe() {
@@ -830,7 +871,7 @@ export default {
         }
 
         return {
-            query, selected, gridMode, refreshing, pullRefKey, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
+            query, selected, gridMode, refreshing, pullRefKey, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
             filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
             onQuickFilter, onSelectCategory, setGridMode,
@@ -841,6 +882,7 @@ export default {
             onExportSelect, onImport, onDedupe, onDedupeCleaned, snippet,
             showGraph, jumpFromGraph, mobileLibrary,
             showUrlImport, urlInput, urlImporting, doUrlImport, onUrlImportClose,
+            showMore, moreActions, onMoreSelect,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
             toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode
         };
@@ -852,9 +894,9 @@ export default {
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nav-actions .van-icon { margin-left: 14px; }
 .flex-1 { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-/* Vant PullRefresh 内部 track 补全高度链:否则 view-body 高度失控、页面无法向下滚动 */
-.flex-1 :deep(.van-pull-refresh__track) { flex: 1; min-height: 0; height: auto; display: flex; flex-direction: column; overflow: hidden; }
-.view-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
+/* track 自身作为滚动容器:Vant PullRefresh 才能正确检测 scrollTop,避免上滑误触发刷新 */
+.flex-1 :deep(.van-pull-refresh__track) { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.view-body { min-height: 100%; padding-bottom: 8px; }
 
 .cat-scroll {
     display: flex;

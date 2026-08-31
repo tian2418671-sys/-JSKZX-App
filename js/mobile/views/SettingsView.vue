@@ -88,7 +88,7 @@
                     is-link
                     @click="openTrash"
                 />
-                <van-cell title="更新源地址" label="GitHub Releases API 或 {version,url} JSON 地址">
+                <van-cell title="更新源地址" label="已预填 GitHub Releases 源，一般无需修改">
                     <template #value>
                         <van-field
                             v-model="updateFeed"
@@ -194,6 +194,8 @@ const LS_MODEL = 'stc-api-model';
 const LS_TYPE = 'stc-api-type';
 // OTA 更新源
 const LS_FEED = 'jsmobile-update-feed';
+// 默认更新源:GitHub Releases API(移动端仓库),无需手动填写即可检查更新
+const DEFAULT_FEED = 'https://api.github.com/repos/tian2418671-sys/-JSKZX-App/releases/latest';
 
 export default {
     name: 'SettingsView',
@@ -218,7 +220,7 @@ export default {
         }
 
         // ---------- OTA ----------
-        const updateFeed = ref(localStorage.getItem(LS_FEED) || '');
+        const updateFeed = ref(localStorage.getItem(LS_FEED) || DEFAULT_FEED);
         const updating = ref(false);
         const showUpdate = ref(false);
         const updateInfo = ref(null);
@@ -237,14 +239,12 @@ export default {
         });
 
         async function checkUpdate() {
-            if (!updateFeed.value.trim()) {
-                showToast('请先填写更新源地址');
-                return;
-            }
-            localStorage.setItem(LS_FEED, updateFeed.value.trim());
+            const feed = (updateFeed.value || '').trim() || DEFAULT_FEED;
+            updateFeed.value = feed;
+            localStorage.setItem(LS_FEED, feed);
             updating.value = true;
             try {
-                const res = await api.checkUpdate(updateFeed.value.trim());
+                const res = await api.checkUpdate(feed);
                 if (!res.success) {
                     showToast(res.error || '检查更新失败');
                     return;

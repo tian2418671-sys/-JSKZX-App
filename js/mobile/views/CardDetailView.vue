@@ -1583,7 +1583,7 @@ export default {
         return {
             card, id, activeTab, advancedOpen, descOpen, showTokenDetail, saved,
             d, tags, greetingsText, wbEntries, regexList,
-            tokenText, tokenDetailText, tokenRows,
+            tokenText, tokenDetailText, tokenRows, tokenTotal,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
             moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,

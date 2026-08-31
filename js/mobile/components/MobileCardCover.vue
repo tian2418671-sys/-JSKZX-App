@@ -36,11 +36,13 @@ export default {
     directives: {
         intersect: {
             mounted(el, binding) {
-                if (!('IntersectionObserver' in window)) { binding.value(); return; }
+                // binding.value 是组件方法引用，直接调用会丢失 this，需显式绑定组件实例
+                const run = () => binding.value.call(binding.instance);
+                if (!('IntersectionObserver' in window)) { run(); return; }
                 const obs = new IntersectionObserver((entries) => {
                     if (entries[0].isIntersecting) {
                         obs.disconnect();
-                        binding.value();
+                        run();
                     }
                 }, { rootMargin: '300px' });
                 obs.observe(el);

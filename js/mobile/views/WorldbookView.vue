@@ -2,11 +2,9 @@
     <div class="view-page">
         <van-nav-bar title="世界书" safe-area-inset-top>
             <template #right>
-                <van-icon name="plus" size="20" style="margin-right: 14px" @click="onNewWorldbook" />
-                <van-icon name="search" size="20" style="margin-right: 14px" @click="openGlobalEntrySearch" />
-                <van-icon name="apps-o" size="20" style="margin-right: 14px" @click="showGlobalAsset = true" />
-                <van-icon name="cluster-o" size="20" style="margin-right: 14px" @click="onDedupe" />
-                <van-icon name="replay" size="20" @click="reload" />
+                <van-icon name="plus" size="20" @click="onNewWorldbook" />
+                <van-icon name="replay" size="20" style="margin-left: 16px" @click="reload" />
+                <van-icon name="ellipsis" size="22" style="margin-left: 16px" @click="showMore = true" />
             </template>
         </van-nav-bar>
 
@@ -217,6 +215,16 @@
             @cancel="showWbOps = false"
         />
 
+        <!-- 顶部「更多」操作菜单 -->
+        <van-action-sheet
+            v-model:show="showMore"
+            :actions="moreActions"
+            cancel-text="取消"
+            description="更多操作"
+            @select="onMoreSelect"
+            @cancel="showMore = false"
+        />
+
         <!-- 输入弹窗(重命名/新建/分组/URL导入) -->
         <van-dialog
             v-model:show="showWbInput"
@@ -381,6 +389,20 @@ export default {
             const key = wb.path || wb.name || '';
             if (key && wbCategoryMap[key] && wbCategoryMap[key].trim()) return wbCategoryMap[key].trim();
             return '默认';
+        }
+
+        // ---------- 顶部「更多」菜单 ----------
+        const showMore = ref(false);
+        const moreActions = [
+            { name: '全局词条搜索', value: 'search', icon: 'search' },
+            { name: '资产中心', value: 'assets', icon: 'apps-o' },
+            { name: '查重', value: 'dedupe', icon: 'cluster-o' }
+        ];
+        function onMoreSelect(action) {
+            showMore.value = false;
+            if (action.value === 'search') openGlobalEntrySearch();
+            else if (action.value === 'assets') showGlobalAsset.value = true;
+            else if (action.value === 'dedupe') onDedupe();
         }
 
         // ---------- 世界书增删改(库内 + 外部) ----------
@@ -1342,6 +1364,7 @@ export default {
 
         return {
             library, cardWithWb, editing, entryCount, reload, showDedupe, onDedupe,
+            showMore, moreActions, onMoreSelect,
             openCardWb, openFileWb, closeEditor, addEntry, removeEntry, saveAll,
             WB_POSITIONS, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys,
             ENTRY_FILTER_OPTIONS, ENTRY_SORT_OPTIONS, entrySearchQuery, entryFilterState, entrySortBy, entryList,
