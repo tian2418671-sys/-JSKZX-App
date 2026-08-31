@@ -66,12 +66,16 @@
                         </div>
                         <div v-else class="token-detail">{{ tokenDetailText }}</div>
 
-                        <van-field
-                            v-model="d.description"
-                            type="textarea" rows="6" autosize
-                            label="详细设定"
-                            placeholder="性格、背景、行为模式…"
-                        />
+                        <van-collapse v-model="descOpen" class="adv-collapse desc-collapse">
+                            <van-collapse-item title="详细设定" name="desc">
+                                <van-field
+                                    v-model="d.description"
+                                    type="textarea" rows="6" autosize
+                                    label="详细设定"
+                                    placeholder="性格、背景、行为模式…"
+                                />
+                            </van-collapse-item>
+                        </van-collapse>
                     </div>
 
                     <!-- 高级设定(折叠) -->
@@ -109,7 +113,7 @@
                                 />
                                 <div class="st-bar">
                                     <span class="st-count">
-                                        {{ previewText.length }} 字 ·
+                                        {{ previewText }} 字 ·
                                         {{ statusScripts.length }} 个渲染脚本
                                         <template v-if="!statusScripts.length">(正则段添加)</template>
                                     </span>
@@ -145,9 +149,11 @@
                                     </div>
                                 </div>
                                 <div class="st-label">渲染预览</div>
-                                <div class="st-preview" v-html="statusHtml"></div>
+                                <!-- 含 <style>/<script> 的完整模板用沙箱 iframe 运行（CSS/JS 全量生效）；简单 HTML 用 DOMPurify v-html -->
+                                <iframe v-if="statusNeedsIframe" class="st-iframe" :srcdoc="statusSrcdoc" sandbox="allow-scripts" />
+                                <div v-else class="st-preview" v-html="statusHtml"></div>
                                 <div class="st-label">应用后源码</div>
-                                <pre class="st-source">{{ statusHtml ? statusApplied : '（输入 AI 输出后实时渲染）' }}</pre>
+                                <pre class="st-source">{{ statusApplied || '（输入 AI 输出后实时渲染）' }}</pre>
                             </div>
                         </van-collapse-item>
                     </van-collapse>
@@ -233,12 +239,14 @@
                         <div class="chat-toolbar">
                             <span class="ct-title">与「{{ card ? card.name : '' }}」对话</span>
                             <van-icon name="replay" size="18" style="margin: 0 12px 0 auto" @click="clearChat" />
-                            <van-icon name="setting-o" size="18" @click="showChatApi = true" />
+                            <van-button size="mini" plain type="primary" @click="toggleChatRender">{{ chatRenderMode === 'render' ? '切换到源码' : '切换到渲染' }}</van-button>
+                            <van-icon name="setting-o" size="18" style="margin-left: 8px" @click="showChatApi = true" />
                         </div>
                         <div ref="chatListEl" class="chat-list">
                             <div v-for="(m, i) in chatMessages" :key="i" class="bubble" :class="m.role">
                                 <div class="b-name">{{ m.role === 'user' ? '我' : (card ? card.name : 'AI') }}</div>
-                                <pre class="b-content">{{ m.content }}</pre>
+                                <pre v-if="chatRenderMode === 'source'" class="b-content">{{ m.content }}</pre>
+                                <div v-else class="b-content b-render" v-html="renderChatHtml(m.content)"></div>
                             </div>
                             <van-loading v-if="chatSending" size="20">思考中…</van-loading>
                             <van-empty v-if="!chatMessages.length && !chatSending" description="暂无对话，输入消息开始测卡" image-size="60" />
@@ -446,7 +454,7 @@ import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
-import { findCard, saveCardData, loadLibrary } from '../useMobileLibrary';
+import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
@@ -466,6 +474,7 @@ export default {
         const card = ref(null);
         const activeTab = ref('basic');
         const advancedOpen = ref([]);
+        const descOpen = ref(['desc']); // 详细设定默认展开，可手动折叠
         const showTokenDetail = ref(false);
         let saved = ref(true);
 
@@ -530,6 +539,12 @@ export default {
         async function doPush() {
             if (!card.value) return;
             pushing.value = true;
+            // 前端兑底超时:原生推送若卡住(网络黑洞),25s 后强制结束 loading 并提示
+            let timeoutHandle = null;
+            const timeoutPromise = new Promise((resolve) => {
+                timeoutHandle = setTimeout(() => resolve({ __timeout: true }), 25000);
+            });
+            const race = (p) => Promise.race([p, timeoutPromise]);
             try {
                     if (pushTargetMode.value === 'custom') {
                         const target = pushTargets.value.find((t) => t.id === currentPushTargetId.value);
@@ -537,7 +552,11 @@ export default {
                             showToast('请先添加并选择卡库目录');
                             return;
                         }
-                        const res2 = await api.pushToCustomDir({ filePaths: [card.value.path], targetDir: target.uri });
+                        const res2 = await race(api.pushToCustomDir({ filePaths: [card.value.path], targetDir: target.uri }));
+                        if (res2 && res2.__timeout) {
+                            showToast('推送超时，请检查目标目录是否可访问');
+                            return;
+                        }
                         if (res2 && res2.success) {
                             showPush.value = false;
                             showSuccessToast('已复制到「' + target.name + '」');
@@ -551,13 +570,15 @@ export default {
                         showToast('请先填写酒馆地址');
                         return;
                     }
-                    const res = await api.pushToTavern({
+                    const res = await race(api.pushToTavern({
                     filePath: card.value.path,
                     targetUrl: url,
                     apiKey: tavernKey.value.trim(),
                     cardName: card.value.name
-                });
-                if (res && res.success) {
+                }));
+                if (res && res.__timeout) {
+                    showToast('推送超时，请检查酒馆地址与网络');
+                } else if (res && res.success) {
                     showPush.value = false;
                     showSuccessToast('推送成功！请在酒馆刷新角色列表查看');
                 } else {
@@ -566,6 +587,7 @@ export default {
             } catch (e) {
                 showToast((e && e.message) || '推送失败');
             } finally {
+                if (timeoutHandle) clearTimeout(timeoutHandle);
                 pushing.value = false;
             }
         }
@@ -599,17 +621,11 @@ export default {
             }
         });
 
-        // 世界书(兼容对象/数组两种容器)
+        // 世界书(对齐桌面:内嵌世界书存于 data.character_book,V2/V3 标准;编辑器用字典形态,保存时转回数组)
         const wbEntries = computed(() => {
-            if (!d.value.extensions) d.value.extensions = {};
-            if (!d.value.extensions.world_book || typeof d.value.extensions.world_book !== 'object') {
-                d.value.extensions.world_book = { entries: {} };
-            }
-            const wb = d.value.extensions.world_book;
-            if (!wb.entries) wb.entries = {};
-            if (!(wb.entries instanceof Object)) wb.entries = {};
+            const { entries } = getCardEmbeddedWb(card.value);
             // 为每条补临时文本字段(触发词逗号分隔),确保 v-model 输入流畅,blur 时同步回数组
-            Object.values(wb.entries).forEach((entry) => {
+            Object.values(entries).forEach((entry) => {
                 if (entry && typeof entry === 'object') {
                     if (!('_keysText' in entry)) entry._keysText = Array.isArray(entry.keys) ? entry.keys.join(', ') : String(entry.keys || '');
                     if (!('_secKeysText' in entry)) {
@@ -619,7 +635,7 @@ export default {
                     if (entry.position === undefined) entry.position = 1;
                 }
             });
-            return wb.entries;
+            return entries;
         });
 
         // 世界书条目展开编辑(完整字段)
@@ -691,13 +707,25 @@ export default {
             order[next] = keys[idx];
             order[idx] = keys[next];
             order.forEach((k) => { rebuilt[k] = entries[k]; });
-            d.value.extensions.world_book.entries = rebuilt;
+            d.value.character_book.entries = rebuilt;
             saved.value = false;
         }
 
         // 正则(兼容 enabled/disabled 双字段,统一归一化为 disabled;placement 数组化)
+        // 兼容正则脚本存储位置:标准 data.data.extensions 或旧卡 data.extensions
+        const regexSource = computed(() => {
+            const dd = card.value && card.value.data && card.value.data.data;
+            const top = card.value && card.value.data;
+            if (dd && dd.extensions && Array.isArray(dd.extensions.regex_scripts)) return dd.extensions.regex_scripts;
+            if (top && top.extensions && Array.isArray(top.extensions.regex_scripts)) return top.extensions.regex_scripts;
+            return [];
+        });
         const regexList = computed(() => {
             if (!d.value.extensions) d.value.extensions = {};
+            const src = regexSource.value;
+            if (src.length) {
+                d.value.extensions.regex_scripts = src;
+            }
             if (!Array.isArray(d.value.extensions.regex_scripts)) d.value.extensions.regex_scripts = [];
             d.value.extensions.regex_scripts.forEach((r) => {
                 if (r && typeof r === 'object') {
@@ -850,8 +878,22 @@ export default {
             }
             return text;
         });
-        // 渲染预览:DOMPurify 白名单清洗
-        const statusHtml = computed(() => sanitizeStatusHtml(statusApplied.value));
+        // 渲染预览:含 <style>/<script> 的完整模板走 iframe sandbox；简单 HTML 用 DOMPurify 白名单清洗
+        const statusNeedsIframe = computed(() => {
+            const t = statusApplied.value || '';
+            return /<style[\s>]/i.test(t) || /<script[\s>]/i.test(t);
+        });
+        const statusHtml = computed(() => {
+            const t = statusApplied.value || '';
+            return statusNeedsIframe.value ? '' : sanitizeStatusHtml(t);
+        });
+        // 完整模板 → 包成完整文档 + 注入 getVariables stub（无酒馆变量接口，模板按默认值渲染）
+        const statusSrcdoc = computed(() => {
+            const t = statusApplied.value || '';
+            if (!statusNeedsIframe.value) return '';
+            return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:transparent;}</style></head><body>' +
+                '<script>window.getVariables = function(){ return { stat_data: {} }; };<\/script>' + t + '</body></html>';
+        });
 
         function resetStatusDemo() {
             statusInput.value = STATUS_DEMO;
@@ -944,14 +986,17 @@ export default {
                 });
             }
             // 剥离移动端临时编辑字段(不写入卡片 JSON)
-            if (d.value.extensions && d.value.extensions.world_book && d.value.extensions.world_book.entries) {
-                Object.values(d.value.extensions.world_book.entries).forEach((e) => {
+            const { book: wbBook } = getCardEmbeddedWb(card.value);
+            if (wbBook && wbBook.entries) {
+                Object.values(wbBook.entries).forEach((e) => {
                     if (e && typeof e === 'object') {
                         delete e._keysText;
                         delete e._secKeysText;
                     }
                 });
             }
+            // 内嵌世界书 entries 字典 → 数组(对齐桌面 character_book.entries 标准)
+            serializeCardEmbeddedWb(card.value);
             const res = await saveCardData(card.value);
             if (res.success) {
                 saved.value = true;
@@ -1099,6 +1144,30 @@ export default {
         const chatSending = ref(false);
         const chatListEl = ref(null);
         const showChatApi = ref(false);
+        // 聊测展示模式:source=纯文本/代码, render=Markdown+HTML 渲染;默认渲染
+        const chatRenderMode = ref('render');
+        function toggleChatRender() {
+            chatRenderMode.value = chatRenderMode.value === 'render' ? 'source' : 'render';
+        }
+        // 聊测渲染:Markdown(粗体/斜体/代码块) + 安全 HTML 渲染,经 DOMPurify 白名单清洗
+        function renderChatHtml(text) {
+            let s = String(text == null ? '' : text);
+            // 代码块内容转义,避免被当 HTML 解析
+            s = s.replace(/```([\s\S]*?)```/g, (m, code) => {
+                const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return '<pre>' + esc + '</pre>';
+            });
+            s = s.replace(/`([^`]+)`/g, (m, code) => {
+                const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return '<code>' + esc + '</code>';
+            });
+            // 行内 Markdown
+            s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            s = s.replace(/\n/g, '<br/>');
+            // DOMPurify 白名单清洗(禁止脚本/事件/外联,允许 b/i/p/pre/div 等安全标签)
+            return sanitizeStatusHtml(s);
+        }
 
         const chatApiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
         const chatApiKey = ref(localStorage.getItem(LS_KEY) || '');
@@ -1512,7 +1581,7 @@ export default {
         });
 
         return {
-            card, id, activeTab, advancedOpen, showTokenDetail, saved,
+            card, id, activeTab, advancedOpen, descOpen, showTokenDetail, saved,
             d, tags, greetingsText, wbEntries, regexList,
             tokenText, tokenDetailText, tokenRows,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
@@ -1525,11 +1594,11 @@ export default {
             changingCover, onChangeCover,
             showSnapshots, snapshots, openSnapshots, createSnapshot,
             restoreSnapshot, deleteSnapshot, cleanSnapshots,
-            statusInput, previewText, statusScripts, statusApplied, statusHtml, resetStatusDemo,
+            statusInput, previewText, statusScripts, statusApplied, statusHtml, statusNeedsIframe, statusSrcdoc, resetStatusDemo,
             showStatusTemplates, STATUSBAR_TEMPLATES, STATUSBAR_PROMPT_TEMPLATES, injectStatusTemplate, injectPromptTemplate,
             showPush, pushing, tavernUrl, tavernKey, savePushConfig, doPush,
             pushTargetMode, pushTargets, currentPushTargetId, switchPushMode, addPushTarget, removePushTarget,
-            chatMessages, chatDraft, chatSending, chatListEl, showChatApi,
+            chatMessages, chatDraft, chatSending, chatListEl, showChatApi, chatRenderMode, toggleChatRender, renderChatHtml,
             chatApiEndpoint, chatApiKey, chatApiModel, chatApiType, radioStyle,
             saveChatApi, sendChat, clearChat,
             availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
@@ -1669,6 +1738,13 @@ export default {
 .st-preview :deep(style), .st-preview :deep(script) { display: none; }
 .st-preview :deep(img) { max-width: 100%; border-radius: 8px; }
 .st-preview :deep(table) { display: inline-block; }
+.st-iframe {
+    width: 100%;
+    height: 320px;
+    border: 1px solid var(--van-gray-3, #ebedf0);
+    border-radius: 10px;
+    background: var(--van-gray-1, #f7f8fa);
+}
 .st-source {
     margin: 0;
     background: var(--van-gray-1, #f7f8fa);
@@ -1737,6 +1813,9 @@ export default {
     margin: 0; white-space: pre-wrap; word-break: break-word;
     font-family: inherit; font-size: 14px; line-height: 1.6;
 }
+.b-render { white-space: normal; }
+.b-render :deep(code) { background: rgba(127,127,127,.14); padding: 0 4px; border-radius: 4px; font-family: monospace; }
+.b-render :deep(pre) { background: rgba(127,127,127,.12); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
 .input-bar {
     display: flex; align-items: flex-end; gap: 8px;
     padding: 8px 10px;

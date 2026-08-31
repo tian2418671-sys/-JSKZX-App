@@ -64,7 +64,7 @@
                             @click.stop="toggleEntryBatchSelect(item.key)"
                         />
                         <van-switch v-model="item.e.enabled" size="20px" />
-                        <van-field v-model="item.e.comment" placeholder="条目名(comment)" class="wb-name" />
+                        <van-field v-model="item.e.comment" :placeholder="entryDisplayName(item.e)" class="wb-name" />
                         <van-icon name="arrow-up" size="16" color="#969799" @click="moveEntryByKey(item.key, -1)" />
                         <van-icon name="arrow-down" size="16" color="#969799" @click="moveEntryByKey(item.key, 1)" />
                         <van-icon name="plus" size="16" color="#969799" @click="duplicateEntry(item.key)" />
@@ -109,29 +109,16 @@
 
             <!-- 文件列表 -->
             <template v-else>
-                <van-cell-group inset title="世界书工具">
-                    <van-cell title="多本智能合并" icon="warning-o" is-link @click="openWbMerge" />
-                    <van-cell title="从网址导入世界书" icon="link-o" is-link @click="openWbUrlImport" />
-                    <van-cell title="从本地文件导入" icon="down" is-link @click="importWbFiles" />
-                    <van-cell title="导入 JSONL/Rentry 世界书" icon="description-o" is-link @click="importWbJsonl" />
-                    <van-cell title="批量导出库内世界书" icon="share-o" is-link @click="batchExportWb" />
-                    <van-cell title="世界书库统计" icon="chart-trending-o" is-link @click="showWbStats" />
-                </van-cell-group>
-
-                <van-cell-group inset title="卡内世界书">
-                    <van-cell
-                        v-for="card in cardWithWb"
-                        :key="card.path"
-                        :title="card.name"
-                        :label="`${entryCount(card)} 条条目 · ${card.category}`"
-                        is-link
-                        @click="openCardWb(card)"
-                    >
-                        <template #right-icon>
-                            <van-icon name="down" size="18" style="margin-left: 8px" @click.stop="extractFromCard(card)" />
-                        </template>
-                    </van-cell>
-                    <van-empty v-if="!cardWithWb.length" description="暂无卡片内嵌世界书" image-size="60" />
+                <van-cell-group inset>
+                    <van-cell title="世界书工具" icon="setting-o" is-link :arrow-direction="wbToolsOpen ? 'up' : 'down'" @click="wbToolsOpen = !wbToolsOpen" />
+                    <template v-if="wbToolsOpen">
+                        <van-cell title="多本智能合并" icon="warning-o" is-link @click="openWbMerge" />
+                        <van-cell title="从网址导入世界书" icon="link-o" is-link @click="openWbUrlImport" />
+                        <van-cell title="从本地文件导入" icon="down" is-link @click="importWbFiles" />
+                        <van-cell title="导入 JSONL/Rentry 世界书" icon="description-o" is-link @click="importWbJsonl" />
+                        <van-cell title="批量导出库内世界书" icon="share-o" is-link @click="batchExportWb" />
+                        <van-cell title="世界书库统计" icon="chart-trending-o" is-link @click="showWbStats" />
+                    </template>
                 </van-cell-group>
 
                 <van-cell-group inset title="独立世界书文件">
@@ -221,15 +208,14 @@
         />
 
         <!-- 世界书操作菜单 -->
-        <van-popup v-model:show="showWbOps" position="bottom" round>
-            <van-action-sheet
-                :actions="wbOpsActions"
-                :description="wbOpsDesc"
-                cancel-text="取消"
-                @select="onWbOpsSelect"
-                @cancel="showWbOps = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showWbOps"
+            :actions="wbOpsActions"
+            :description="wbOpsDesc"
+            cancel-text="取消"
+            @select="onWbOpsSelect"
+            @cancel="showWbOps = false"
+        />
 
         <!-- 输入弹窗(重命名/新建/分组/URL导入) -->
         <van-dialog
@@ -292,7 +278,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { showSuccessToast, showToast, showConfirmDialog } from 'vant';
-import { mobileLibrary, loadLibrary, LIBRARY_ROOT } from '../useMobileLibrary';
+import { mobileLibrary, loadLibrary, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
 import DedupeModal from '../components/DedupeModal.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import GlobalEntrySearchModal from '../components/GlobalEntrySearchModal.vue';
@@ -863,25 +849,34 @@ export default {
 
         const cardWithWb = computed(() =>
             library.library.filter((c) => {
-                const wb = c.data && c.data.data && c.data.data.extensions && c.data.data.extensions.world_book;
-                return wb && wb.entries && Object.keys(wb.entries).length;
+                // 对齐桌面:内嵌世界书在 data.character_book(V2/V3),兼容 V1 顶层;extractBookEntries 全形态安全提取
+                const data = c.data || {};
+                const book = (data.data && data.data.character_book) || data.character_book;
+                return extractBookEntries(book).length > 0;
             })
         );
 
+        function entryName(e) {
+            if (!e || typeof e !== 'object') return '';
+            return e.comment || e.name || (Array.isArray(e.keys) && e.keys[0] ? e.keys[0] : String(e.keys || '')) || '';
+        }
+        function entryDisplayName(e) { return entryName(e) || '未命名条目'; }
+
         function entryCount(card) {
-            const wb = card.data.data.extensions.world_book;
-            return Object.keys(wb.entries).length;
+            const data = card.data || {};
+            const book = (data.data && data.data.character_book) || data.character_book;
+            return extractBookEntries(book).length;
         }
 
         function reload() { loadLibrary(); }
 
         async function openCardWb(card) {
-            const wb = card.data.data.extensions.world_book;
-            Object.values(wb.entries || {}).forEach(normalizeEntry);
+            const { entries } = getCardEmbeddedWb(card);
+            Object.values(entries).forEach(normalizeEntry);
             editing.value = {
                 path: card.path,
                 name: card.name + '（卡内）',
-                entries: wb.entries,
+                entries,
                 wrapped: false,
                 card
             };
@@ -963,6 +958,7 @@ export default {
             { text: '按内容长度', value: 'contentLen' }
         ];
         const entrySearchQuery = ref('');
+        const wbToolsOpen = ref(false);
         const entryFilterState = ref('all');
         const entrySortBy = ref('default');
 
@@ -991,7 +987,7 @@ export default {
             const sort = entrySortBy.value;
             if (sort === 'orderAsc') list = [...list].sort((a, b) => (a.e.order ?? 100) - (b.e.order ?? 100));
             else if (sort === 'orderDesc') list = [...list].sort((a, b) => (b.e.order ?? 100) - (a.e.order ?? 100));
-            else if (sort === 'name') list = [...list].sort((a, b) => String(a.e.comment || (a.e.keys && a.e.keys[0]) || '').localeCompare(String(b.e.comment || (b.e.keys && b.e.keys[0]) || ''), 'zh'));
+            else if (sort === 'name') list = [...list].sort((a, b) => String(entryName(a.e) || '').localeCompare(String(entryName(b.e) || ''), 'zh'));
             else if (sort === 'contentLen') list = [...list].sort((a, b) => (b.e.content?.length || 0) - (a.e.content?.length || 0));
 
             return list;
@@ -1132,7 +1128,8 @@ export default {
             stripTempFields(ed.entries);
             let payload;
             if (ed.card) {
-                // 卡内世界书:保存整卡
+                // 卡内世界书:保存整卡(entries 字典→数组对齐桌面 character_book.entries 标准)
+                serializeCardEmbeddedWb(ed.card);
                 const res = await window.electronAPI.saveCard(ed.path, JSON.parse(JSON.stringify(ed.card.data)));
                 res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
             } else if (ed.external) {
@@ -1348,6 +1345,7 @@ export default {
             openCardWb, openFileWb, closeEditor, addEntry, removeEntry, saveAll,
             WB_POSITIONS, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys,
             ENTRY_FILTER_OPTIONS, ENTRY_SORT_OPTIONS, entrySearchQuery, entryFilterState, entrySortBy, entryList,
+            entryName, entryDisplayName, wbToolsOpen,
             moveEntryByKey, duplicateEntry, expandAllEntries, collapseAllEntries, runEntryHealthCheck,
             entryBatchMode, entryBatchSet, toggleEntryBatch, toggleEntryBatchSelect, selectAllEntries, batchDeleteEntries, batchDisableEntries,
             showSnapshots, snapshots, openWbSnapshots, restoreWbSnapshot, deleteWbSnapshot,

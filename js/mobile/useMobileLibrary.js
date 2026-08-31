@@ -329,3 +329,49 @@ export async function saveCardData(card) {
     const res = await window.electronAPI.saveCard(card.path, JSON.parse(JSON.stringify(card.data)));
     return { success: res && res.success, error: res && res.error };
 }
+
+/**
+ * 读取卡内嵌世界书并归一化为「字典形态」供移动端编辑器使用。
+ * 对齐桌面:内嵌世界书标准字段为 data.character_book(V2/V3),兼容 V1 顶层 card.data.character_book;
+ * entries 可能为数组(桌面标准)或字典,统一转为字典 { key: entry } 便于现有编辑器操作。
+ * @returns {{book: object, entries: object}} book=character_book 对象(保存时写回), entries=字典
+ */
+export function getCardEmbeddedWb(card) {
+    const data = card && card.data;
+    const d = (data && data.data) || data || {};
+    let book = d.character_book;
+    if (!book || typeof book !== 'object') {
+        // V1 兼容:书位于归一化后的 card.data.character_book(无 data.data 层级)
+        book = (data && data.character_book) || {};
+        if (book && typeof book === 'object' && Object.keys(book).length) d.character_book = book;
+    }
+    if (!book || typeof book !== 'object') {
+        book = {};
+        d.character_book = book;
+    }
+    let entries = book.entries;
+    if (Array.isArray(entries)) {
+        // 桌面标准数组 → 编辑器字典形态(键 wb_i,保持顺序)
+        const dict = {};
+        entries.forEach((e, i) => { if (e && typeof e === 'object') dict['wb_' + i] = e; });
+        entries = dict;
+        book.entries = dict;
+    }
+    if (!entries || typeof entries !== 'object') {
+        entries = {};
+        book.entries = entries;
+    }
+    return { book, entries };
+}
+
+/** 保存前:把卡内嵌世界书 entries 从字典转回数组(对齐桌面 character_book.entries 数组标准) */
+export function serializeCardEmbeddedWb(card) {
+    try {
+        const data = card && card.data;
+        const d = (data && data.data) || data || {};
+        const book = d.character_book;
+        if (book && typeof book === 'object' && book.entries && !Array.isArray(book.entries)) {
+            book.entries = Object.values(book.entries).filter((e) => e && typeof e === 'object');
+        }
+    } catch (e) { /* 忽略序列化异常 */ }
+}

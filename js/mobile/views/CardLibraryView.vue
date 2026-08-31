@@ -13,7 +13,7 @@
             </template>
         </van-nav-bar>
 
-        <van-pull-refresh v-model="refreshing" @refresh="onRefresh" class="flex-1">
+        <van-pull-refresh :key="pullRefKey" v-model="refreshing" @refresh="onRefresh" class="flex-1" :pull-distance="80">
             <div class="view-body">
                 <!-- 未授权引导：整页覆盖，隐藏工具条，引导完成 SAF 目录授权 -->
                 <div v-if="!libraryReady && !loading && needsAuth" class="auth-guide">
@@ -45,7 +45,7 @@
                         :key="f.value"
                         class="cat-chip"
                         :class="{ active: quickFilter === f.value }"
-                        @click="quickFilter = f.value"
+                        @click="onQuickFilter(f.value)"
                     >{{ f.label }}</div>
                     <div class="cat-chip manage-chip" @click="showGroupManage = true">
                         <van-icon name="setting-o" size="13" /> 管理
@@ -59,7 +59,7 @@
                         :key="cat"
                         class="cat-chip"
                         :class="{ active: selected === cat }"
-                        @click="selected = cat"
+                        @click="onSelectCategory(cat)"
                     >{{ cat }}</div>
                 </div>
 
@@ -69,8 +69,8 @@
                     <van-dropdown-menu class="sort-menu">
                         <van-dropdown-item v-model="sortBy" :options="sortOptions" />
                     </van-dropdown-menu>
-                    <van-icon name="apps-o" :color="gridMode ? '#06b6d4' : ''" size="20" @click="gridMode = true" />
-                    <van-icon name="list" :color="!gridMode ? '#06b6d4' : ''" size="20" @click="gridMode = false" />
+                    <van-icon name="apps-o" :color="gridMode ? '#06b6d4' : ''" size="20" @click="setGridMode(true)" />
+                    <van-icon name="list" :color="!gridMode ? '#06b6d4' : ''" size="20" @click="setGridMode(false)" />
                 </div>
 
                 <!-- 卡片网格 / 列表 -->
@@ -96,7 +96,6 @@
                             @click.stop="toggleBatch(card.path)"
                         >✓</div>
                         <MobileCardCover v-if="gridMode" :card="card" class="grid-cover" />
-                        <MobileCardCover v-else :card="card" class="list-cover" />
                         <div class="card-meta">
                             <div class="c-name">{{ card.name }}</div>
                             <div v-if="gridMode" class="c-cat">{{ card.category }}</div>
@@ -114,14 +113,13 @@
         </van-pull-refresh>
 
         <!-- 长按操作 -->
-        <van-popup v-model:show="showSheet" position="bottom" round>
-            <van-action-sheet
-                :actions="sheetActions"
-                cancel-text="取消"
-                @select="onSheetSelect"
-                @cancel="showSheet = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showSheet"
+            :actions="sheetActions"
+            cancel-text="取消"
+            @select="onSheetSelect"
+            @cancel="showSheet = false"
+        />
 
         <!-- 批量模式底部操作栏 -->
         <div v-if="batchMode" class="batch-bar">
@@ -158,51 +156,47 @@
         </van-dialog>
 
         <!-- 批量导出选择 -->
-        <van-popup v-model:show="showExportSheet" position="bottom" round>
-            <van-action-sheet
-                :actions="exportSheetActions"
-                cancel-text="取消"
-                description="批量导出为 ZIP 包(分享)"
-                @select="onExportSelect"
-                @cancel="showExportSheet = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showExportSheet"
+            :actions="exportSheetActions"
+            cancel-text="取消"
+            description="批量导出为 ZIP 包(分享)"
+            @select="onExportSelect"
+            @cancel="showExportSheet = false"
+        />
 
         <!-- 移动分组选择 -->
-        <van-popup v-model:show="showGroupSheet" position="bottom" round>
-            <van-action-sheet
-                :actions="batchMode ? batchGroupActions : groupSheetActions"
-                cancel-text="取消"
-                :description="batchMode ? '移动选中卡片到分组' : '移动到分组'"
-                @select="onGroupSelect"
-                @cancel="showGroupSheet = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showGroupSheet"
+            :actions="batchMode ? batchGroupActions : groupSheetActions"
+            cancel-text="取消"
+            :description="batchMode ? '移动选中卡片到分组' : '移动到分组'"
+            @select="onGroupSelect"
+            @cancel="showGroupSheet = false"
+        />
 
         <!-- 查重弹窗(角色卡) -->
         <DedupeModal v-model:show="showDedupe" :mode="dedupeMode" @cleaned="onDedupeCleaned" @switch-mode="dedupeMode = $event" />
 
         <!-- 分组管理 -->
-        <van-popup v-model:show="showGroupManage" position="bottom" round>
-            <van-action-sheet
-                :actions="groupManageActions"
-                cancel-text="取消"
-                description="分组管理(新建/重命名/删除空分组)"
-                @select="onGroupManageSelect"
-                @cancel="showGroupManage = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showGroupManage"
+            :actions="groupManageActions"
+            cancel-text="取消"
+            description="分组管理(新建/重命名/删除空分组)"
+            @select="onGroupManageSelect"
+            @cancel="showGroupManage = false"
+        />
 
         <!-- 分组操作二次菜单 -->
-        <van-popup v-model:show="showGroupAction" position="bottom" round>
-            <van-action-sheet
-                :actions="groupActionItems"
-                cancel-text="取消"
-                :description="`分组「${groupActionTarget}」`"
-                @select="onGroupActionSelect"
-                @cancel="showGroupAction = false"
-            />
-        </van-popup>
+        <van-action-sheet
+            v-model:show="showGroupAction"
+            :actions="groupActionItems"
+            cancel-text="取消"
+            :description="`分组「${groupActionTarget}」`"
+            @select="onGroupActionSelect"
+            @cancel="showGroupAction = false"
+        />
 
         <!-- URL 导入卡片 -->
         <van-dialog
@@ -231,7 +225,7 @@
 
 <script>
 import { computed, ref, reactive, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, onBeforeRouteLeave } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
 import { useSearch } from '../../composables/useSearch';
@@ -270,7 +264,13 @@ export default {
         const isDark = currentTheme() === 'dark';
         const selected = ref('全部');
         const gridMode = ref(localStorage.getItem('jsmobile_grid') !== 'list');
+        function setGridMode(v) {
+            gridMode.value = v;
+            try { localStorage.setItem('jsmobile_grid', v ? 'grid' : 'list'); } catch (e) { /* 忽略 */ }
+        }
         const refreshing = ref(false);
+        const pullRefKey = ref(0);
+        onBeforeRouteLeave(() => { pullRefKey.value += 1; });
         const loading = ref(false);
         const libraryReady = ref(false);
         const needsAuth = ref(false);
@@ -321,7 +321,11 @@ export default {
             { label: '📚 有世界书', value: 'has_lorebook' },
             { label: '🔧 有正则', value: 'has_regex' }
         ];
-        const wbOf = (c) => c.data && c.data.data && c.data.data.extensions && c.data.data.extensions.world_book;
+        // 对齐桌面:内嵌世界书在 data.character_book(V2/V3),兼容 V1 顶层
+        const wbOf = (c) => {
+            const data = c && c.data;
+            return (data && data.data && data.data.character_book) || (data && data.character_book);
+        };
         const applyQuickFilter = (list) => {
             if (quickFilter.value === 'has_lorebook') {
                 return list.filter((c) => {
@@ -338,12 +342,22 @@ export default {
             return list;
         };
 
+        // 快捷过滤与分组互斥：点快捷过滤重置分组，点分组重置快捷过滤
+        function onQuickFilter(v) {
+            quickFilter.value = v;
+            selected.value = '全部';
+        }
+        function onSelectCategory(cat) {
+            selected.value = cat;
+            quickFilter.value = 'all';
+        }
+
         // ---------- 搜索引擎：桌面 v2.1.0 同款 useSearch（倒排索引 + 中文分词 + 高级语法 + 9种排序） ----------
         const currentCategoryKey = computed(() => {
-            // 移动端分组名 → 桌面版 key 语义
-            if (selected.value === '全部') return 'all';
+            // 快捷过滤优先级高于分组（否则「全部」分支会吞掉 has_regex/has_lorebook）
             if (quickFilter.value === 'has_lorebook') return 'has_lorebook';
             if (quickFilter.value === 'has_regex') return 'has_regex';
+            if (selected.value === '全部') return 'all';
             if (selected.value === '未分类') return 'cat:未分类';
             return 'cat:' + selected.value;
         });
@@ -816,9 +830,10 @@ export default {
         }
 
         return {
-            query, selected, gridMode, refreshing, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
+            query, selected, gridMode, refreshing, pullRefKey, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
             filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
+            onQuickFilter, onSelectCategory, setGridMode,
             sortBy, sortOptions,
             showGroupAction, groupActionTarget, groupActionItems, onGroupActionSelect,
             sheetActions, groupSheetActions, exportSheetActions,
@@ -836,7 +851,9 @@ export default {
 <style scoped>
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nav-actions .van-icon { margin-left: 14px; }
-.flex-1 { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.flex-1 { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+/* Vant PullRefresh 内部 track 补全高度链:否则 view-body 高度失控、页面无法向下滚动 */
+.flex-1 :deep(.van-pull-refresh__track) { flex: 1; min-height: 0; height: auto; display: flex; flex-direction: column; overflow: hidden; }
 .view-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
 
 .cat-scroll {
@@ -921,9 +938,8 @@ export default {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .c-cat { margin-top: 2px; font-size: 11px; color: var(--van-gray-6, #969799); }
-.is-list { display: flex; align-items: center; gap: 12px; }
-.list-cover { width: 64px; height: 84px; border-radius: 8px; flex-shrink: 0; }
-.is-list .card-meta { flex: 1; padding: 8px 12px 8px 0; }
+.is-list { display: flex; align-items: center; }
+.is-list .card-meta { flex: 1; padding: 10px 12px 12px; }
 .c-desc {
     margin-top: 4px; font-size: 12px; color: var(--van-gray-6, #969799);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

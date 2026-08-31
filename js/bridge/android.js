@@ -1045,7 +1045,8 @@ export const androidImpl = {
                 relPath: rel,
                 fileName,
                 fieldName,
-                apiKey: apiKey || ''
+                apiKey: apiKey || '',
+                timeout: 20000
             });
             return {
                 success: !!(res && res.success),
