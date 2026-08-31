@@ -2,7 +2,7 @@
 
 > 本文件是**给下一个 AI 接手时阅读的总纲**：把所有历史会话、当前状态、架构、关键坑、工作流浓缩在此。
 > 下一任 AI 只需读完本文件 + 必要时查阅 `README.md` / `RELEASE_NOTES.md` / `CHANGELOG.md` / 仓库记忆 `electron-notes.md`，即可无缝续写。
-> 最后更新：2026-08-23
+> 最后更新：2026-08-31
 
 ---
 
@@ -10,15 +10,15 @@
 
 | 项 | 值 |
 |---|---|
-| 项目 | SillyTavern（酒馆）角色卡本地管理桌面工具 |
-| 技术栈 | Electron 43.x + Vue 3.5 (Composition API + SFC) + Vite 8 + Tailwind 3 + ECharts 6 + electron-builder 26 + electron-updater + sharp |
-| 仓库 | `https://github.com/tian2418671-sys/JSKZX.git`（远端 `origin`） |
-| 当前版本 | **v1.8.9**（已发布 Latest）；本地有 2 个未推送 commit，下一版建议 **v1.8.10** |
-| 当前分支 | 本地 `master`；远端还有 `trae/agent-Fxvvsf`（已合入 master，可删） |
-| 构建产物 | `dist/sillytavern-card-manager-<版本>.exe`（NSIS 安装版）+ `latest.yml` + `.blockmap` + zip 绿色版 |
-| 用户习惯 | 「一条龙服务」= 升版本号 → 更新文档 → 打包 → 推送 → 发 GitHub Release（含 latest.yml 保 OTA） |
+| 项目 | SillyTavern（酒馆）角色卡本地管理工具：桌面版（Electron）+ 移动版（Android/Capacitor） |
+| 技术栈 | 桌面：Electron 43.x + Vue 3.5 + Vite 8 + Tailwind 3 + ECharts 6 + electron-builder 26 + electron-updater + sharp；移动：Capacitor 8.5 + Vant 4 + 同 Vue 栈 + 5 个自研 Java 插件 |
+| 仓库（双远端） | 桌面 `origin`=`https://github.com/tian2418671-sys/JSKZX.git`；移动 `jskapp`=`https://github.com/tian2418671-sys/-JSKZX-App.git` |
+| 当前版本 | 移动 **v1.10.0**（已发布 Latest）；桌面 **v2.1.0**（已发布） |
+| 当前分支 | 移动 `main-v1.10`（当前 HEAD）；桌面 `master` |
+| 构建产物 | 桌面：`dist/*.exe` + `latest.yml` + `.blockmap` + zip；移动：`android/app/build/outputs/apk/*/app-*.apk` |
+| 用户习惯 | 「一条龙服务」= 升版本号 → 更新文档 → 打包 → 推送 → 发 GitHub Release（移动端 OTA 读 releases/latest） |
 | 关键用户要求 | **没收到推送/打包指令禁止推送/打包**；用户会先自己看效果再决定 |
-| 文档体系 | `README.md`（完整开发文档）+ `RELEASE_NOTES.md`（对外更新日志）+ `CHANGELOG.md`（内部详细）+ 本文件 |
+| 文档体系 | `README.md` + `RELEASE_NOTES.md` + `CHANGELOG.md` + 本文件；移动端另有 `docs/`（android-migration-changelog / mobile-gap-* / mobile-feature-audit / APP-移植方案） |
 
 ---
 
@@ -151,6 +151,20 @@ test/              46 个单测（node:test，`npm test`）
 ### 📅 2026-08-23（本工作区之外的会话）
 - 会话 ded86a3f / 1443a95f / 29bf9088（cwd=h:\01\北派盗墓笔记，仓库 gui.git）：另一个项目（小说→世界书/UI 前端），与本 JSK管理 项目无关，**不要混淆**
 
+### 📅 2026-08-24 ~ 08-30（移动端 Android/Capacitor 迁移期，开发主线）
+- 桌面 v2.1.0 之后，开发重心转向**移动端**（Capacitor 8.5 + Vant 4，代码在 `js/mobile/` + `android/`，分支 `main-v1.10`，远端 `jskapp`）。
+- 三轮迁移把桌面引擎对齐到移动端：① 中文分词搜索/9 种排序/AI 打标规则表/批量读+内嵌缓存；② 内容指纹查重(MinHash+LSH)+预设管理引擎；③ 推送目标模式(酒馆API/卡库目录)+批量推送+字段级 Token 分析栏。
+- 新增 5 个自研 Java 插件：`LibraryFsPlugin`（文件/目录/回收站）、`AppConfigPlugin`（配置持久化）、`HttpPlugin`（网络桥接，绕 WebView CORS）、`UpdatePlugin`（OTA 检查/下载/校验/安装）、`KeystorePlugin`（密钥安全存储）。
+- OTA 走 GitHub Releases API（默认 feed `api.github.com/repos/tian2418671-sys/-JSKZX-App/releases/latest`）。
+- v1.10.0 发布：Worker 并行解析（JSON/PNG 解析移入 Web Worker，失败/超时回退主线程）。
+- 详细记录见 `docs/`：`android-migration-changelog.md` / `mobile-gap-plan.md` / `mobile-gap-v2.md` / `mobile-gap-v3.md` / `mobile-feature-audit.md` / `APP-移植方案-v1/v2.md`。
+
+### 📅 2026-08-31（今天）
+- **会话（本次）**：用户先下「打包上传」，盘点后发现 keystore 缺失 + 无上传凭据两个卡点，暂缓打包并列出待确认项；随后指令「记录今天的修改生成记忆指导文件推送到远程库」，执行如下：
+  - 今日 3 个 commit：`5519ef7` 预设管理从设置页迁移为底部 Tab 入口；`a058be9` 内嵌世界书数据层对齐 character_book + 交互/渲染修复；`7138c02` 新增移动端静态体检脚本 `scripts/check-mobile.mjs`。
+  - 今日 WIP 提交 `9612232`：卡片库/世界书顶部导航收敛为「更多」菜单（ellipsis → van-action-sheet）；下拉刷新与触底加载互斥修复（移除 IntersectionObserver 哨兵 → scroll 方向判定；非顶部禁用 pull-refresh）；`v-intersect` 指令修正 this 绑定；CardDetailView 补 `tokenTotal` 暴露；OTA 更新源预填默认地址 `DEFAULT_FEED`。
+- ⚠️ **待办/卡点**：① **keystore 丢失**——`keystore.properties`/`.jks`/`.keystore` 全盘未找到（旧路径 `e:\AI\酒馆工具\JSK管理\` 也不在），签名版 APK 与老用户 OTA 覆盖受影响；② **无上传凭据**——本机无 `gh`、无 `GH_TOKEN`/`GITHUB_TOKEN`，发 Release 需用户提供 PAT 或装 gh；③ 版本号仍 1.10.0，下次 OTA 需升 1.10.1+；④ 临时文件 `scripts/_tmp_audit.mjs` 未入库（`_tmp_` 前缀，建议删）。
+
 ---
 
 ## 五、🔴 关键坑清单（接手的 AI 必读，全部来自实战踩坑）
@@ -247,13 +261,13 @@ Invoke-WebRequest https://github.com/tian2418671-sys/JSKZX/releases/download/vX.
 
 ## 七、给下一任 AI 的开工建议
 
-1. **先读**：本文件 → `README.md`（架构/关键坑/开发指南）→ `RELEASE_NOTES.md` 顶部几节（最新功能）→ 仓库记忆 `electron-notes.md`（若配置了）。
-2. **确认 git 状态**：`git status` / `git log --oneline -5`——当前本地领先 origin 2 commit，等用户指令推送/打包。
-3. **未完成的下一件事**：世界书条目名修复（332c437/df3b78b）的推送与 v1.8.10 打包发布（仅当用户下令）。
-4. **遗留低优先级**：`switchToSecondGreeting is not defined`；`trae/agent-Fxvvsf` 分支清理。
+1. **先读**：本文件 → `README.md` → `RELEASE_NOTES.md` 顶部 → 移动端 `docs/`（android-migration-changelog.md / mobile-gap-*.md / mobile-feature-audit.md）。
+2. **确认 git 状态**：`git status` / `git log --oneline -5`——当前在移动端分支 `main-v1.10`（远端 `jskapp`），桌面线在 `master`（远端 `origin`）。
+3. **未完成的下一件事**：移动端 v1.10.1 打包发布（仅当用户下令）——先解决两个卡点：① keystore 缺失 ② 无 gh / 无 GitHub token。
+4. **遗留低优先级**：临时文件 `scripts/_tmp_audit.mjs` 清理（未入库）；桌面线 `trae/agent-Fxvvsf` 分支清理。
 5. **用户协作风格**：用户常报「某功能坏了」——先**验证代码现状**（grep/读源码）再判断，勿盲改；用户提供的代码方案要**适配本项目架构**（Electron IPC、app://、白名单、confirmDialog/nativeAlert、Options API 组件规范）再落地；重要功能改动后必须 `get_errors` + `vite build` + 真实启动冒烟。
 6. **改文件前先 grep 现状**（replace 的 oldString 与文件不符会失败）；大段替换后立即 get_errors 复查。
 
 ---
 
-*本文件由 AI 助手根据 2026-08-09 至 2026-08-23 全部会话 + 仓库记忆自动生成，供后续开发无缝交接。*
+*本文件由 AI 助手根据 2026-08-09 至 2026-08-31 全部会话 + 仓库记忆自动生成，供后续开发无缝交接。*
