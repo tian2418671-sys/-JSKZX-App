@@ -352,6 +352,7 @@ export default {
             } catch (e) {
                 console.error('查重失败:', e);
                 emptyText.value = '查重失败: ' + (e.message || e);
+                showToast('查重失败: ' + (e.message || e));
             } finally {
                 scanning.value = false;
             }

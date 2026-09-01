@@ -4,8 +4,8 @@
  * 定义 window.electronAPI 的完整接口签名、参数类型、返回值结构与错误码。
  * 桌面端 (electron.js) 和移动端 (android.js) 必须遵守同一份契约。
  *
- * 版本: 2.0 (M4 移动端对齐)
- * 最后更新: 2025-07
+ * 版本: 2.1 (移动端全量对齐)
+ * 最后更新: 2026-09
  */
 
 // ============================================================
@@ -22,7 +22,7 @@ export const ErrorCode = {
     INVALID_CARD: 'INVALID_CARD',
     /** 路径不在库根范围内 */
     PATH_OUTSIDE_LIBRARY: 'PATH_OUTSIDE_LIBRARY',
-    /** 功能尚未接入 (移动端 M2+ 逐步实现) */
+    /** 功能尚未接入 (预留;当前移动端已全量实现,基本不再产生该码) */
     NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
     /** 网络请求失败 */
     NETWORK_ERROR: 'NETWORK_ERROR',
@@ -103,10 +103,10 @@ export const ErrorCode = {
  *   删除文件
  *
  * @method duplicateFile(filePath:string) → {success:boolean, newPath?:string, error?:string}
- *   复制文件 (移动端暂不支持)
+ *   复制文件
  *
  * @method replaceCardImage({filePath:string, imageBase64:string, imageType:string}) → {success:boolean, error?:string}
- *   替换卡片封面图片 (移动端暂不支持)
+ *   替换卡片封面图片
  *
  * === 配置持久化 ===
  *
@@ -125,10 +125,10 @@ export const ErrorCode = {
  *   显示消息提示
  *
  * @method showItemInFolder(filePath:string) → {success:boolean, error?:string}
- *   在系统文件管理器中定位文件 (移动端不支持)
+ *   在系统文件管理器中定位文件 (移动端经 SAF 打开所在目录)
  *
  * @method openPath(filePath:string) → {success:boolean, error?:string}
- *   用系统默认应用打开文件 (移动端不支持)
+ *   用系统默认应用打开文件
  *
  * @method openExternal(url:string) → {success:boolean}
  *   用系统浏览器打开外部链接
@@ -139,7 +139,7 @@ export const ErrorCode = {
  *   发送聊天补全请求 (OpenAI/Anthropic 兼容)
  *
  * @method fetchModels(endpoint:string, apiKey:string, apiType:string) → {success:boolean, models?:string[], error?:string}
- *   获取模型列表 (移动端暂不支持)
+ *   获取模型列表
  *
  * === 酒馆推送 ===
  *
@@ -147,10 +147,10 @@ export const ErrorCode = {
  *   推送角色卡到 SillyTavern 酒馆
  *
  * @method autoDetectTavernPath() → {success:boolean, path?:string, error?:string}
- *   自动检测酒馆目录 (移动端不支持)
+ *   自动检测酒馆目录 (移动端读取已保存路径)
  *
  * @method pushToSillyTavernDir({filePath:string, tavernPath:string}) → {success:boolean, error?:string}
- *   推送到酒馆本地目录 (移动端不支持)
+ *   推送到酒馆本地目录
  *
  * === 世界书 ===
  *
@@ -167,7 +167,7 @@ export const ErrorCode = {
  *   重命名世界书文件
  *
  * @method exportWorldbooksBatch({paths:string[], destFolder:string}) → {success:boolean, error?:string}
- *   批量导出世界书 (移动端暂不支持)
+ *   批量导出世界书
  *
  * === 快照 ===
  *
@@ -175,19 +175,19 @@ export const ErrorCode = {
  *   列出卡片的所有快照
  *
  * @method createManualSnapshot(cardPath:string, label?:string) → {success:boolean, error?:string}
- *   创建手动快照 (移动端暂不支持)
+ *   创建手动快照
  *
  * @method restoreCardSnapshot(cardPath:string, snapshotId:string) → {success:boolean, error?:string}
- *   恢复快照 (移动端暂不支持)
+ *   恢复快照
  *
  * @method deleteCardSnapshot(cardPath:string, snapshotId:string) → {success:boolean, error?:string}
- *   删除单个快照 (移动端暂不支持)
+ *   删除单个快照
  *
  * @method cleanAllSnapshots() → {success:boolean, error?:string}
- *   清理所有快照 (移动端暂不支持)
+ *   清理所有快照
  *
  * @method cleanOrphanSnapshots() → {success:boolean, error?:string}
- *   清理孤儿快照 (移动端暂不支持)
+ *   清理孤儿快照
  *
  * === 磁盘扫描 ===
  *
@@ -209,7 +209,7 @@ export const ErrorCode = {
  *   移入回收站 (.trash 目录)
  *
  * @method openGlobalTrash() → {success:boolean, error?:string}
- *   打开全局回收站 (移动端不支持)
+ *   打开全局回收站
  *
  * === OTA 更新 ===
  *
@@ -240,21 +240,21 @@ export const ErrorCode = {
  * === 安全存储 ===
  *
  * @method encryptSecret(plain:string) → {success:boolean, value:string, error?:string}
- *   加密敏感数据 (移动端 M2 实现 Android Keystore)
+ *   加密敏感数据 (移动端 Android Keystore / 桌面 electron safeStorage)
  *
  * @method decryptSecret(cipher:string) → {success:boolean, value:string, error?:string}
- *   解密敏感数据 (移动端 M2 实现 Android Keystore)
+ *   解密敏感数据 (移动端 Android Keystore / 桌面 electron safeStorage)
  *
  * === 导入导出 ===
  *
  * @method importExternalCards(paths:string[], destFolder:string) → {success:boolean, copied:string[], skipped:string[], failed:string[], error?:string}
- *   导入外部卡片 (桌面端:文件选择器;移动端暂不支持)
+ *   导入外部卡片 (桌面端:文件选择器;移动端:SAF 目录导入)
  *
  * @method downloadCardFromUrl(url:string) → {success:boolean, error?:string}
- *   从 URL 下载角色卡 (移动端暂不支持)
+ *   从 URL 下载角色卡
  *
  * @method fetchWbUrl(url:string) → {success:boolean, error?:string}
- *   从 URL 获取世界书 (移动端暂不支持)
+ *   从 URL 获取世界书
  *
  * === 杂项 ===
  *
@@ -265,10 +265,10 @@ export const ErrorCode = {
  *   获取 Windows 驱动器列表 (移动端返回 [])
  *
  * @method selectGenericFolder() → {success:boolean, path?:string, error?:string}
- *   选择通用文件夹 (移动端暂不支持)
+ *   选择通用文件夹
  *
  * @method selectPushFolder() → {success:boolean, path?:string, error?:string}
- *   选择推送目标文件夹 (移动端暂不支持)
+ *   选择推送目标文件夹
  */
 
 // ============================================================
@@ -287,28 +287,34 @@ export function validateContract(impl) {
         // 分组管理
         'createGroupFolder', 'renameGroupFolder', 'moveCardToGroup', 'deleteEmptyGroupFolder',
         // 文件读写
-        'readBuffer', 'readText', 'saveCard', 'deleteFile',
+        'readBuffer', 'readText', 'writeText', 'readTextBatch', 'saveCard', 'deleteFile', 'duplicateFile', 'replaceCardImage',
         // 配置
-        'loadAppConfig', 'saveAppConfig',
+        'loadAppConfig', 'saveAppConfig', 'getUiSettings',
         // 对话框
-        'showMessage', 'openExternal',
+        'showMessage', 'showItemInFolder', 'openPath', 'openExternal',
         // 聊天测卡
-        'sendChatMessage',
+        'sendChatMessage', 'fetchModels',
         // 推送
-        'pushToTavern',
+        'pushToTavern', 'pushToCustomDir', 'pushToSillyTavernDir',
         // 世界书
-        'scanWorldbooks', 'saveWorldbook', 'createWorldbook', 'renameWorldbookFile',
+        'scanWorldbooks', 'saveWorldbook', 'createWorldbook', 'renameWorldbookFile', 'exportWorldbooksBatch',
         // 快照
-        'listCardSnapshots',
+        'listCardSnapshots', 'createManualSnapshot', 'restoreCardSnapshot', 'deleteCardSnapshot', 'cleanAllSnapshots', 'cleanOrphanSnapshots',
         // 磁盘扫描
         'scanTargetFolder', 'onScanProgress', 'importScanned',
         // 查重
-        'getFileStats', 'trashFiles',
+        'getFileStats', 'trashFiles', 'openGlobalTrash',
         // OTA
         'checkUpdate', 'downloadUpdate', 'installUpdate',
         'onUpdateAvailable', 'onUpdateNotAvailable', 'onUpdateProgress', 'onUpdateDownloaded', 'onUpdateError',
         // 安全
-        'encryptSecret', 'decryptSecret'
+        'encryptSecret', 'decryptSecret',
+        // 导入导出
+        'importExternalCards', 'downloadCardFromUrl', 'fetchWbUrl',
+        // 目录选择
+        'selectGenericFolder', 'selectPushFolder',
+        // 杂项
+        'getWindowsDrives'
     ];
 
     const missing = required.filter((name) => typeof impl[name] !== 'function');

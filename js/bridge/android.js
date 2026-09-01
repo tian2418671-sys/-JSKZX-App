@@ -4,7 +4,7 @@
  *  - 路径统一使用「库根相对路径」(如 `幻想组/星野.png`),由虚拟库根 /library 表达
  *  - 文件系统能力由 SAF(Storage Access Framework)树授权实现(原生插件 LibraryFsPlugin)
  *  - 全局配置持久化走私有文件 app_config.json(AppConfigPlugin)
- *  - M2 才能提供的网络/高级能力在此降级为「暂不支持」返回,不抛异常
+ *  - 网络/高级能力已全量接入(HttpPlugin/UpdatePlugin/KeystorePlugin 等),与桌面保持一致返回结构
  */
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
@@ -46,10 +46,6 @@ export function toRelativePath(p) {
     if (normalized.startsWith(LIBRARY_ROOT)) return normalized.slice(LIBRARY_ROOT.length).replace(/^\/+/, '');
     // 允许直接传相对路径
     return normalized.replace(/^\/+/, '');
-}
-
-function isStubError(name) {
-    return { success: false, error: `[移动端] ${name} 尚未接入桥接(M2 实现),请稍候` };
 }
 
 // ---------- M4:PNG 工具函数(用于 replaceCardImage / 快照) ----------
@@ -560,8 +556,10 @@ export const androidImpl = {
     // ---------- 对话框(M2 用 Toast/Alert 细化) ----------
     showMessage(options = {}) {
         const text = (options && (options.message || options.title)) || '';
-        setTimeout(() => window.alert && window.alert(text), 0);
-        return Promise.resolve({ success: true });
+        // WebView 中 window.alert 静默失效,且桥接层无原生对话框能力;
+        // 移动端 UI 统一走 Vant Toast/Dialog,本方法降级为结构化返回 + 控制台日志。
+        if (text) console.warn('[bridge:showMessage]', text);
+        return Promise.resolve({ success: true, message: text });
     },
     showItemInFolder(filePath) {
         const rel = toRelativePath(filePath);
