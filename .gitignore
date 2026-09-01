@@ -1,7 +1,7 @@
-﻿# 渚濊禆
+# 依赖
 node_modules/
 
-# 鏋勫缓浜х墿
+# 构建产物
 dist/
 dist_new/
 dist2/
@@ -9,31 +9,30 @@ out/
 web/
 css/tailwind.out.css
 
-# Electron 浜岃繘鍒跺壇鏈?缂撳瓨锛堟湰鍦版瀯寤虹敤锛屽嬁鎻愪氦锛?
+# Electron 二进制副本/缓存（本地构建用，勿提交）
 sillytavern-card-manager/
 *.zip
 
-# 鏃ュ織
+# 日志
 *.log
 crash.log
 
-# 绯荤粺/缂栬緫鍣?
+# 系统/编辑器
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# 涓存椂
+# 临时
 *.tmp
 *.bak
 
-# 涓存椂澶囦唤鑴氭湰涓庝笅杞界洰褰曪紙鍕挎彁浜わ級
+# 临时备份脚本与下载目录（勿提交）
 .gh_backup.ps1.gh_backup_tmp/
 
-# Android 鏋勫缓浜х墿
+# Android 构建产物
 *.apk
 *.aab
-
 
 # OpenSquilla 内部工作目录（APK 逆向解析产物等，勿提交）
 .opensquilla/
