@@ -1104,6 +1104,11 @@ export default {
 
         async function save() {
             if (!card.value) return;
+            // WebP 卡片不支持原地编辑(桥接层 _saveCardWebp 拒绝),提前拦截避免无意义的内存修改与误导
+            if (/\.webp$/i.test(card.value.path || '')) {
+                showToast('WebP 卡片不支持编辑保存，请先在桌面端转为 PNG');
+                return;
+            }
             // 正则脚本字段对齐酒馆规范:移除旧 enabled,保留 disabled
             if (d.value.extensions && Array.isArray(d.value.extensions.regex_scripts)) {
                 d.value.extensions.regex_scripts.forEach((r) => {
