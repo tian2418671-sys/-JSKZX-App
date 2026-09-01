@@ -47,7 +47,7 @@ export function useChat({
         if (apiType.value === 'anthropic') {
             if (!apiEndpoint.value || apiEndpoint.value.includes('openai') || apiEndpoint.value.includes('1234')) {
                 apiEndpoint.value = 'https://api.anthropic.com';
-                apiModel.value = 'claude-3-5-sonnet-20241022';
+                apiModel.value = 'claude-sonnet-4-20250514'; // 更新到当前可用模型
             }
         } else {
             if (!apiEndpoint.value || apiEndpoint.value.includes('anthropic')) {
@@ -73,7 +73,8 @@ export function useChat({
         fetchModelStatus.value = '⏳ 正在连接服务端拉取模型列表...';
         availableModels.value = [];
         try {
-            const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+            const authKey = (apiKey.value || '').trim();
+            if (!authKey) { fetchModelStatus.value = '❌ 请先配置 API Key'; isFetchingModels.value = false; return; }
             const result = await window.electronAPI.fetchModels(ep, authKey, apiType.value);
             if (!result || !result.success) {
                 fetchModelStatus.value = `❌ 拉取失败: ${(result && result.error) || '未知错误'}`;

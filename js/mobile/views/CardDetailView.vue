@@ -19,52 +19,97 @@
                     <!-- 基本信息(高频,每屏可见) -->
                     <div class="basic-wrap">
                         <div class="id-row">
-                            <div class="id-cover-wrap">
+                            <div class="id-cover-wrap" @click="previewCover">
                                 <MobileCardCover :card="card" aspect="1 / 1" class="id-cover" />
-                                <div class="id-cover-edit" @click="onChangeCover">🖼️</div>
+                                <div class="id-cover-edit" @click.stop="onChangeCover">🖼️</div>
                             </div>
                             <div class="id-info">
                                 <van-field v-model="d.name" label="名称" placeholder="角色名称" />
                                 <van-field v-model="d.creator" label="创建者" placeholder="创建者" />
                             </div>
                         </div>
-                        <div class="tag-row">
-                            <van-tag
-                                v-for="(t, i) in tags"
-                                :key="i" closable color="#eef7fb" text-color="#06b6d4"
-                                @close="removeTag(i)"
-                            >{{ t }}</van-tag>
-                            <van-tag plain color="#999" class="add-tag" @click="addTag">＋</van-tag>
+                        <van-collapse v-model="personalityOpen" class="field-collapse">
+                            <van-collapse-item title="性格" name="personality">
+                                <van-field v-model="d.personality" type="textarea" rows="3" autosize placeholder="角色性格特征" />
+                            </van-collapse-item>
+                        </van-collapse>
+                        <div class="tag-section">
+                            <div class="tag-header">
+                                <span class="sec-label" style="margin:0">标签</span>
+                                <span v-if="tags.length" class="tag-selected-count">已选 {{ tags.length }}</span>
+                                <van-button size="mini" plain @click="addTag" style="margin-left:auto">＋添加</van-button>
+                            </div>
+                            <div class="tag-row" v-if="tags.length">
+                                <van-tag
+                                    v-for="(t, i) in tags"
+                                    :key="i"
+                                    :color="selectedTagIndex === i ? '#06b6d4' : '#eef7fb'"
+                                    :text-color="selectedTagIndex === i ? '#fff' : '#06b6d4'"
+                                    closable
+                                    @click="selectTag(i)"
+                                    @close="removeTag(i)"
+                                >{{ t }}</van-tag>
+                            </div>
+                            <div v-else class="tag-empty">暂无标签</div>
+                            <div class="tag-actions" v-if="selectedTagIndex !== null && selectedTagIndex < tags.length">
+                                <van-button size="mini" plain type="primary" @click="editSelectedTag">编辑</van-button>
+                                <van-button size="mini" plain @click="moveSelectedTag(-1)" :disabled="selectedTagIndex === 0">↑</van-button>
+                                <van-button size="mini" plain @click="moveSelectedTag(1)" :disabled="selectedTagIndex === tags.length - 1">↓</van-button>
+                                <van-button size="mini" plain @click="duplicateSelectedTag">复制</van-button>
+                                <van-button size="mini" plain type="danger" @click="removeSelectedTag">删除</van-button>
+                            </div>
+                            <div class="tag-global-actions" v-if="tags.length > 1">
+                                <van-button size="mini" plain @click="sortTagsAlphabetically">排序</van-button>
+                                <van-button size="mini" plain type="danger" @click="clearAllTags">清空</van-button>
+                            </div>
                         </div>
                         <div class="preset-tags">
-                            <span class="pt-label" @click="toggleTagLang">标签库({{ tagLangMode === 'cn' ? '中' : 'EN' }})</span>
-                            <van-tag
-                                v-for="p in presetTagList"
-                                :key="p.en"
-                                plain
-                                :color="tags.includes(p.en) ? '#06b6d4' : '#999'"
-                                :text-color="tags.includes(p.en) ? '#fff' : '#666'"
-                                class="pt-item"
-                                @click="togglePresetTag(p)"
-                            >{{ tagLangMode === 'cn' ? p.cn : p.en }}</van-tag>
-                            <van-tag v-for="ct in customTagPool" :key="'c_'+ct" plain :color="tags.includes(ct) ? '#ee0a24' : '#c8c9cc'" :text-color="tags.includes(ct) ? '#fff' : '#666'" class="pt-item" @click="toggleCustomTag(ct)">{{ ct }}</van-tag>
-                            <van-tag plain color="#ddd" text-color="#666" class="pt-item" @click="addCustomTag">＋自定义</van-tag>
-                            <van-tag plain color="#ffecec" text-color="#ee0a24" class="pt-item" @click="manageCustomTags">管理</van-tag>
+                            <van-collapse v-model="tagCollapseActive" class="tag-collapse">
+                                <van-collapse-item name="tags">
+                                    <template #title>
+                                        <div class="tag-collapse-title">
+                                            <span>标签({{ tagLangMode === 'cn' ? '中' : 'EN' }})</span>
+                                            <span v-if="tags.length" class="tag-selected-count">· 已选 {{ tags.length }}</span>
+                                            <van-tag plain size="mini" color="#999" text-color="#666" style="margin-left: auto" @click.stop="toggleTagLang">语言</van-tag>
+                                        </div>
+                                    </template>
+                                    <van-tag
+                                        v-for="p in presetTagList"
+                                        :key="p.en"
+                                        plain
+                                        :color="tags.includes(p.en) ? '#06b6d4' : '#999'"
+                                        :text-color="tags.includes(p.en) ? '#fff' : '#666'"
+                                        class="pt-item"
+                                        @click="togglePresetTag(p)"
+                                    >{{ tagLangMode === 'cn' ? p.cn : p.en }}</van-tag>
+                                    <van-tag v-for="ct in customTagPool" :key="'c_'+ct" plain :color="tags.includes(ct) ? '#ee0a24' : '#c8c9cc'" :text-color="tags.includes(ct) ? '#fff' : '#666'" class="pt-item" @click="toggleCustomTag(ct)">{{ ct }}</van-tag>
+                                    <van-tag plain color="#ddd" text-color="#666" class="pt-item" @click="addCustomTag">＋自定义</van-tag>
+                                    <van-tag plain color="#ffecec" text-color="#ee0a24" class="pt-item" @click="manageCustomTags">管理</van-tag>
+                                </van-collapse-item>
+                            </van-collapse>
                         </div>
                         <div class="sec-label">Token 估算</div>
-                        <van-field :model-value="tokenText" readonly is-link center @click="showTokenDetail = !showTokenDetail" />
-                        <!-- 字段级 Token 分析栏(对齐桌面 Token 分析) -->
-                        <div v-if="showTokenDetail" class="token-analysis">
-                            <div v-for="row in tokenRows" :key="row.label" class="ta-row">
-                                <span class="ta-label">{{ row.label }}</span>
-                                <div class="ta-bar-wrap">
-                                    <div class="ta-bar" :style="{ width: row.pct + '%', background: row.color }" />
-                                </div>
-                                <span class="ta-num">{{ row.value }}</span>
+                        <van-field :model-value="tokenText" readonly is-link center @click="showTokenPanel = !showTokenPanel" />
+                        <div v-if="showTokenPanel" class="token-panel">
+                            <div class="tp-header">
+                                <span class="tp-title">Token 构成分析</span>
+                                <span class="tp-total">{{ tokenTotal }} tokens</span>
                             </div>
-                            <div class="ta-total">合计 ≈ {{ tokenTotal }} tokens（酒馆上下文按 4 字符 ≈ 1 token 估算）</div>
+                            <div v-for="row in tokenRows" :key="row.label" class="tp-row">
+                                <span class="tp-label">{{ row.label }}</span>
+                                <div class="tp-bar-wrap">
+                                    <div class="tp-bar" :style="{ width: row.pct + '%', background: row.color }" />
+                                </div>
+                                <span class="tp-num">{{ row.value }}</span>
+                                <span class="tp-pct">{{ row.pct }}%</span>
+                            </div>
+                            <div class="tp-divider"></div>
+                            <div class="tp-row tp-summary">
+                                <span class="tp-label">合计</span>
+                                <span class="tp-num">{{ tokenTotal }}</span>
+                            </div>
+                            <div class="tp-hint">含角色卡世界书数据 · 按 4 字符 ≈ 1 token 估算</div>
                         </div>
-                        <div v-else class="token-detail">{{ tokenDetailText }}</div>
 
                         <van-collapse v-model="descOpen" class="adv-collapse desc-collapse">
                             <van-collapse-item title="详细设定" name="desc">
@@ -279,8 +324,11 @@
                     </van-cell>
                 </van-cell-group>
 
-                <!-- 酒馆 API 模式 -->
+                <!-- 酒馆 API 模式（已被 SillyTavern 废弃，仅保留兼容） -->
                 <template v-if="pushTargetMode === 'sillytavern'">
+                    <van-notice-bar wrapable left-icon="warning-o" color="#faad14" background="#fffbe6">
+                        ⚠️ 此接口已被 SillyTavern 废弃，推荐改用「卡库目录」模式直接复制卡片到酒馆 characters 文件夹。
+                    </van-notice-bar>
                     <van-field
                         v-model="tavernUrl"
                         label="酒馆地址"
@@ -295,8 +343,8 @@
                         @update:model-value="savePushConfig"
                     />
                     <div class="push-tip">
-                        将向 {{ tavernUrl || '酒馆地址' }}/api/characters/import 以角色名「{{ card ? card.name : '' }}」推送本卡片。
-                        若酒馆开启了 API 扩展（设置 → Extensions → API），需要填写 API 密码。
+                        将以角色名「{{ card ? card.name : '' }}」向酒馆推送本卡片。
+                        <span style="color:#faad14">注意：该接口可能已被你的酒馆版本移除，推荐改用「卡库目录」模式。</span>
                     </div>
                 </template>
 
@@ -449,7 +497,7 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules } from '../../utils/cardLoader.js';
 import { useRoute } from 'vue-router';
-import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
+import { showToast, showSuccessToast, showConfirmDialog, showImagePreview } from 'vant';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
@@ -457,6 +505,7 @@ import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
 import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
+import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
@@ -476,6 +525,9 @@ export default {
         const advancedOpen = ref([]);
         const descOpen = ref(['desc']); // 详细设定默认展开，可手动折叠
         const showTokenDetail = ref(false);
+        const showTokenPanel = ref(false);
+        const personalityOpen = ref([]); // 性格默认折叠
+        const selectedTagIndex = ref(null);
         let saved = ref(true);
 
         // ---------- 推送酒馆 ----------
@@ -490,7 +542,8 @@ export default {
 
         // ---------- 推送目标管理(对齐桌面 PushModal:酒馆 API / 自定义卡库目录多目标) ----------
         const LS_PUSH_TARGETS = 'jsmobile-push-targets'; // { mode, currentId, targets: [{id,name,uri,title}] }
-        const pushTargetMode = ref('sillytavern');
+        // 默认卡库目录模式（酒馆 API /api/characters/import 已被 SillyTavern 废弃，仅保留兼容）
+        const pushTargetMode = ref('custom');
         const pushTargets = ref([]);
         const currentPushTargetId = ref('');
         try {
@@ -516,7 +569,7 @@ export default {
                 showToast((res && res.error) || '未选择目录');
                 return;
             }
-            const name = window.prompt('目标名称：', res.title || '卡库目录');
+            const name = await promptInput('推送目标名称', res.title || '卡库目录', '输入名称');
             if (name === null) return; // 用户取消
             const target = {
                 id: 'pt_' + Date.now().toString(36),
@@ -762,12 +815,71 @@ export default {
             d.value.tags.splice(i, 1);
             saved.value = false;
         }
-        function addTag() {
-            const t = window.prompt('输入标签:');
-            if (t && t.trim() && !d.value.tags.includes(t.trim())) {
-                d.value.tags.push(t.trim());
+        async function addTag() {
+            const t = await promptInput('输入标签', '', '标签名');
+            if (t && !d.value.tags.includes(t)) {
+                d.value.tags.push(t);
                 saved.value = false;
             }
+        }
+        function selectTag(i) {
+            selectedTagIndex.value = selectedTagIndex.value === i ? null : i;
+        }
+        async function editSelectedTag() {
+            if (selectedTagIndex.value === null) return;
+            const old = d.value.tags[selectedTagIndex.value];
+            const val = await promptInput('编辑标签', old, '输入新标签名');
+            if (val !== null && val && val !== old && !d.value.tags.includes(val)) {
+                d.value.tags[selectedTagIndex.value] = val;
+                saved.value = false;
+            } else if (val && d.value.tags.includes(val) && val !== old) {
+                showToast('标签已存在');
+            }
+        }
+        function moveSelectedTag(dir) {
+            const i = selectedTagIndex.value;
+            if (i === null) return;
+            const j = i + dir;
+            if (j < 0 || j >= d.value.tags.length) return;
+            [d.value.tags[i], d.value.tags[j]] = [d.value.tags[j], d.value.tags[i]];
+            selectedTagIndex.value = j;
+            saved.value = false;
+        }
+        function duplicateSelectedTag() {
+            if (selectedTagIndex.value === null) return;
+            const tag = d.value.tags[selectedTagIndex.value];
+            const copy = tag + '_副本';
+            if (!d.value.tags.includes(copy)) {
+                d.value.tags.splice(selectedTagIndex.value + 1, 0, copy);
+                saved.value = false;
+                showToast('已复制');
+            }
+        }
+        function removeSelectedTag() {
+            if (selectedTagIndex.value === null) return;
+            d.value.tags.splice(selectedTagIndex.value, 1);
+            selectedTagIndex.value = null;
+            saved.value = false;
+        }
+        async function sortTagsAlphabetically() {
+            if (d.value.tags.length < 2) return;
+            try {
+                await showConfirmDialog({ title: '标签排序', message: '按字母顺序排序所有标签？' });
+            } catch (e) { return; }
+            d.value.tags.sort((a, b) => a.localeCompare(b, 'zh'));
+            selectedTagIndex.value = null;
+            saved.value = false;
+            showSuccessToast('已排序');
+        }
+        async function clearAllTags() {
+            if (!d.value.tags.length) return;
+            try {
+                await showConfirmDialog({ title: '清空标签', message: `确定移除全部 ${d.value.tags.length} 个标签？`, confirmButtonColor: '#ee0a24' });
+            } catch (e) { return; }
+            d.value.tags = [];
+            selectedTagIndex.value = null;
+            saved.value = false;
+            showSuccessToast('已清空');
         }
 
         // ---------- 标签库（中英双语预设，对齐桌面 useTags presetTagsLibrary） ----------
@@ -783,6 +895,8 @@ export default {
             { cn: '原创', en: 'Original' }, { cn: '动漫', en: 'Anime' }, { cn: '游戏', en: 'Game' }, { cn: '小说', en: 'Novel' }
         ];
         const tagLangMode = ref(localStorage.getItem('stc-tag-lang') || 'cn');
+        // 预设标签面板折叠状态（空数组 = 全部折叠）
+        const tagCollapseActive = ref([]);
         const presetTagList = computed(() => PRESET_TAGS);
         function toggleTagLang() {
             tagLangMode.value = tagLangMode.value === 'cn' ? 'en' : 'cn';
@@ -951,12 +1065,25 @@ export default {
         }
 
         const t = (v) => estimateTokens(String(v || ''));
+        // 世界书内容 token 估算
+        const wbTokenCount = computed(() => {
+            const { entries } = getCardEmbeddedWb(card.value);
+            let sum = 0;
+            Object.values(entries).forEach((e) => {
+                if (e && typeof e === 'object') {
+                    sum += t(e.comment) + t(e.content);
+                    if (Array.isArray(e.keys)) sum += t(e.keys.join(' '));
+                }
+            });
+            return sum;
+        });
         const tokenTotal = computed(() =>
             t(d.value.description) + t(d.value.personality) + t(d.value.first_mes)
             + t(d.value.scenario) + t(d.value.mes_example) + t(greetingsText.value)
+            + wbTokenCount.value
         );
         const tokenText = computed(() => `≈ ${tokenTotal.value} tokens`);
-        // 字段级 Token 分析(带占比进度条)
+        // 字段级 Token 分析(带占比进度条, 含世界书)
         const tokenRows = computed(() => {
             const rows = [
                 { label: '详细设定', value: t(d.value.description), color: '#1989fa' },
@@ -964,14 +1091,15 @@ export default {
                 { label: '开场白', value: t(d.value.first_mes), color: '#ff976a' },
                 { label: '场景', value: t(d.value.scenario), color: '#ee0a24' },
                 { label: '示例对话', value: t(d.value.mes_example), color: '#7232dd' },
-                { label: '备用开场白', value: t(greetingsText.value), color: '#00b8d4' }
+                { label: '备用开场白', value: t(greetingsText.value), color: '#00b8d4' },
+                { label: '世界书', value: wbTokenCount.value, color: '#ff6b9d' }
             ];
             const total = rows.reduce((s, r) => s + r.value, 0) || 1;
             rows.forEach((r) => { r.pct = Math.max(r.value ? 2 : 0, Math.round((r.value / total) * 100)); });
             return rows.filter((r) => r.value > 0 || r.label === '详细设定');
         });
         const tokenDetailText = computed(() =>
-            `详细设定: ${t(d.value.description)}\n性格: ${t(d.value.personality)}\n开场白: ${t(d.value.first_mes)}\n场景: ${t(d.value.scenario)}\n示例对话: ${t(d.value.mes_example)}\n备用开场白: ${t(greetingsText.value)}\n合计: ${tokenTotal.value}`
+            `详细设定: ${t(d.value.description)}\n性格: ${t(d.value.personality)}\n开场白: ${t(d.value.first_mes)}\n场景: ${t(d.value.scenario)}\n示例对话: ${t(d.value.mes_example)}\n备用开场白: ${t(greetingsText.value)}\n世界书: ${wbTokenCount.value}\n合计: ${tokenTotal.value}`
         );
 
         async function save() {
@@ -1035,6 +1163,23 @@ export default {
                 }
             } finally {
                 changingCover.value = false;
+            }
+        }
+
+        // ---------- 封面大图预览 ----------
+        async function previewCover() {
+            if (!card.value) return;
+            try {
+                const r = await window.electronAPI.readBuffer(card.value.path);
+                if (r && r.success && r.buffer) {
+                    const url = URL.createObjectURL(new Blob([r.buffer]));
+                    showImagePreview([url]);
+                    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ } }, 60000);
+                } else {
+                    showToast('无封面图');
+                }
+            } catch (e) {
+                showToast('无法预览封面');
             }
         }
 
@@ -1174,6 +1319,8 @@ export default {
         const chatApiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const chatApiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
         const radioStyle = { marginRight: '16px' };
+        // 启动时解密读取 API Key（兼容历史明文；无有效 Key 保持空）
+        loadChatApiKey().then((k) => { if (k) chatApiKey.value = k; });
 
         // ---------- 模型列表拉取(桥接 fetchModels 已支持双协议) + 协议切换自动填端点 ----------
         const availableModels = ref([]);
@@ -1252,18 +1399,7 @@ export default {
             localStorage.setItem(LS_MODEL, chatApiModel.value.trim());
             localStorage.setItem(LS_TYPE, chatApiType.value);
             // API Key 加密后落盘(Keystore AES-256-GCM;兼容读取旧明文)
-            const plainKey = chatApiKey.value.trim();
-            if (plainKey) {
-                try {
-                    const enc = await api.encryptSecret(plainKey);
-                    if (enc && enc.success && enc.value) localStorage.setItem(LS_KEY, enc.value);
-                    else localStorage.setItem(LS_KEY, plainKey);
-                } catch (e) {
-                    localStorage.setItem(LS_KEY, plainKey);
-                }
-            } else {
-                localStorage.removeItem(LS_KEY);
-            }
+            await saveChatApiKey(chatApiKey.value.trim());
             showChatApi.value = false;
             showSuccessToast('已保存 API 配置');
         }
@@ -1581,17 +1717,18 @@ export default {
         });
 
         return {
-            card, id, activeTab, advancedOpen, descOpen, showTokenDetail, saved,
+            card, id, activeTab, advancedOpen, descOpen, showTokenDetail, showTokenPanel, personalityOpen, saved,
             d, tags, greetingsText, wbEntries, regexList,
-            tokenText, tokenDetailText, tokenRows, tokenTotal,
+            tokenText, tokenDetailText, tokenRows, tokenTotal, wbTokenCount,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
             moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,
-            presetTagList, tagLangMode, togglePresetTag, toggleTagLang,
+            selectTag, editSelectedTag, moveSelectedTag, duplicateSelectedTag, removeSelectedTag, sortTagsAlphabetically, clearAllTags, selectedTagIndex,
+            presetTagList, tagLangMode, togglePresetTag, toggleTagLang, tagCollapseActive,
             customTagPool, toggleCustomTag, addCustomTag, manageCustomTags,
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             save,
-            changingCover, onChangeCover,
+            changingCover, onChangeCover, previewCover,
             showSnapshots, snapshots, openSnapshots, createSnapshot,
             restoreSnapshot, deleteSnapshot, cleanSnapshots,
             statusInput, previewText, statusScripts, statusApplied, statusHtml, statusNeedsIframe, statusSrcdoc, resetStatusDemo,
@@ -1641,9 +1778,11 @@ export default {
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 10px; align-items: center; }
 .add-tag { cursor: pointer; }
 .preset-tags {
-    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-    padding: 2px 0 10px;
+    padding: 2px 0 0;
 }
+.tag-collapse :deep(.van-collapse-item__title) { padding: 6px 0; }
+.tag-collapse-title { width: 100%; display: flex; align-items: center; gap: 3px; }
+.tag-selected-count { color: #06b6d4; margin-left: 4px; font-size: 11px; }
 .pt-label { font-size: 11px; color: var(--van-gray-6); flex-shrink: 0; margin-right: 2px; cursor: pointer; }
 .pt-item { cursor: pointer; }
 .sec-label { font-size: 12px; color: var(--van-gray-6); margin: 6px 0 2px; }
@@ -1654,6 +1793,32 @@ export default {
 .token-analysis {
     background: var(--van-gray-1); border-radius: 8px; padding: 10px; margin-bottom: 8px;
 }
+/* Token 构成面板 */
+.token-panel {
+    background: var(--van-gray-1); border-radius: 10px; padding: 12px; margin-bottom: 8px;
+}
+.tp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.tp-title { font-size: 13px; font-weight: 600; color: var(--van-text-color); }
+.tp-total { font-size: 15px; font-weight: 700; color: #06b6d4; font-variant-numeric: tabular-nums; }
+.tp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tp-label { width: 62px; flex-shrink: 0; font-size: 11px; color: var(--van-gray-6); }
+.tp-bar-wrap { flex: 1; height: 8px; background: var(--van-gray-2); border-radius: 4px; overflow: hidden; }
+.tp-bar { height: 100%; border-radius: 4px; transition: width .25s; }
+.tp-num { width: 40px; flex-shrink: 0; text-align: right; font-size: 11px; color: var(--van-text-color); font-variant-numeric: tabular-nums; }
+.tp-pct { width: 32px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--van-gray-5); }
+.tp-divider { height: 1px; background: var(--van-gray-3); margin: 8px 0; }
+.tp-summary .tp-label { font-weight: 600; color: var(--van-text-color); }
+.tp-summary .tp-num { font-weight: 700; color: #06b6d4; }
+.tp-hint { font-size: 10px; color: var(--van-gray-5); margin-top: 6px; }
+/* 性格折叠 */
+.field-collapse { margin: 8px 0; }
+.field-collapse :deep(.van-collapse-item__title) { padding: 6px 0; }
+/* 标签区 */
+.tag-section { margin: 8px 0; }
+.tag-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.tag-empty { font-size: 12px; color: var(--van-gray-5); padding: 8px 0; }
+.tag-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--van-gray-2); }
+.tag-global-actions { display: flex; gap: 4px; margin-top: 4px; }
 .ta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ta-label { width: 62px; flex-shrink: 0; font-size: 11px; color: var(--van-gray-6); }
 .ta-bar-wrap { flex: 1; height: 8px; background: var(--van-gray-2); border-radius: 4px; overflow: hidden; }

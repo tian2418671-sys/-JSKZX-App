@@ -34,7 +34,7 @@ export function useSnapshots({
                 //   导致开关永远同步不到主进程 → 关闭自动快照后仍生成快照（历史 BUG 根因）
                 const plain = JSON.parse(JSON.stringify(snapshotConfig.value));
                 await window.electronAPI.updateSnapshotConfig(plain);
-            } catch (e) { console.warn('快照配置同步主进程失败:', e); }
+            } catch (e) { console.warn('快照配置同步主进程失败:', e); showToast('快照配置同步失败，自动快照可能不生效', 'warning'); }
         }
     };
     watch(snapshotConfig, saveSnapshotSettings, { deep: true });
@@ -112,7 +112,7 @@ export function useSnapshots({
                             showToast('🔄 已从快照恢复并刷新当前卡片', 'success');
                         }
                     }
-                } catch (e) { console.warn('恢复后刷新当前卡片失败', e); }
+                } catch (e) { console.warn('恢复后刷新当前卡片失败', e); showToast('恢复成功但界面刷新失败，请重新打开卡片', 'warning'); }
             }
             // 刷新列表（恢复操作会生成新的"当前版本"快照）
             const listRes = await window.electronAPI.listCardSnapshots(snapshotCardPath.value);

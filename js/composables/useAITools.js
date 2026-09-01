@@ -240,7 +240,8 @@ export function useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey
                     ],
                     temperature: 0.2 // 偏低温度保证 JSON 格式稳定性
                 };
-                const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+                const authKey = (apiKey.value || '').trim();
+                if (!authKey) { showToast('请先在设置中配置 API Key', 'error'); return; }
                 // 429 限流 / 网络抖动时自动退避重试，避免批量打标大面积失败
                 const result = await callAIWithRetry(payload, authKey);
 
@@ -352,7 +353,8 @@ export function useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey
                 ],
                 temperature: 0.3 // 偏低温度保证翻译稳定
             };
-            const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+            const authKey = (apiKey.value || '').trim();
+            if (!authKey) { showToast('请先在设置中配置 API Key', 'error'); return text; }
             const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
             if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
             return extractReplyContent(result).trim();
@@ -432,7 +434,8 @@ export function useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey
                 ],
                 temperature: 0.3
             };
-            const authKey = (apiKey.value && apiKey.value.trim()) ? apiKey.value : 'test-key';
+            const authKey = (apiKey.value || '').trim();
+            if (!authKey) { showToast('请先在设置中配置 API Key', 'error'); return; }
             const result = await window.electronAPI.sendChatMessage(apiEndpoint.value, payload, authKey, apiType.value);
             if (!result || !result.success) throw new Error((result && result.error) || 'API 请求失败');
 

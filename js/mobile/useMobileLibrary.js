@@ -8,6 +8,8 @@
 import { reactive } from 'vue';
 import { normalizeCardData, isCharacterCardData } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
+// Worker 内联（?worker&inline）：Android WebView 加载外部 Worker 文件不可靠，内联为 data URL 后由 Vite 生成降级兜底
+import cardParseWorker from './cardParseWorker.js?worker&inline';
 
 export const LIBRARY_ROOT = '/library';
 
@@ -80,7 +82,7 @@ function getParseWorker() {
     if (parseWorkerFailed) return null;
     if (parseWorker) return parseWorker;
     try {
-        parseWorker = new Worker(new URL('./cardParseWorker.js', import.meta.url), { type: 'module' });
+        parseWorker = new cardParseWorker({ type: 'module' });
         parseWorker.onmessage = (e) => {
             const { id, ok, parsed } = e.data || {};
             const p = parsePending.get(id);
@@ -127,7 +129,9 @@ function parseViaWorker(kind, raw) {
     });
 }
 
-export async function loadLibrary() {
+export async function loadLibrary(refresh = false) {
+    // 已加载完成且库非空时跳过重复扫描（返回页面/组件重复挂载不重扫；下拉刷新等传 true 强制重扫）
+    if (!refresh && mobileLibrary.ready && mobileLibrary.library.length > 0) return;
     mobileLibrary.loading = true;
     mobileLibrary.error = '';
     mobileLibrary.ready = false;

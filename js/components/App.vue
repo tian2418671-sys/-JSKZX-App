@@ -1296,7 +1296,7 @@ export default {
         // 【修复】Anthropic 协议必须回退到 Claude 模型，否则网关返回 400；OpenAI 兼容协议才用 local-model
         const resolveApiModel = () => {
             if (apiModel.value && apiModel.value.trim()) return apiModel.value.trim();
-            return apiType.value === 'anthropic' ? 'claude-3-haiku-20240307' : 'local-model';
+            return apiType.value === 'anthropic' ? 'claude-3-5-haiku-20241022' : 'local-model';
         };
 
         // API 三件套（Endpoint / Key / Model）变化时自动持久化：localStorage 兜底 + 统一配置中枢（app_config.json）

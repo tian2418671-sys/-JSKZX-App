@@ -229,6 +229,17 @@
             @close="showGraph = false"
             @jump="jumpFromGraph"
         />
+
+        <!-- 输入弹窗(重命名/新建分组等，WebView 中 window.prompt 返回 null) -->
+        <van-dialog
+            v-model:show="showInputDialog"
+            :title="inputDialogTitle"
+            show-cancel-button
+            @confirm="onInputConfirm"
+            @cancel="onInputCancel"
+        >
+            <van-field v-model="inputValue" :placeholder="inputPlaceholder" style="margin: 16px 0" />
+        </van-dialog>
     </div>
 </template>
 
@@ -237,7 +248,8 @@ import { computed, ref, reactive, onMounted, watch, onBeforeUnmount } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
-import { useSearch } from '../../composables/useSearch';
+import { useSearch, extractCardSearchableText, extractCardTags } from '../../composables/useSearch';
+import searchIndex from '../../utils/searchIndex.js';
 import { api } from '../../bridge/api';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import DedupeModal from '../components/DedupeModal.vue';
@@ -307,13 +319,20 @@ export default {
         let lastScrollTop = 0;
         let sentinelGuard = false;
         let scrollListener = null;
+        let touchStartListener = null;
         const sentinelThreshold = 180;
         onMounted(() => {
             const scroller = document.querySelector('.van-pull-refresh__track');
             if (!scroller) return;
+            // 关键修复:在 touchstart 时锁定 pullDisabled 状态。
+            // 手指按下时不在顶部(scrollTop>5)→ 整个手势期间禁用下拉刷新,
+            // 即使手指滚回顶部也不会误触发。只有从顶部开始的新手势才能下拉刷新。
+            touchStartListener = () => {
+                pullDisabled.value = scroller.scrollTop > 5;
+            };
+            scroller.addEventListener('touchstart', touchStartListener, { passive: true });
             scrollListener = () => {
                 const st = scroller.scrollTop;
-                pullDisabled.value = st > 5; // 不在顶部 → 禁用下拉刷新
                 if (sentinelGuard) return;
                 if (st < lastScrollTop) { lastScrollTop = st; return; } // 上滑忽略
                 lastScrollTop = st;
@@ -328,11 +347,13 @@ export default {
             scroller.addEventListener('scroll', scrollListener, { passive: true });
         });
         onBeforeUnmount(() => {
-            if (scrollListener) {
-                const scroller = document.querySelector('.van-pull-refresh__track');
-                if (scroller) scroller.removeEventListener('scroll', scrollListener);
-                scrollListener = null;
+            const scroller = document.querySelector('.van-pull-refresh__track');
+            if (scroller) {
+                if (scrollListener) scroller.removeEventListener('scroll', scrollListener);
+                if (touchStartListener) scroller.removeEventListener('touchstart', touchStartListener);
             }
+            scrollListener = null;
+            touchStartListener = null;
         });
         watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
         let activeCard = null;
@@ -437,18 +458,8 @@ export default {
             estimateCardTokens: null // 桌面版 v2.1.0 已改用 tokenCache,此参数仅旧版引用
         });
 
-        // 分组匹配桌面版语义：'cat:xxx' 前缀转分组过滤；其余走 useSearch 内建语义
-        const catName = computed(() => currentCategoryKey.value.startsWith('cat:') ? currentCategoryKey.value.slice(4) : '');
-
-        const filtered = computed(() => {
-            let list = searchEngine.filteredLibrary.value;
-            const cn = catName.value;
-            if (cn) {
-                // '未分类' 或普通分组名过滤(桌面版 passCategory 无法表达中文名,在此补充)
-                list = list.filter((c) => c.category === cn || c.subFolder === cn || (c.subFolder || '').split(/[\\/]/)[0] === cn);
-            }
-            return list;
-        });
+        // 分组匹配桌面版语义：'cat:xxx' 前缀转分组过滤；useSearch 内置分类/子目录过滤
+        const filtered = computed(() => searchEngine.filteredLibrary.value);
 
         function snippet(card) {
             const desc = (card.data && card.data.data && card.data.data.description) || '';
@@ -484,14 +495,18 @@ export default {
             }
         }
 
-        async function load() {
+        async function load(refresh = false) {
             loading.value = true;
             needsAuth.value = false;
             renderCount.value = 24;
-            await loadLibrary();
+            await loadLibrary(refresh);
             loading.value = false;
             needsAuth.value = !mobileLibrary.ready && !!mobileLibrary.error;
             libraryReady.value = mobileLibrary.ready;
+            // 异步预热搜索索引（分片 yield，不阻塞 UI），大库首次搜索免全量扫描
+            if (libraryReady.value && mobileLibrary.library.length > 0) {
+                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags).catch(() => {});
+            }
             if (needsAuth.value && !authLost.value) {
                 // 扫描失败且非"库根不可用"时,区分首次授权与授权失效(需查原生持久化状态)
                 const info = await api.libraryInfo();
@@ -501,7 +516,7 @@ export default {
 
         async function onRefresh() {
             refreshing.value = true;
-            await load();
+            await load(true);
             refreshing.value = false;
         }
 
@@ -509,7 +524,7 @@ export default {
             const res = await window.electronAPI.selectFolder();
             if (res && !res.error) {
                 authLost.value = false;
-                load();
+                load(true);
                 // 选错目录引导:授权成功但该文件夹没有角色卡
                 if (!(res.files && res.files.length)) {
                     showToast('该文件夹未找到角色卡，可重新选择');
@@ -731,7 +746,7 @@ export default {
             showGroupAction.value = false;
             const target = groupActionTarget.value;
             if (action.value === 'rename') {
-                const newName = window.prompt(`重命名分组「${target}」为:`, target);
+                const newName = await promptInput(`重命名分组「${target}」`, target, '输入新名称');
                 if (!newName || !newName.trim() || newName.trim() === target) return;
                 const res = await window.electronAPI.renameGroupFolder({ libraryPath: LIBRARY_ROOT, oldName: target, newName: newName.trim() });
                 if (res && res.success) {
@@ -750,7 +765,7 @@ export default {
         }
 
         async function createGroupFlow() {
-            const name = window.prompt('新分组名称:');
+            const name = await promptInput('新建分组', '', '输入分组名称');
             if (!name || !name.trim()) return;
             const res = await window.electronAPI.createGroupFolder({ libraryPath: LIBRARY_ROOT, groupName: name.trim() });
             if (res && res.success) {
@@ -763,7 +778,7 @@ export default {
             if (action.value === 'move') {
                 showGroupSheet.value = true;
             } else if (action.value === 'rename') {
-                const newName = window.prompt('新的角色名称:', activeCard.name);
+                const newName = await promptInput('重命名角色卡', activeCard.name, '输入新名称');
                 if (newName && newName.trim() && newName.trim() !== activeCard.name) {
                     const res = await renameCardTo(activeCard, newName.trim());
                     res.success ? showSuccessToast('已重命名') : showToast(res.error || '失败');
@@ -797,7 +812,7 @@ export default {
             showGroupSheet.value = false;
             let target = action.value;
             if (target === '__new__') {
-                const name = window.prompt('新分组名称:');
+                const name = await promptInput('新建分组', '', '输入分组名称');
                 if (!name || !name.trim()) return;
                 target = name.trim();
             }
@@ -831,7 +846,7 @@ export default {
         async function onExportSelect(action) {
             showExportSheet.value = false;
             if (action.value === 'url') {
-                const url = window.prompt('角色卡直链（PNG/JSON）:');
+                const url = await promptInput('从网址导入', '', 'https://…/character.png 直链');
                 if (!url || !/^https?:\/\//i.test(url)) { if (url) showToast('仅支持 http/https 直链'); return; }
                 showToast('下载中…');
                 const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
@@ -870,7 +885,30 @@ export default {
             router.push({ name: 'cardDetail', query: { p: path } });
         }
 
+        // Promise 式输入弹窗(WebView 中 window.prompt 返回 null，必须用 van-dialog 替代)
+        const showInputDialog = ref(false);
+        const inputDialogTitle = ref('');
+        const inputValue = ref('');
+        const inputPlaceholder = ref('');
+        let inputResolver = null;
+        function promptInput(title, value, placeholder) {
+            inputDialogTitle.value = title;
+            inputValue.value = value || '';
+            inputPlaceholder.value = placeholder || '';
+            showInputDialog.value = true;
+            return new Promise((resolve) => { inputResolver = resolve; });
+        }
+        function onInputConfirm() {
+            showInputDialog.value = false;
+            if (inputResolver) { inputResolver(inputValue.value.trim()); inputResolver = null; }
+        }
+        function onInputCancel() {
+            showInputDialog.value = false;
+            if (inputResolver) { inputResolver(null); inputResolver = null; }
+        }
+
         return {
+            showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             query, selected, gridMode, refreshing, pullRefKey, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
             filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,

@@ -257,6 +257,7 @@ export function useWorldbooks({
                 addLog(`📂 导入世界书: ${bookName}`, 'success');
             } catch (e) {
                 console.warn(`跳过无效文件 ${file.name}:`, e);
+                addLog(`跳过无效文件 ${file.name}: ${(e && e.message) || e}`, 'warning');
             }
         }
 

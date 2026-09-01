@@ -362,6 +362,13 @@ export const androidImpl = {
         const res = await LibraryFs.readText({ path: rel });
         return res && res.success ? { success: true, text: res.value || '' } : { success: false, error: (res && res.error) || '读取失败' };
     },
+    /** 写入文本文件(用于 JSON 卡片、缓存文件等；PNG/WebP 必须走 writeBuffer) */
+    async writeText(filePath, content) {
+        const rel = toRelativePath(filePath);
+        if (rel === null) return { success: false, error: '路径无效' };
+        const res = await LibraryFs.writeText({ path: rel, content: content || '' });
+        return res && res.success ? { success: true } : { success: false, error: (res && res.error) || '写入失败' };
+    },
     /** 批量读文本(万卡优化:单次 IPC 拉取多个 json 文件,减少桥接往返) */
     async readTextBatch(paths) {
         const rels = (paths || []).map(toRelativePath).filter((p) => p !== null);
@@ -575,8 +582,16 @@ export const androidImpl = {
     /** 聊天补全:经原生 HttpPlugin 转发(绕 WebView CORS),协议 OpenAI/Anthropic 兼容 */
     async sendChatMessage(endpoint, payload, apiKey, apiType) {
         if (!endpoint) return { success: false, data: null, error: '[移动端] 未配置 API 端点' };
+        const key = (apiKey || '').trim();
         const headers = { 'Content-Type': 'application/json' };
-        if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+        if (apiType === 'anthropic') {
+            // Anthropic 协议: x-api-key + anthropic-version，不能用 Bearer
+            if (key) headers['x-api-key'] = key;
+            headers['anthropic-version'] = '2023-06-01';
+        } else {
+            // OpenAI / 兼容协议
+            if (key) headers['Authorization'] = 'Bearer ' + key;
+        }
         try {
             const res = await Http.post({ url: endpoint, body: JSON.stringify(payload || {}), headers });
             if (!res.success) {

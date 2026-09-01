@@ -48,6 +48,7 @@
 <script>
 import { ref, reactive, watch, nextTick } from 'vue';
 import * as echarts from 'echarts';
+import { showToast } from 'vant';
 
 const MAX_GROUP_SIZE = 300;   // 超大群体跳过(防连线爆炸)
 const MAX_LINKS = 1500;       // 移动端连线预算(性能上限)
@@ -256,7 +257,7 @@ export default {
                 building.value = true;
                 nextTick(() => {
                     setTimeout(() => {
-                        try { initChart(); } catch (e) { console.error('图谱构建失败:', e); } finally { building.value = false; }
+                        try { initChart(); } catch (e) { console.error('图谱构建失败:', e); showToast('图谱构建失败，请稍后重试', 'fail'); } finally { building.value = false; }
                     }, 50);
                 });
             } else {

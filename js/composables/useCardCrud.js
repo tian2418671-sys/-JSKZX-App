@@ -91,6 +91,7 @@ export function useCardCrud({
                 if (saveRes && saveRes.success && saveRes.mtime) cardItem._mtime = saveRes.mtime;
             } catch (err) {
                 console.error('卡片文件物理覆盖失败，已用物理配置文件兜底:', err);
+                showToast('卡片保存失败：文件可能被占用或只读', 'error');
             }
         }
     };
@@ -224,6 +225,7 @@ export function useCardCrud({
                     if (saveRes && saveRes.success && saveRes.mtime) cardInfo._mtime = saveRes.mtime;
                 } catch (e) {
                     console.warn(`自动打标后台保存失败 [${cardInfo.name}]:`, e);
+                    showToast(`自动打标保存失败 [${cardInfo.name}]`, 'warning');
                 }
             }));
             await new Promise(r => setTimeout(r, 0)); // 批间让出主线程一拍
@@ -345,6 +347,7 @@ export function useCardCrud({
                                 if (saveRes && saveRes.success && saveRes.mtime) cardInfo._mtime = saveRes.mtime;
                             } catch (e) {
                                 console.warn(`自动打标物理保存失败 [${cardInfo.name}]:`, e);
+                                showToast(`自动打标保存失败 [${cardInfo.name}]`, 'warning');
                             }
                         }
                     }
@@ -353,6 +356,7 @@ export function useCardCrud({
             }
         } catch (err) {
             console.warn(`跳过文件 ${file.name}`, err);
+            showToast(`解析失败已跳过: ${file.name}`, 'warning');
         }
         return false;
     };

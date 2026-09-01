@@ -62,6 +62,7 @@ export function useDedupe({
                 if (statsRes && statsRes.success) fileStats = statsRes.data || {};
             } catch (e) {
                 console.warn('获取文件信息失败，将仅依据 Token 判定:', e);
+                addLog('获取文件信息失败，将仅依据 Token 判定: ' + (e && e.message || e));
             }
 
             // 4. 组装查重分组并综合排序
@@ -212,6 +213,7 @@ export function useDedupe({
                 if (statsRes && statsRes.success) fileStats = statsRes.data || {};
             } catch (e) {
                 console.warn('获取世界书文件信息失败:', e);
+                addLog('获取世界书文件信息失败: ' + (e && e.message || e));
             }
 
             wbDuplicateGroups.value = potentialGroups.map(([name, list]) => {

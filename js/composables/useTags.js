@@ -112,7 +112,8 @@ export function useTags({
     // 根据当前语言模式显示任意已存储标签（未知标签原样返回，兼容中英/双语存储格式）
     const displayTagText = (tag) => {
         if (!tag) return tag;
-        const preset = presetTagsLibrary.find(p => p.cn === tag || p.en === tag || tag.startsWith(`${p.en} (`));
+        // 精确匹配：cn/en/双语格式三者完全相等，避免 startsWith 前缀误匹配
+        const preset = presetTagsLibrary.find(p => p.cn === tag || p.en === tag || tag === `${p.en} (${p.cn})`);
         if (!preset) return tag;
         if (tagLangMode.value === 'cn') return preset.cn;
         if (tagLangMode.value === 'en') return preset.en;
@@ -160,13 +161,24 @@ export function useTags({
         const total = items.length;
         const prog = total > 10 ? createProgressToast() : null; // 小批量不打扰
         let saved = 0;
+        const errors = []; // 收集失败卡片的错误信息
         for (let i = 0; i < total; i++) {
-            if (await taskFn(items[i])) saved++;
+            const result = await taskFn(items[i]);
+            if (result === true) {
+                saved++;
+            } else if (typeof result === 'string') {
+                errors.push(result); // taskFn 返回错误描述字符串
+            }
             if (prog && ((i + 1) % 20 === 0 || i + 1 === total)) {
                 prog.update(`${label}... ${i + 1}/${total}`);
             }
         }
         if (prog) prog.finish(`✅ ${label}完成（${saved}/${total} 张已落盘）`, saved === total ? 'success' : 'warning');
+        // 有失败时告知用户具体原因（最多展示前 5 条，避免刷屏）
+        if (errors.length > 0) {
+            const detail = errors.slice(0, 5).join('\n');
+            nativeAlert(`⚠️ ${label}：${errors.length} 张失败\n${detail}${errors.length > 5 ? `\n…等共 ${errors.length} 条` : ''}`, 'error');
+        }
         // 🔧 批次结束强制冲刷一次落盘（防抖只负责循环中高频写，这里收尾防丢最后一次变更）
         if (total > 0) syncConfigToDisk();
         return saved;
@@ -219,7 +231,7 @@ export function useTags({
                 return true;
             } catch (e) {
                 console.error(`清洗标签后物理保存失败 [${item.name}]:`, e);
-                return false;
+                return `[${item.name}] ${(e && e.message) || e}`;
             }
         });
 
@@ -270,7 +282,7 @@ export function useTags({
                 return true;
             } catch (e) {
                 console.error(`一键清空标签后物理保存失败 [${item.name}]:`, e);
-                return false;
+                return `[${item.name}] ${(e && e.message) || e}`;
             }
         });
 
@@ -322,7 +334,7 @@ export function useTags({
                 return true;
             } catch (e) {
                 console.error(`批量删除标签后物理保存失败 [${item.name}]:`, e);
-                return false;
+                return `[${item.name}] ${(e && e.message) || e}`;
             }
         });
         if (cardData.value) triggerRef(cardData);
@@ -414,7 +426,7 @@ export function useTags({
                 return true;
             } catch (e) {
                 console.error(`批量标签保存失败 [${item.name}]:`, e);
-                return false;
+                return `[${item.name}] ${(e && e.message) || e}`;
             }
         });
 

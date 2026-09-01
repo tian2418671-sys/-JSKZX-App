@@ -1,4 +1,4 @@
-<template>
+﻿<template>
     <div class="view-page">
         <van-nav-bar title="设置" safe-area-inset-top />
 
@@ -183,6 +183,7 @@
 import { ref, onMounted } from 'vue';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
+import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { loadLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
@@ -287,7 +288,9 @@ export default {
         }
 
         const apiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
-        const apiKey = ref(localStorage.getItem(LS_KEY) || '');
+        const apiKey = ref('');
+        // 解密读取 API Key（与详情页 useChatApiConfig 加密链路对齐，兼容旧明文）
+        loadApiKey().then(k => { apiKey.value = k; });
         const apiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const apiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
 
@@ -328,9 +331,9 @@ export default {
             }
         }
 
-        function saveApi() {
+        async function saveApi() {
             localStorage.setItem(LS_ENDPOINT, apiEndpoint.value.trim());
-            localStorage.setItem(LS_KEY, apiKey.value.trim());
+            await saveApiKey(apiKey.value.trim()); // 加密保存（与详情页统一）
             localStorage.setItem(LS_MODEL, apiModel.value.trim());
             localStorage.setItem(LS_TYPE, apiType.value);
             showSuccessToast('已保存 API 配置');

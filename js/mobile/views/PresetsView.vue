@@ -66,6 +66,17 @@
             </div>
             <div v-if="edError" class="pv-editor-error">{{ edError }}</div>
         </van-popup>
+
+        <!-- 输入弹窗(新建/复制预设，WebView 中 window.prompt 返回 null) -->
+        <van-dialog
+            v-model:show="showInputDialog"
+            :title="inputDialogTitle"
+            show-cancel-button
+            @confirm="onInputConfirm"
+            @cancel="onInputCancel"
+        >
+            <van-field v-model="inputValue" :placeholder="inputPlaceholder" style="margin: 16px 0" />
+        </van-dialog>
     </div>
 </template>
 
@@ -244,12 +255,26 @@ export default {
             }
         }
 
-        /** 简易名称输入弹窗（WebView 原生 prompt，返回 null 表示取消） */
+        // Promise 式输入弹窗(WebView 中 window.prompt 返回 null，必须用 van-dialog 替代)
+        const showInputDialog = ref(false);
+        const inputDialogTitle = ref('');
+        const inputValue = ref('');
+        const inputPlaceholder = ref('');
+        let inputResolver = null;
         function promptName(label, def) {
-            if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
-                return Promise.resolve(window.prompt(label, def || ''));
-            }
-            return Promise.resolve(def || '');
+            inputDialogTitle.value = label;
+            inputValue.value = def || '';
+            inputPlaceholder.value = '输入名称';
+            showInputDialog.value = true;
+            return new Promise((resolve) => { inputResolver = resolve; });
+        }
+        function onInputConfirm() {
+            showInputDialog.value = false;
+            if (inputResolver) { inputResolver(inputValue.value.trim()); inputResolver = null; }
+        }
+        function onInputCancel() {
+            showInputDialog.value = false;
+            if (inputResolver) { inputResolver(null); inputResolver = null; }
         }
 
         onMounted(async () => {
@@ -265,6 +290,7 @@ export default {
         });
 
         return {
+            showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             title, treeUri, q, loading, filtered, presets, showEditor, edName, edJson, saving, edError,
             pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta
         };
