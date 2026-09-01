@@ -1,98 +1,50 @@
 {
-  "generatedAt": "2026-09-01T07:33:52.638Z",
+  "generatedAt": "2026-09-01T08:48:11.706Z",
   "counts": {
     "P0": 0,
-    "P1": 31,
-    "P2": 125
+    "P1": 0,
+    "P2": 143
   },
   "issues": [
     {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/components/AITagModal.vue",
-      "line": 155,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/components/ApiSettingsModal.vue",
-      "line": 23,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
+      "sev": "P2",
+      "area": "API-本地默认地址",
       "file": "/js/components/App.vue",
       "line": 1271,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
+      "sev": "P2",
+      "area": "API-本地默认地址",
       "file": "/js/components/App.vue",
       "line": 1760,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/components/EditorPanel.vue",
-      "line": 587,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/mobile/components/AiToolModal.vue",
-      "line": 23,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/mobile/views/CardDetailView.vue",
-      "line": 406,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
+      "sev": "P2",
+      "area": "API-本地默认地址",
       "file": "/js/mobile/views/CardDetailView.vue",
       "line": 1317,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
+      "sev": "P2",
+      "area": "API-本地默认地址",
       "file": "/js/mobile/views/CardDetailView.vue",
       "line": 1389,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
-      "file": "/js/mobile/views/SettingsView.vue",
-      "line": 37,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
-    },
-    {
-      "sev": "P1",
-      "area": "API-硬编码默认地址",
+      "sev": "P2",
+      "area": "API-本地默认地址",
       "file": "/js/mobile/views/SettingsView.vue",
       "line": 290,
-      "desc": "硬编码本地 LM Studio 地址，不便切换第三方中转",
-      "fix": "仅作为占位提示，不写入持久化配置"
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
       "sev": "P2",
@@ -231,22 +183,6 @@
       "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
     },
     {
-      "sev": "P1",
-      "area": "桥接-IPC差距",
-      "file": "/js/bridge/android.js",
-      "line": 0,
-      "desc": "桌面 IPC \"tavern:push\" 在移动端 android.js 无实现",
-      "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
-    },
-    {
-      "sev": "P1",
-      "area": "桥接-IPC差距",
-      "file": "/js/bridge/android.js",
-      "line": 0,
-      "desc": "桌面 IPC \"tavern:autoDetectPath\" 在移动端 android.js 无实现",
-      "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
-    },
-    {
       "sev": "P2",
       "area": "桥接-IPC差距",
       "file": "/js/bridge/android.js",
@@ -260,14 +196,6 @@
       "file": "/js/bridge/android.js",
       "line": 0,
       "desc": "桌面 IPC \"dialog:selectPushFolder\" 在移动端 android.js 无实现",
-      "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
-    },
-    {
-      "sev": "P1",
-      "area": "桥接-IPC差距",
-      "file": "/js/bridge/android.js",
-      "line": 0,
-      "desc": "桌面 IPC \"tavern:pushDir\" 在移动端 android.js 无实现",
       "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
     },
     {
@@ -583,12 +511,12 @@
       "fix": "确认是否需要移动端支持，若不需要则 UI 禁用"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "标签-双数据源",
       "file": "/js/composables/useTags.js",
       "line": 0,
-      "desc": "customTags 与 data.tags 并存，易导致标签重启/重扫后丢失或复活",
-      "fix": "统一以 data.tags 为唯一数据源"
+      "desc": "customTags（内存显示层）与 data.tags（PNG 元数据持久层）双写，属有意的分层设计，已做双写同步",
+      "fix": "如需重构可统一数据源，但需同步改造 persistCardUpdate 链路"
     },
     {
       "sev": "P2",
@@ -818,7 +746,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 216,
+      "line": 217,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -826,7 +754,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 226,
+      "line": 227,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -834,7 +762,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 232,
+      "line": 233,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -842,7 +770,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 258,
+      "line": 259,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -850,7 +778,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 264,
+      "line": 265,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -858,7 +786,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 283,
+      "line": 284,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -866,7 +794,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 348,
+      "line": 349,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -874,7 +802,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 357,
+      "line": 358,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -882,7 +810,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 421,
+      "line": 422,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -890,7 +818,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useCardCrud.js",
-      "line": 508,
+      "line": 509,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1119,132 +1047,100 @@
       "fix": "上线前清理或改为日志组件"
     },
     {
-      "sev": "P1",
-      "area": "异步-错误被吞",
-      "file": "/js/bridge/android.js",
-      "line": 213,
-      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
-    },
-    {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 935,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 952,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 987,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 998,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 1064,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 2015,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 2026,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/App.vue",
       "line": 3635,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/DiskScanModal.vue",
       "line": 204,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/DiskScanModal.vue",
       "line": 233,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/DiskScanModal.vue",
       "line": 269,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
-      "sev": "P1",
+      "sev": "P2",
       "area": "异步-错误被吞",
       "file": "/js/components/DiskScanModal.vue",
       "line": 288,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
-    },
-    {
-      "sev": "P1",
-      "area": "异步-错误被吞",
-      "file": "/js/composables/useAITools.js",
-      "line": 198,
-      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
-    },
-    {
-      "sev": "P1",
-      "area": "异步-错误被吞",
-      "file": "/js/composables/useCardCrud.js",
-      "line": 89,
-      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
-    },
-    {
-      "sev": "P1",
-      "area": "异步-错误被吞",
-      "file": "/js/composables/useChat.js",
-      "line": 75,
-      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
-      "fix": "catch 里加 Toast/Alert 或 throw 给外层"
+      "fix": "（桌面端）catch 加失败明细提示"
     },
     {
       "sev": "P2",

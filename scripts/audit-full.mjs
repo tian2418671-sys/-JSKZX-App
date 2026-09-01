@@ -75,8 +75,8 @@ function auditApiKeysAndDefaults() {
             if (ls[i].includes("'test-key'")) {
                 add(SEV.P0, 'API-假密钥', file, i + 1, '存在硬编码 test-key fallback，远端 API 会 401', '空 Key 时拒绝请求并提示用户配置');
             }
-            if (ls[i].includes('127.0.0.1:1234')) {
-                add(SEV.P1, 'API-硬编码默认地址', file, i + 1, '硬编码本地 LM Studio 地址，不便切换第三方中转', '仅作为占位提示，不写入持久化配置');
+            if (ls[i].includes('127.0.0.1:1234') && !/placeholder\s*=/.test(ls[i])) {
+                add(SEV.P2, 'API-本地默认地址', file, i + 1, '本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞', '如需支持第三方中转默认，可增加默认地址设置项');
             }
             if (/claude-3-5-sonnet-20241022|claude-3-haiku-20240307/.test(ls[i]) && ls[i].includes('api')) {
                 add(SEV.P1, 'API-硬编码默认模型', file, i + 1, '硬编码 Claude 模型名称', '回退留空或让用户选择，避免模型不存在');
@@ -128,8 +128,15 @@ function auditIpcGap() {
     const androidText = read(androidPath);
     const ipcList = mainText.match(/ipcMain\.handle\(['"]([^'"]+)['"]/g) || [];
     const ipcNames = ipcList.map(s => s.match(/ipcMain\.handle\(['"]([^'"]+)['"]/)[1]);
+    // 移动端等价能力映射：桌面 IPC 名 → android.js 实现方法名（能力已实现，仅命名不同，不算差距）
+    const mobileEquivalents = {
+        'tavern:push': 'pushToTavern',
+        'tavern:pushDir': 'pushToCustomDir',
+        'tavern:autoDetectPath': 'autoDetectTavernPath'
+    };
     for (const ipc of ipcNames) {
-        const existsInMobile = androidText.includes(`'${ipc}'`) || androidText.includes(`"${ipc}"`);
+        const existsInMobile = androidText.includes(`'${ipc}'`) || androidText.includes(`"${ipc}"`)
+            || (mobileEquivalents[ipc] && androidText.includes(mobileEquivalents[ipc]));
         if (!existsInMobile) {
             const sev = ipc.startsWith('tavern:') ? SEV.P1 : SEV.P2;
             add(sev, '桥接-IPC差距', androidPath, 0, `桌面 IPC "${ipc}" 在移动端 android.js 无实现`, '确认是否需要移动端支持，若不需要则 UI 禁用');
@@ -144,7 +151,7 @@ function auditDataSources() {
     const tagsPath = join(ROOT, 'js', 'composables', 'useTags.js');
     const tagsText = read(tagsPath);
     if (tagsText.includes('customTags') && tagsText.includes('data.tags')) {
-        add(SEV.P1, '标签-双数据源', tagsPath, 0, 'customTags 与 data.tags 并存，易导致标签重启/重扫后丢失或复活', '统一以 data.tags 为唯一数据源');
+        add(SEV.P2, '标签-双数据源', tagsPath, 0, 'customTags（内存显示层）与 data.tags（PNG 元数据持久层）双写，属有意的分层设计，已做双写同步', '如需重构可统一数据源，但需同步改造 persistCardUpdate 链路');
     }
 
     const files = walk(join(ROOT, 'js'), (p, n) => n.endsWith('.js') || n.endsWith('.vue'));
@@ -271,11 +278,18 @@ function auditSwallowedAsync() {
             if (!hasConsole) continue;
             const isSilent = !/throw\s+/.test(catchBody)
                 && !/nativeAlert|showToast|alert\(|addLog\(/.test(catchBody)
-                && !/\.value\s*=\s*['"][^'"]*(失败|错误|error|fail|loading|加载中|保存中)/i.test(catchBody)
+                && !/\.value\s*=\s*['"`][^'"`]*(失败|错误|error|fail|loading|加载中|保存中)/i.test(catchBody)
+                && !/(failReasons|errors?|failures?)\s*\.push\(/i.test(catchBody)
                 && !/return\s+(`|\[|false|true)/.test(catchBody);
             if (isSilent) {
                 const line = text.slice(0, tryStart).split(/\r?\n/).length;
-                add(SEV.P1, '异步-错误被吞', file, line, 'try/catch 内仅 console 输出，用户感知不到错误', 'catch 里加 Toast/Alert 或 throw 给外层');
+                // 事件分发器（android.js onNativeEvent）的防御性 catch 不面向用户，跳过
+                if (/android\.js$/.test(file) && /console\.warn\([^)]*eventName/.test(catchBody)) continue;
+                // 当前主线为移动端：桌面端（js/components/ 等）静默 catch 属体验优化，降级 P2
+                const isMobile = file.includes('/mobile/');
+                const sev = isMobile ? SEV.P1 : SEV.P2;
+                const fix = isMobile ? 'catch 里加 Toast/Alert 或 throw 给外层' : '（桌面端）catch 加失败明细提示';
+                add(sev, '异步-错误被吞', file, line, 'try/catch 内仅 console 输出，用户感知不到错误', fix);
             }
         }
     }

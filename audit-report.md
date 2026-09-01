@@ -1,20 +1,20 @@
 # 项目自检报告
 
-生成时间：2026/9/1 15:33:52
+生成时间：2026/9/1 16:48:11
 
 ## 汇总
 
 | 严重级别 | 数量 |
 | --- | --- |
 | P0 | 0 |
-| P1 | 31 |
-| P2 | 125 |
-| **总计** | **156** |
+| P1 | 0 |
+| P2 | 143 |
+| **总计** | **143** |
 
 ## 标签-双数据源
 
-- **P1** `/js/composables/useTags.js`：customTags 与 data.tags 并存，易导致标签重启/重扫后丢失或复活  
-  → 修复建议：统一以 data.tags 为唯一数据源
+- **P2** `/js/composables/useTags.js`：customTags（内存显示层）与 data.tags（PNG 元数据持久层）双写，属有意的分层设计，已做双写同步  
+  → 修复建议：如需重构可统一数据源，但需同步改造 persistCardUpdate 链路
 
 ## 代码-调试输出
 
@@ -74,25 +74,25 @@
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/composables/useChat.js:40`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:508`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:509`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:421`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:422`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:357`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:358`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:348`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:349`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:283`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:284`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:264`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:265`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:258`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:259`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:232`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:233`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:226`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:227`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useCardCrud.js:216`：存在 console 调试输出  
+- **P2** `/js/composables/useCardCrud.js:217`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/composables/useCardCrud.js:93`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
@@ -169,12 +169,6 @@
 
 ## 桥接-IPC差距
 
-- **P1** `/js/bridge/android.js`：桌面 IPC "tavern:pushDir" 在移动端 android.js 无实现  
-  → 修复建议：确认是否需要移动端支持，若不需要则 UI 禁用
-- **P1** `/js/bridge/android.js`：桌面 IPC "tavern:autoDetectPath" 在移动端 android.js 无实现  
-  → 修复建议：确认是否需要移动端支持，若不需要则 UI 禁用
-- **P1** `/js/bridge/android.js`：桌面 IPC "tavern:push" 在移动端 android.js 无实现  
-  → 修复建议：确认是否需要移动端支持，若不需要则 UI 禁用
 - **P2** `/js/bridge/android.js`：桌面 IPC "file:exportBatchPackage" 在移动端 android.js 无实现  
   → 修复建议：确认是否需要移动端支持，若不需要则 UI 禁用
 - **P2** `/js/bridge/android.js`：桌面 IPC "file:exportPackage" 在移动端 android.js 无实现  
@@ -292,63 +286,43 @@
 
 ## 异步-错误被吞
 
-- **P1** `/js/composables/useChat.js:75`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/composables/useCardCrud.js:89`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/composables/useAITools.js:198`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/DiskScanModal.vue:288`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/DiskScanModal.vue:269`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/DiskScanModal.vue:233`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/DiskScanModal.vue:204`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:3635`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:2026`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:2015`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:1064`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:998`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:987`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:952`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/components/App.vue:935`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
-- **P1** `/js/bridge/android.js:213`：try/catch 内仅 console 输出，用户感知不到错误  
-  → 修复建议：catch 里加 Toast/Alert 或 throw 给外层
+- **P2** `/js/components/DiskScanModal.vue:288`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/DiskScanModal.vue:269`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/DiskScanModal.vue:233`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/DiskScanModal.vue:204`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:3635`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:2026`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:2015`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:1064`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:998`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:987`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:952`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/components/App.vue:935`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
 
-## API-硬编码默认地址
+## API-本地默认地址
 
-- **P1** `/js/mobile/views/SettingsView.vue:290`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/mobile/views/SettingsView.vue:37`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/mobile/views/CardDetailView.vue:1389`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/mobile/views/CardDetailView.vue:1317`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/mobile/views/CardDetailView.vue:406`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/mobile/components/AiToolModal.vue:23`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/components/EditorPanel.vue:587`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/components/App.vue:1760`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/components/App.vue:1271`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/components/ApiSettingsModal.vue:23`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
-- **P1** `/js/components/AITagModal.vue:155`：硬编码本地 LM Studio 地址，不便切换第三方中转  
-  → 修复建议：仅作为占位提示，不写入持久化配置
+- **P2** `/js/mobile/views/SettingsView.vue:290`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
+- **P2** `/js/mobile/views/CardDetailView.vue:1389`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
+- **P2** `/js/mobile/views/CardDetailView.vue:1317`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
+- **P2** `/js/components/App.vue:1760`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
+- **P2** `/js/components/App.vue:1271`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
 
 ## 使用说明
 
