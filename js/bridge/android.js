@@ -38,6 +38,19 @@ function isValidPreset(data) {
     return true;
 }
 
+/**
+ * 智能规范化 OpenAI 兼容聊天端点(对齐桌面 main.js normalizeChatEndpoint):
+ * 兼容只填 /v1、误填 /v1/models、或完整 /chat/completions 三种情况。
+ */
+export function normalizeChatEndpoint(endpoint) {
+    let url = String(endpoint || '').trim().replace(/\/+$/, '');
+    if (!url) return url;
+    if (/\/chat\/completions$/.test(url)) return url;                        // 已是完整聊天端点
+    if (/\/v1\/models$/.test(url)) return url.replace(/\/v1\/models$/, '/v1/chat/completions'); // 误填 models 列表地址
+    if (/\/v1$/.test(url)) return url + '/chat/completions';                  // 形如 /v1 → 补 /chat/completions
+    return url;                                                                // 其他自定义路径保持原样
+}
+
 /** 把渲染层路径换算为库内相对路径(供 SAF 寻址);路径不在库根内则不合法 */
 export function toRelativePath(p) {
     if (!p || typeof p !== 'string') return null;
@@ -583,12 +596,15 @@ export const androidImpl = {
         const key = (apiKey || '').trim();
         const headers = { 'Content-Type': 'application/json' };
         if (apiType === 'anthropic') {
-            // Anthropic 协议: x-api-key + anthropic-version，不能用 Bearer
+            // Anthropic 协议: x-api-key + anthropic-version，不能用 Bearer;对齐桌面补全 /v1/messages
             if (key) headers['x-api-key'] = key;
             headers['anthropic-version'] = '2023-06-01';
+            const base = String(endpoint || '').trim().replace(/\/+$/, '');
+            endpoint = /\/v1\/messages$/.test(base) ? base : base + '/v1/messages'; // 填裸根/其他 path → 补 /v1/messages
         } else {
             // OpenAI / 兼容协议
             if (key) headers['Authorization'] = 'Bearer ' + key;
+            endpoint = normalizeChatEndpoint(endpoint); // 🐛 对齐桌面:补全 /v1/chat/completions,避免填 /v1 等短地址导致 HTTP 404
         }
         try {
             const res = await Http.post({ url: endpoint, body: JSON.stringify(payload || {}), headers });
