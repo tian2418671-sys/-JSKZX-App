@@ -317,6 +317,7 @@ export const androidImpl = {
         return {
             folderPath: LIBRARY_ROOT,
             files: (res && res.files) || [],
+            categories: (res && res.categories) || [],
             error: (res && res.error) || undefined
         };
     },
@@ -607,20 +608,27 @@ export const androidImpl = {
     async sendChatMessage(endpoint, payload, apiKey, apiType) {
         if (!endpoint) return { success: false, data: null, error: '[移动端] 未配置 API 端点' };
         const key = (apiKey || '').trim();
+        const type = apiType === 'anthropic' ? 'anthropic' : 'openai';
+        // 归一化端点：兼容 base 地址(/v1、裸域名、api.anthropic.com 等)，与桌面端 chat:send 行为一致；
+        // 否则切换 Anthropic 后端点被填成 https://api.anthropic.com 会打到根路径 → 404
+        let url = String(endpoint || '').trim().replace(/\/+$/, '');
         const headers = { 'Content-Type': 'application/json' };
-        if (apiType === 'anthropic') {
+        if (type === 'anthropic') {
             // Anthropic 协议: x-api-key + anthropic-version，不能用 Bearer;对齐桌面补全 /v1/messages
             if (key) headers['x-api-key'] = key;
             headers['anthropic-version'] = '2023-06-01';
-            const base = String(endpoint || '').trim().replace(/\/+$/, '');
-            endpoint = /\/v1\/messages$/.test(base) ? base : base + '/v1/messages'; // 填裸根/其他 path → 补 /v1/messages
+            if (!/\/v1\/messages$/.test(url)) url = url + '/v1/messages'; // 填裸根/其他 path → 补 /v1/messages
         } else {
             // OpenAI / 兼容协议
             if (key) headers['Authorization'] = 'Bearer ' + key;
-            endpoint = normalizeChatEndpoint(endpoint); // 🐛 对齐桌面:补全 /v1/chat/completions,避免填 /v1 等短地址导致 HTTP 404
+            if (!/\/chat\/completions$/.test(url)) {
+                if (/\/v1\/models$/.test(url)) url = url.replace(/\/v1\/models$/, '/v1/chat/completions');
+                else if (/\/v1$/.test(url)) url = url + '/chat/completions';
+                else if (/^https?:\/\/[^\/]+$/i.test(url)) url = url + '/v1/chat/completions';
+            }
         }
         try {
-            const res = await Http.post({ url: endpoint, body: JSON.stringify(payload || {}), headers });
+            const res = await Http.post({ url, body: JSON.stringify(payload || {}), headers });
             if (!res.success) {
                 return { success: false, data: null, error: res.message || `HTTP ${res.status}` };
             }
@@ -822,7 +830,8 @@ export const androidImpl = {
             const sDir = snapshotDir(rel);
             const sName = snapshotFileName(baseName, ext, true);
             const sRel = sDir + sName;
-            // 确保快照目录存在
+            // 确保快照目录存在（.bak_history 不存在时 writeBuffer 会失败，必须先 mkdir）
+            await LibraryFs.mkdir({ path: sDir.replace(/\/+$/, '') }).catch(() => {});
             const mkRes = await LibraryFs.writeBuffer({ path: sRel, value: bufRes.value || bufRes.data || '' });
             if (!mkRes || !mkRes.success) return { success: false, error: (mkRes && mkRes.error) || '创建快照失败' };
             return { success: true, snapshotPath: LIBRARY_ROOT + '/' + sRel };
@@ -871,6 +880,7 @@ export const androidImpl = {
                 const bkDir = snapshotDir(rel);
                 const bkName = snapshotFileName(baseName, ext, true);
                 const bkRel = bkDir + bkName;
+                await LibraryFs.mkdir({ path: bkDir.replace(/\/+$/, '') }).catch(() => {});
                 await LibraryFs.writeBuffer({ path: bkRel, value: bufRes.value || bufRes.data || '' }).catch(() => {});
             }
             // 读取快照 → 覆盖原文件

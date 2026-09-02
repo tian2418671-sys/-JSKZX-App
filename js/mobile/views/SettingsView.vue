@@ -9,7 +9,7 @@
                     title="库目录"
                     :value="libraryState()"
                     icon="location-o"
-                    :is-link="!granted || true"
+                    :is-link="true"
                     @click="handlePickFolder"
                 />
                 <van-cell
@@ -262,7 +262,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit, listMemory, removeMemory, clearMemory } from '../useChatMemory';
-import { loadLibrary } from '../useMobileLibrary';
+import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
 
@@ -366,9 +366,9 @@ export default {
         }
 
         const apiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
-        const apiKey = ref('');
+        const apiKey = ref(localStorage.getItem(LS_KEY) || '');
         // 解密读取 API Key（与详情页 useChatApiConfig 加密链路对齐，兼容旧明文）
-        loadApiKey().then(k => { apiKey.value = k; });
+        loadApiKey().then(k => { apiKey.value = k || ''; });
         const apiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const apiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
 
@@ -500,6 +500,14 @@ export default {
         }
 
         async function refreshStats() {
+            // 读缓存统计而非重新 rescan，避免 Tab 切换触发全量扫描
+            if (mobileLibrary.ready && mobileLibrary.library.length > 0) {
+                const n = mobileLibrary.library.length;
+                const cats = (mobileLibrary.categories || []).length;
+                scanInfo.value = `${n} 张${n ? ' · ' + cats + ' 个分组' : ''}`;
+                return;
+            }
+            // 首次加载：触发一次扫描获取统计
             const res = await api.rescanLibrary('/library');
             if (res && !res.error) {
                 const n = (res.files || []).length;

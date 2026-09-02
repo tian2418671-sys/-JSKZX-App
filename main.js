@@ -1,4 +1,11 @@
 /**
+ * ⚠️【桌面版参考文件 · 请勿修改】
+ * 本文件是桌面版(Electron)主进程代码，移动版(Capacitor/Android)打包与运行均不依赖本文件。
+ * 移动版维护范围仅限：js/mobile/、android/、js/bridge/android.js 等移动端代码。
+ * 本文件仅供移动版开发时对照参考桌面端行为，请勿在此添加移动版逻辑或修改桌面版功能。
+ */
+
+/**
  * SillyTavern 角色卡高级解析中心 - Electron 主进程
  *
  * 架构说明：

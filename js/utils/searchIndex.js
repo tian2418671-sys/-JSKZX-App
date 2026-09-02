@@ -70,7 +70,8 @@ class SearchIndex {
         if (normalized.length === 0) {
             results = [...this.cards];
         } else {
-            // 浠庢渶绋€鏈夌殑璇嶅紑濮嬶紝鍑忓皯闆嗗悎鐩镐氦鎴愭湰銆?            const candidates = normalized.map(keyword => ({ keyword, cards: this._getMatches(keyword) }));
+            // 浠庢渶绋€鏈夌殑璇嶅紑濮嬶紝鍑忓皯闆嗗悎鐩镐氦鎴愭湰銆?
+            const candidates = normalized.map(keyword => ({ keyword, cards: this._getMatches(keyword) }));
             candidates.sort((a, b) => a.cards.length - b.cards.length);
             results = candidates[0].cards;
             for (let i = 1; i < candidates.length && results.length; i++) {

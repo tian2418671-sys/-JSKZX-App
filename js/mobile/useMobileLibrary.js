@@ -28,6 +28,11 @@ let flavorCallback = null; // 用于在分组移动后刷新"分组管理"等 UI
 
 export function onLibraryChanged(fn) { flavorCallback = fn; }
 
+// 最后点开的卡片路径：详情页在 route.query.p 因编码/URL 丢失时,用内存值兜底定位
+let lastOpenedPath = '';
+export function setLastOpenedPath(p) { lastOpenedPath = String(p || ''); }
+export function getLastOpenedPath() { return lastOpenedPath; }
+
 // ---------- 内嵌解析结果落盘缓存（万卡二次启动优化,对齐桌面 v2.1.0 PNG 内嵌缓存） ----------
 // 键: 文件 path+mtime+size 指纹;值: 卡片数据 JSON。缓存文件存库目录 .jskzx_cache.json
 const CACHE_FILE = '/library/.jskzx_cache.json';
@@ -82,7 +87,14 @@ function getParseWorker() {
     if (parseWorkerFailed) return null;
     if (parseWorker) return parseWorker;
     try {
-        parseWorker = new cardParseWorker({ type: 'module' });
+        // ?worker&inline 内联 Worker(解决 Android WebView 加载外部 Worker 不可靠)，
+        // 外层 try/catch 兜底:低版本 WebView 不支持 module worker 时回退经典 Worker
+        try {
+            parseWorker = new cardParseWorker({ type: 'module' });
+        } catch (e2) {
+            const workerUrl = new URL('./cardParseWorker.js', import.meta.url);
+            parseWorker = new Worker(workerUrl);
+        }
         parseWorker.onmessage = (e) => {
             const { id, ok, parsed } = e.data || {};
             const p = parsePending.get(id);

@@ -10,7 +10,7 @@
             </template>
         </van-nav-bar>
 
-        <van-pull-refresh :key="pullRefKey" :disabled="pullDisabled" v-model="refreshing" @refresh="onRefresh" class="flex-1" :pull-distance="80">
+        <van-pull-refresh :disabled="pullDisabled" v-model="refreshing" @refresh="onRefresh" class="flex-1" :pull-distance="80">
             <div class="view-body">
                 <!-- 未授权引导：整页覆盖，隐藏工具条，引导完成 SAF 目录授权 -->
                 <div v-if="!libraryReady && !loading && needsAuth" class="auth-guide">
@@ -44,9 +44,6 @@
                         :class="{ active: quickFilter === f.value }"
                         @click="onQuickFilter(f.value)"
                     >{{ f.label }}</div>
-                    <div class="cat-chip manage-chip" @click="showGroupManage = true">
-                        <van-icon name="setting-o" size="13" /> 管理
-                    </div>
                 </div>
 
                 <!-- 分组横向滚动 -->
@@ -58,6 +55,9 @@
                         :class="{ active: selected === cat }"
                         @click="onSelectCategory(cat)"
                     >{{ cat }}</div>
+                    <div class="cat-chip manage-chip" @click="showGroupManage = true">
+                        <van-icon name="setting-o" size="13" /> 管理分组
+                    </div>
                 </div>
 
                 <!-- 视图切换 + 排序 -->
@@ -66,25 +66,29 @@
                     <van-dropdown-menu class="sort-menu">
                         <van-dropdown-item v-model="sortBy" :options="sortOptions" />
                     </van-dropdown-menu>
-                    <van-icon name="apps-o" :color="viewMode === 'grid' ? '#06b6d4' : ''" size="20" @click="setViewMode('grid')" />
-                    <van-icon name="bars" :color="viewMode === 'list' ? '#06b6d4' : ''" size="20" @click="setViewMode('list')" />
-                    <van-icon name="photo-o" :color="viewMode === 'poster' ? '#06b6d4' : ''" size="20" @click="setViewMode('poster')" />
-                    <van-icon name="exchange" :color="viewMode === 'page' ? '#06b6d4' : ''" size="20" @click="setViewMode('page')" />
                 </div>
 
-                <!-- 卡片网格 / 列表 / 海报 / 翻页 -->
+                <!-- 视图切换：平铺 / 网格 / 海报 / 翻页 -->
+                <div class="view-mode-bar">
+                    <span class="vm-btn" :class="{ active: viewMode === 'list' }" @click="setViewMode('list')">平铺</span>
+                    <span class="vm-btn" :class="{ active: viewMode === 'grid' }" @click="setViewMode('grid')">网格</span>
+                    <span class="vm-btn" :class="{ active: viewMode === 'poster' }" @click="setViewMode('poster')">海报</span>
+                    <span class="vm-btn" :class="{ active: viewMode === 'page' }" @click="setViewMode('page')">翻页</span>
+                </div>
+
+                <!-- 卡片网格 / 列表 -->
                 <div v-if="loading" class="status-wrap">
                     <van-loading size="28">
                         {{ loadTip }}
                     </van-loading>
                 </div>
                 <van-empty v-else-if="!filtered.length" description="没有卡片" />
-                <div v-else class="cards-wrap" :class="{ list: viewMode === 'list', poster: viewMode === 'poster', page: viewMode === 'page' }">
+                <div v-else-if="viewMode !== 'page'" class="cards-wrap" :class="{ list: viewMode === 'list', poster: viewMode === 'poster' }">
                     <div
-                        v-for="card in paginatedList"
+                        v-for="card in visibleList"
                         :key="card.path"
                         class="card-item"
-                        :class="{ 'is-list': viewMode === 'list', 'is-poster': viewMode === 'poster', 'is-page': viewMode === 'page', 'batch-on': batchMode }"
+                        :class="{ 'is-list': viewMode === 'list', 'is-poster': viewMode === 'poster', 'batch-on': batchMode }"
                         @click="batchMode ? toggleBatch(card.path) : openCard(card)"
                         @longpress="batchMode ? toggleBatch(card.path) : showActions(card)"
                     >
@@ -94,22 +98,49 @@
                             :class="{ checked: batchSet.has(card.path) }"
                             @click.stop="toggleBatch(card.path)"
                         >✓</div>
-                        <MobileCardCover v-if="viewMode !== 'list'" :card="card" class="grid-cover" />
+                        <MobileCardCover v-if="viewMode !== 'list'" :card="card" class="grid-cover" :class="{ 'poster-cover': viewMode === 'poster' }" />
                         <div class="card-meta">
                             <div class="c-name">{{ card.name }}</div>
-                            <div v-if="viewMode === 'grid'" class="c-cat">{{ card.category }}</div>
-                            <div v-else class="c-desc">{{ snippet(card) }}</div>
+                            <div v-if="viewMode !== 'list'" class="c-cat">{{ card.category }}</div>
+                            <div v-if="viewMode === 'list'" class="c-desc">{{ snippet(card) }}</div>
+                            <div v-if="viewMode === 'poster'" class="c-desc">{{ snippet(card) }}</div>
                         </div>
                     </div>
+                    <div
+                        v-if="filtered.length > renderCount"
+                        class="load-more-hint"
+                    >
+                        <van-loading size="20">下滑加载更多…</van-loading>
+                    </div>
                 </div>
-                <!-- 分页条 -->
-                <div v-if="filtered.length" class="pager-bar">
-                    <van-icon name="arrow-left" size="18" :class="{ 'pager-dis': pageNo <= 1 }" @click="prevPage" />
-                    <span class="pager-info">{{ pageNo }} / {{ totalPages }}</span>
-                    <van-icon name="arrow" size="18" :class="{ 'pager-dis': pageNo >= totalPages }" @click="nextPage" />
-                    <van-dropdown-menu class="pager-size">
-                        <van-dropdown-item v-model="pageSize" :options="pageSizeOptions" />
-                    </van-dropdown-menu>
+
+                <!-- 翻页视图：一页一张大卡片，左右翻页 -->
+                <div v-else class="page-wrap">
+                    <div
+                        v-if="pageCard"
+                        class="page-card"
+                        @click="batchMode ? toggleBatch(pageCard.path) : openCard(pageCard)"
+                        @longpress="batchMode ? toggleBatch(pageCard.path) : showActions(pageCard)"
+                    >
+                        <div
+                            v-if="batchMode"
+                            class="batch-dot"
+                            :class="{ checked: batchSet.has(pageCard.path) }"
+                            @click.stop="toggleBatch(pageCard.path)"
+                        >✓</div>
+                        <MobileCardCover :card="pageCard" class="page-cover" />
+                        <div class="page-meta">
+                            <div class="page-name">{{ pageCard.name }}</div>
+                            <div class="page-cat">{{ pageCard.category }}</div>
+                            <div class="page-desc">{{ snippet(pageCard) }}</div>
+                        </div>
+                    </div>
+                    <div v-else class="page-empty">没有卡片</div>
+                    <div class="page-nav">
+                        <van-button size="small" plain icon="arrow-left" :disabled="pageIndex === 0" @click="prevPage">上一张</van-button>
+                        <span class="page-indicator">{{ filtered.length ? (pageIndex + 1) + ' / ' + filtered.length : '0 / 0' }}</span>
+                        <van-button size="small" plain icon="arrow" :disabled="pageIndex >= filtered.length - 1" @click="nextPage">下一张</van-button>
+                    </div>
                 </div>
                 <div class="bottom-pad" />
                 </template>
@@ -140,7 +171,7 @@
             <span class="bb-count">已选 {{ batchSet.size }} 张</span>
             <van-button size="small" plain @click="selectAllBatch">全选</van-button>
             <van-button size="small" plain type="primary" :disabled="!batchSet.size" @click="showBatchTag = true">批量标签</van-button>
-            <van-button size="small" plain type="warning" :disabled="!batchSet.size" @click="showBatchGroup = true">批量分组</van-button>
+            <van-button size="small" plain type="warning" :disabled="!batchSet.size" @click="showGroupSheet = true">批量分组</van-button>
             <van-button size="small" plain type="success" :disabled="!batchSet.size" @click="onBatchPush">推送</van-button>
             <van-button size="small" plain type="danger" :disabled="!batchSet.size" @click="onBatchDelete">删除</van-button>
             <van-button size="small" @click="exitBatch">退出</van-button>
@@ -249,8 +280,8 @@
 </template>
 
 <script>
-import { computed, ref, reactive, onMounted, watch, onBeforeUnmount } from 'vue';
-import { useRouter, onBeforeRouteLeave } from 'vue-router';
+import { computed, ref, reactive, onMounted, watch, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
+import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
 import { useSearch, extractCardSearchableText, extractCardTags } from '../../composables/useSearch';
@@ -260,7 +291,7 @@ import MobileCardCover from '../components/MobileCardCover.vue';
 import DedupeModal from '../components/DedupeModal.vue';
 import GraphModal from '../components/GraphModal.vue';
 import {
-    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, LIBRARY_ROOT
+    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, LIBRARY_ROOT, setLastOpenedPath
 } from '../useMobileLibrary';
 
 export default {
@@ -277,16 +308,22 @@ export default {
         const searchQueryInput = queryInput;
         const isDark = currentTheme() === 'dark';
         const selected = ref('全部');
-        // 视图模式:grid 网格 / list 列表 / poster 海报 / page 翻页
-        const viewMode = ref(localStorage.getItem('jsmobile_view') || 'grid');
+        const VIEW_MODES = ['list', 'grid', 'poster', 'page'];
+        const viewMode = ref((() => {
+            const saved = localStorage.getItem('jsmobile_viewmode');
+            if (VIEW_MODES.includes(saved)) return saved;
+            // 兼容旧版 jsmobile_grid 存储:list→平铺,其余→网格
+            return localStorage.getItem('jsmobile_grid') === 'list' ? 'list' : 'grid';
+        })());
         function setViewMode(v) {
+            if (!VIEW_MODES.includes(v)) return;
             viewMode.value = v;
-            try { localStorage.setItem('jsmobile_view', v); } catch (e) { /* 忽略 */ }
+            try { localStorage.setItem('jsmobile_viewmode', v); } catch (e) { /* 忽略 */ }
+            renderCount.value = 24;   // 切换视图重置增量渲染窗口
+            pageIndex.value = 0;      // 切换视图重置翻页索引
         }
         const refreshing = ref(false);
-        const pullRefKey = ref(0);
         const pullDisabled = ref(false);
-        onBeforeRouteLeave(() => { pullRefKey.value += 1; });
         const loading = ref(false);
         const libraryReady = ref(false);
         const needsAuth = ref(false);
@@ -311,39 +348,65 @@ export default {
             else if (action.value === 'urlimport') showUrlImport.value = true;
             else if (action.value === 'export') showExportSheet.value = true;
         }
-        // 分页:每页数量 + 翻页(替代原无限滚动)
-        const pageSize = ref(parseInt(localStorage.getItem('jsmobile_pagesize') || '20', 10));
-        const pageSizeOptions = [
-            { text: '10 张/页', value: 10 },
-            { text: '20 张/页', value: 20 },
-            { text: '50 张/页', value: 50 },
-            { text: '100 张/页', value: 100 }
-        ];
-        const pageNo = ref(1);
-        const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)));
-        const paginatedList = computed(() => {
-            const start = (pageNo.value - 1) * pageSize.value;
-            return filtered.value.slice(start, start + pageSize.value);
-        });
-        function nextPage() { if (pageNo.value < totalPages.value) pageNo.value++; }
-        function prevPage() { if (pageNo.value > 1) pageNo.value--; }
+        // 增量渲染:首次只渲染 24 张,触底每次加 16 张
+        const BATCH_STEP = 16;
+        const renderCount = ref(24);
+        const visibleList = computed(() => filtered.value.slice(0, renderCount.value));
+        function extendRender() {
+            if (renderCount.value >= filtered.value.length) return;
+            renderCount.value += BATCH_STEP;
+            if (renderCount.value > filtered.value.length) renderCount.value = filtered.value.length;
+        }
+        // 触底加载:基于滚动方向判定,避免 van-pull-refresh 回弹导致哨兵反复触发。
+        // 只在大于 lastScrollTop 且距底部 < 180px 时加载;筛选/搜索/分组切换时重置 scrollTop。
+        let lastScrollTop = 0;
+        let sentinelGuard = false;
+        let scrollListener = null;
         let touchStartListener = null;
-        onMounted(() => {
-            const scroller = document.querySelector('.van-pull-refresh__track');
+        const sentinelThreshold = 180;
+        let scroller = null;
+        function bindScroll() {
+            unbindScroll();
+            scroller = document.querySelector('.van-pull-refresh__track');
             if (!scroller) return;
-            // 手指按下时不在顶部(scrollTop>5)→ 整个手势期间禁用下拉刷新,避免与列表滚动冲突
+            // 关键修复:在 touchstart 时锁定 pullDisabled 状态。
+            // 手指按下时不在顶部(scrollTop>5)→ 整个手势期间禁用下拉刷新,
+            // 即使手指滚回顶部也不会误触发。只有从顶部开始的新手势才能下拉刷新。
             touchStartListener = () => {
                 pullDisabled.value = scroller.scrollTop > 5;
             };
             scroller.addEventListener('touchstart', touchStartListener, { passive: true });
-        });
-        onBeforeUnmount(() => {
-            const scroller = document.querySelector('.van-pull-refresh__track');
-            if (scroller && touchStartListener) scroller.removeEventListener('touchstart', touchStartListener);
+            scrollListener = () => {
+                const st = scroller.scrollTop;
+                if (sentinelGuard) return;
+                if (st < lastScrollTop) { lastScrollTop = st; return; } // 上滑忽略
+                lastScrollTop = st;
+                const sh = scroller.scrollHeight;
+                const ch = scroller.clientHeight;
+                if (sh - st - ch < sentinelThreshold) {
+                    sentinelGuard = true;
+                    extendRender();
+                    setTimeout(() => { sentinelGuard = false; }, 250);
+                }
+            };
+            scroller.addEventListener('scroll', scrollListener, { passive: true });
+        }
+        function unbindScroll() {
+            if (scroller) {
+                if (scrollListener) scroller.removeEventListener('scroll', scrollListener);
+                if (touchStartListener) scroller.removeEventListener('touchstart', touchStartListener);
+            }
+            scrollListener = null;
             touchStartListener = null;
-        });
-        // 搜索/筛选/分组/排序/视图/每页数量 变化时回到第 1 页
-        watch([() => selected.value, () => quickFilter.value, () => queryInput.value, () => sortBy.value, viewMode, pageSize], () => { pageNo.value = 1; });
+            scroller = null;
+        }
+        // keep-alive 缓存下 onMounted 只跑一次；pull-refresh 内部 track DOM 会随路由重建，
+        // 必须用 onActivated 每次进入重新绑定监听，否则 pullDisabled 永不更新 → 滚动中误触刷新
+        onMounted(() => { nextTick(bindScroll); });
+        onActivated(() => { nextTick(bindScroll); });
+        onDeactivated(unbindScroll);
+        onBeforeUnmount(unbindScroll);
+        watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
         let activeCard = null;
 
         /** 查重入口(角色卡) */
@@ -354,9 +417,9 @@ export default {
             }
             showDedupe.value = true;
         }
-        /** 查重清理完成后刷新分组(空分组/统计)——查重可能删除卡片,必须强制重扫 */
+        /** 查重清理完成后刷新分组(空分组/统计) */
         function onDedupeCleaned() {
-            load(true);
+            load();
         }
 
         const groupChips = computed(() => {
@@ -408,12 +471,18 @@ export default {
             if (quickFilter.value === 'has_lorebook') return 'has_lorebook';
             if (quickFilter.value === 'has_regex') return 'has_regex';
             if (selected.value === '全部') return 'all';
-            if (selected.value === '未分类') return 'cat:未分类';
-            return 'cat:' + selected.value;
+            // ⚠️ 分组 key 必须与 allCategories.key 严格一致(纯分组名,不带 'cat:' 前缀),
+            // 否则 useSearch.passCategory 找不到 targetCat → return true → 分组过滤失效。
+            if (selected.value === '未分类') return 'uncategorized';
+            return selected.value;
         });
         const allCategories = computed(() => {
-            // 桌面版 useSearch 用 cn/en/key 三态匹配分组；移动端统一用 cn 键
-            return mobileLibrary.categories.map((cn) => ({ cn, en: cn, key: cn }));
+            // 桌面版 useSearch 用 cn/en/key 三态匹配分组；移动端统一用 cn 键。
+            // '未分类' 是系统必需视图,须纳入 allCategories 才能被 passCategory 匹配。
+            return [
+                { key: 'uncategorized', cn: '未分类', en: '未分类' },
+                ...mobileLibrary.categories.map((cn) => ({ cn, en: cn, key: cn }))
+            ];
         });
         const sortBy = ref(localStorage.getItem('jsmobile-sortby') || 'time'); // 默认最新优先(与原实现一致)
         watch(sortBy, (v) => { try { localStorage.setItem('jsmobile-sortby', v); } catch (e) { /* 忽略 */ } });
@@ -432,9 +501,6 @@ export default {
         const currentPage = ref(1);
         const itemsPerPage = ref(999999); // 移动端无分页,增量渲染接管
         const lastSelectedIndex = ref(-1);
-        const searchQuery = ref(''); // 桌面版引擎 300ms 防抖写入
-        watch(queryInput, (v) => { searchQuery.value = v; });
-
         const searchEngine = useSearch({
             library: computed(() => mobileLibrary.library),
             currentCategoryKey,
@@ -446,8 +512,20 @@ export default {
             estimateCardTokens: null // 桌面版 v2.1.0 已改用 tokenCache,此参数仅旧版引用
         });
 
-        // 分组匹配桌面版语义：'cat:xxx' 前缀转分组过滤；useSearch 内置分类/子目录过滤
+        // 搜索输入同步到引擎(引擎内部 300ms 防抖写入 searchQuery,filteredLibrary 生效)
+        watch(queryInput, (v) => { searchEngine.searchQueryInput.value = v; });
+
+        // 分组匹配桌面版语义：'cat:xxx' 前缀转分组过滤；useSearch passCategory 已处理分类/子目录过滤
         const filtered = computed(() => searchEngine.filteredLibrary.value);
+
+        // 翻页视图：一页一张大卡片，左右翻页 + 页码指示
+        const pageIndex = ref(0);
+        const pageCard = computed(() => filtered.value[pageIndex.value] || null);
+        watch(() => filtered.value.length, (n) => {
+            if (pageIndex.value >= n) pageIndex.value = Math.max(0, n - 1);
+        });
+        function prevPage() { if (pageIndex.value > 0) pageIndex.value--; }
+        function nextPage() { if (pageIndex.value < filtered.value.length - 1) pageIndex.value++; }
 
         function snippet(card) {
             const desc = (card.data && card.data.data && card.data.data.description) || '';
@@ -463,6 +541,7 @@ export default {
 
         function openCard(card) {
             // 用 query 传 path:path 含 '/' 与中文,走 params 会被 vue-router 二次编码导致 id 对不上
+            setLastOpenedPath(card.path);
             router.push({ name: 'cardDetail', query: { p: card.path } });
         }
 
@@ -477,10 +556,7 @@ export default {
                 if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
                 if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
                 showSuccessToast(m.join(' · '));
-                // 🐛 修复:导入后必须强制重扫(load(true))。若库已加载,load() 会命中 loadLibrary 的
-                // "已加载且非空则跳过" 守卫而不再扫描,新导入的卡不会进入 mobileLibrary.library,
-                // 导致点开卡片时 findCard 找不到 → 显示「卡片不存在」。
-                load(true);
+                load();
             } else {
                 showToast((res && res.error) || '已取消导入');
             }
@@ -489,12 +565,12 @@ export default {
         async function load(refresh = false) {
             loading.value = true;
             needsAuth.value = false;
-            currentPage.value = 1;
+            renderCount.value = 24;
             await loadLibrary(refresh);
             loading.value = false;
             needsAuth.value = !mobileLibrary.ready && !!mobileLibrary.error;
             libraryReady.value = mobileLibrary.ready;
-            // 异步预热搜索索引（分片 yield，不阻塞 UI），大库首次搜索免全量扫描
+            // 库加载成功后异步构建搜索倒排索引（分块构建不阻塞 UI，万卡库搜索加速）
             if (libraryReady.value && mobileLibrary.library.length > 0) {
                 searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags).catch(() => {});
             }
@@ -552,7 +628,7 @@ export default {
                 if (res && res.success) {
                     showSuccessToast(`已导入「${res.fileName || '卡片'}」`);
                     urlInput.value = '';
-                    load(true); // 🐛 导入后强制重扫,避免新卡不入库导致详情页「卡片不存在」
+                    load();
                     return true;
                 }
                 showToast((res && res.error) || '导入失败');
@@ -678,7 +754,7 @@ export default {
             }
             showSuccessToast(`已移入回收站 ${okCount}/${cards.length} 张`);
             if (!batchSet.size) exitBatch();
-            load(true); // 已删除文件,强制重扫让列表/分类同步
+            load();
         }
 
 
@@ -690,6 +766,11 @@ export default {
                 { name: '＋ 新建分组', value: '__new__' }
             ];
         });
+        // 批量模式分组列表(不排除当前分组,因为批量选中可能跨多个分组)
+        const batchGroupActions = computed(() => [
+            ...['未分类', ...mobileLibrary.categories].map((c) => ({ name: c, value: c })),
+            { name: '＋ 新建分组', value: '__new__' }
+        ]);
 
         function showActions(card) {
             activeCard = card;
@@ -743,14 +824,14 @@ export default {
                 if (res && res.success) {
                     showSuccessToast('已重命名');
                     if (selected.value === target) selected.value = newName.trim();
-                    load(true); // 分组改名,强制重扫同步 subFolder/分类
+                    load();
                 } else showToast((res && res.error) || '重命名失败');
             } else if (action.value === 'delete') {
                 const res = await window.electronAPI.deleteEmptyGroupFolder({ libraryPath: LIBRARY_ROOT, groupName: target });
                 if (res && res.success) {
                     showSuccessToast(res.deleted ? '已删除空分组' : '分组非空，未删除');
                     if (selected.value === target) selected.value = '全部';
-                    load(true); // 分组变更,强制重扫同步分类列表
+                    load();
                 } else showToast((res && res.error) || '删除失败');
             }
         }
@@ -761,7 +842,7 @@ export default {
             const res = await window.electronAPI.createGroupFolder({ libraryPath: LIBRARY_ROOT, groupName: name.trim() });
             if (res && res.success) {
                 showSuccessToast(`已创建「${name.trim()}」`);
-                load(true); // 新分组需重扫后才会出现在分类列表
+                load();
             } else showToast((res && res.error) || '创建失败');
         }
 
@@ -777,7 +858,7 @@ export default {
             } else if (action.value === 'duplicate') {
                 const res = await window.electronAPI.duplicateFile(activeCard.path);
                 res && res.success ? showSuccessToast('已创建副本') : showToast((res && res.error) || '复制失败');
-                if (res && res.success) load(true); // 物理副本入盘,强制重扫
+                if (res && res.success) load();
             } else if (action.value === 'locate') {
                 const res = await window.electronAPI.showItemInFolder(activeCard.path);
                 if (res && res.success) { /* 系统文件管理器已定位 */ }
@@ -843,7 +924,7 @@ export default {
                 const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
                     ? LIBRARY_ROOT + '/' + selected.value : LIBRARY_ROOT;
                 const res = await window.electronAPI.downloadCardFromUrl({ url: url.trim(), destFolder: dest });
-                if (res && res.success) { showSuccessToast('已导入'); load(true); } // 🐛 同导入:强制重扫
+                if (res && res.success) { showSuccessToast('已导入'); load(); }
                 else showToast((res && res.error) || '下载失败');
                 return;
             }
@@ -873,6 +954,7 @@ export default {
         // ---------- 角色宇宙图谱 ----------
         const showGraph = ref(false);
         function jumpFromGraph(path) {
+            setLastOpenedPath(path);
             router.push({ name: 'cardDetail', query: { p: path } });
         }
 
@@ -900,13 +982,13 @@ export default {
 
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
-            query, selected, viewMode, refreshing, pullRefKey, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
-            filtered, paginatedList, pageSize, pageSizeOptions, pageNo, totalPages, nextPage, prevPage, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
+            query, selected, viewMode, refreshing, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
+            filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
-            onQuickFilter, onSelectCategory, setViewMode,
+            onQuickFilter, onSelectCategory, setViewMode, pageIndex, pageCard, prevPage, nextPage,
             sortBy, sortOptions,
             showGroupAction, groupActionTarget, groupActionItems, onGroupActionSelect,
-            sheetActions, groupSheetActions, exportSheetActions,
+            sheetActions, groupSheetActions, batchGroupActions, exportSheetActions,
             openCard, onRefresh, grantLib, showActions, onSheetSelect, onGroupSelect,
             onExportSelect, onImport, onDedupe, onDedupeCleaned, snippet,
             showGraph, jumpFromGraph, mobileLibrary,
@@ -961,9 +1043,26 @@ export default {
 }
 .view-bar .count { font-size: 12px; color: var(--van-gray-6, #969799); }
 .view-bar .van-icon { margin-left: 12px; }
+.view-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
 .view-bar .sort-menu { flex: 1; min-width: 0; margin-left: 8px; }
 .view-bar .sort-menu :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 30px; }
 .view-bar .sort-menu :deep(.van-dropdown-menu__title) { font-size: 12px; padding: 0 4px; justify-content: flex-end; }
+
+.view-mode-bar {
+    display: flex;
+    gap: 8px;
+    padding: 2px 14px 10px;
+    overflow-x: auto;
+}
+.vm-btn {
+    flex-shrink: 0;
+    padding: 4px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    background: var(--van-gray-2, #f2f3f5);
+    color: var(--van-text-color, #323233);
+}
+.vm-btn.active { background: #06b6d4; color: #fff; }
 
 .cards-wrap {
     display: grid;
@@ -972,8 +1071,7 @@ export default {
     padding: 0 12px;
 }
 .cards-wrap.list { grid-template-columns: 1fr; }
-.cards-wrap.poster { grid-template-columns: 1fr; }
-.cards-wrap.page { grid-template-columns: 1fr; }
+.cards-wrap.poster { grid-template-columns: 1fr; gap: 14px; }
 .card-item {
     position: relative;
     border-radius: 12px;
@@ -1005,10 +1103,7 @@ export default {
 }
 .bb-count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; margin-right: 2px; }
 .grid-cover { aspect-ratio: 3 / 4; }
-.is-poster .grid-cover { aspect-ratio: 16 / 10; }
-.is-page .grid-cover { aspect-ratio: 16 / 10; }
-.is-page .card-meta { padding: 14px 14px 16px; }
-.is-page .c-name { font-size: 16px; }
+.poster-cover { aspect-ratio: 3 / 4; }
 .card-meta { padding: 8px 10px 10px; }
 .c-name {
     font-size: 14px; font-weight: 600;
@@ -1017,10 +1112,44 @@ export default {
 .c-cat { margin-top: 2px; font-size: 11px; color: var(--van-gray-6, #969799); }
 .is-list { display: flex; align-items: center; }
 .is-list .card-meta { flex: 1; padding: 10px 12px 12px; }
+.card-item.is-poster .c-desc {
+    white-space: normal;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
 .c-desc {
     margin-top: 4px; font-size: 12px; color: var(--van-gray-6, #969799);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* 翻页视图 */
+.page-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 4px 16px 24px;
+}
+.page-card {
+    position: relative;
+    width: 100%;
+    max-width: 380px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--van-background-2, #fff);
+    box-shadow: 0 2px 12px rgba(0,0,0,.08);
+}
+.page-cover { aspect-ratio: 3 / 4; }
+.page-meta { padding: 12px 14px 14px; }
+.page-name { font-size: 17px; font-weight: 700; }
+.page-cat { margin-top: 4px; font-size: 12px; color: #06b6d4; }
+.page-desc {
+    margin-top: 8px; font-size: 13px; color: var(--van-gray-6, #969799);
+    line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.page-empty { padding: 60px 0; color: var(--van-gray-5, #c8c9cc); }
+.page-nav { display: flex; align-items: center; gap: 14px; }
+.page-indicator { font-size: 14px; color: var(--van-gray-6, #969799); min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
 .status-wrap { padding: 40px 0; text-align: center; }
 .load-more-hint {
     padding: 10px 0;
@@ -1028,15 +1157,6 @@ export default {
     font-size: 12px;
     color: var(--van-gray-5, #c8c9cc);
 }
-.pager-bar {
-    display: flex; align-items: center; justify-content: center; gap: 14px;
-    padding: 10px 14px 4px;
-}
-.pager-info { font-size: 13px; color: var(--van-gray-6, #969799); }
-.pager-dis { color: var(--van-gray-3, #ebedf0) !important; }
-.pager-size { min-width: 0; }
-.pager-size :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 28px; }
-.pager-size :deep(.van-dropdown-menu__title) { font-size: 12px; }
 .bottom-pad { height: 16px; }
 
 /* 未授权引导 */

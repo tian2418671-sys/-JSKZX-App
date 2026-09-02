@@ -7,7 +7,11 @@
 -->
 <template>
     <div class="mobile-shell">
-        <router-view />
+        <router-view v-slot="{ Component }">
+            <keep-alive include="CardLibraryView,WorldbookView,PresetsView,SettingsView">
+                <component :is="Component" />
+            </keep-alive>
+        </router-view>
         <van-tabbar v-if="showTabbar" route safe-area-inset-bottom class="mobile-tabbar">
             <van-tabbar-item replace to="/" icon="apps-o">卡片库</van-tabbar-item>
             <van-tabbar-item replace to="/worldbook" icon="bookmark-o">世界书</van-tabbar-item>

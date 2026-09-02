@@ -1,4 +1,4 @@
-﻿<template>
+<template>
     <div class="detail-page">
         <van-nav-bar :title="card ? card.name : '卡片详情'" left-arrow @click-left="$router.back()" safe-area-inset-top>
             <template #right>
@@ -9,7 +9,7 @@
             </template>
         </van-nav-bar>
 
-        <van-empty v-if="!card" description="卡片不存在">
+        <van-empty v-if="!card" :description="id ? `未找到卡片：${id}` : '卡片不存在'">
             <van-button size="small" type="primary" @click="$router.back()">返回</van-button>
         </van-empty>
 
@@ -283,9 +283,10 @@
                     <div class="chat-wrap">
                         <div class="chat-toolbar">
                             <span class="ct-title">与「{{ card ? card.name : '' }}」对话</span>
-                            <van-icon name="replay" size="18" style="margin: 0 12px 0 auto" @click="clearChat" />
-                            <van-button size="mini" plain type="primary" @click="toggleChatRender">{{ chatRenderMode === 'render' ? '切换到源码' : '切换到渲染' }}</van-button>
+                            <van-icon name="replay" size="18" style="margin: 0 8px 0 auto" @click="clearChat" />
+                            <van-button size="mini" plain type="primary" @click="toggleChatRender">{{ chatRenderMode === 'render' ? '源码' : '渲染' }}</van-button>
                             <van-icon name="setting-o" size="18" style="margin-left: 8px" @click="goApiSettings" />
+                            <van-icon name="bars" size="18" :color="sidebarOpen ? '#06b6d4' : ''" style="margin-left: 8px" @click="sidebarOpen = !sidebarOpen" />
                         </div>
                         <div ref="chatListEl" class="chat-list">
                             <div
@@ -325,6 +326,25 @@
                             <van-icon name="contact" size="20" style="color:#969799; padding:4px" @click="openUserRole" />
                             <van-button type="primary" size="small" :loading="chatSending" @click="sendChat">发送</van-button>
                         </div>
+                        <!-- 测卡右侧可折叠侧边栏 -->
+                        <TestSidebar
+                            v-model:visible="sidebarOpen"
+                            :active-preset-name="activePresetName"
+                            :plugins="plugins"
+                            :all-regex-scripts="allRegexScripts"
+                            :external-presets="externalPresets"
+                            :preset-scanning="presetScanning"
+                            :wb-entries="wbEntries"
+                            :preset-params="currentPresetParams"
+                            @scan-presets="scanExternalPresetDir"
+                            @apply-preset="applyPreset"
+                            @clear-preset="clearPreset"
+                            @import-regex="handleImportRegex"
+                            @import-plugin="handleImportPlugin"
+                            @remove-plugin="removePluginByName"
+                            @toggle-plugin="togglePluginByName"
+                            @update-params="handleUpdateParams"
+                        />
                     </div>
                 </van-tab>
             </van-tabs>
@@ -342,34 +362,29 @@
                     <van-cell title="目标类型">
                         <template #value>
                             <van-radio-group :model-value="pushTargetMode" direction="horizontal" @update:model-value="switchPushMode">
-                                <van-radio name="sillytavern">酒馆 API</van-radio>
+                                <van-radio name="sillytavern">酒馆目录</van-radio>
                                 <van-radio name="custom">卡库目录</van-radio>
                             </van-radio-group>
                         </template>
                     </van-cell>
                 </van-cell-group>
 
-                <!-- 酒馆 API 模式（已被 SillyTavern 废弃，仅保留兼容） -->
+                <!-- 酒馆目录模式:直接复制卡片文件到酒馆 characters 目录(酒馆自动扫描加载，替代已废弃的酒馆 API) -->
                 <template v-if="pushTargetMode === 'sillytavern'">
-                    <van-notice-bar wrapable left-icon="warning-o" color="#faad14" background="#fffbe6">
-                        ⚠️ 此接口已被 SillyTavern 废弃，推荐改用「卡库目录」模式直接复制卡片到酒馆 characters 文件夹。
+                    <van-notice-bar wrapable left-icon="info-o" color="#06b6d4" background="#eef7fb">
+                        旧版酒馆 API 已废弃，现改为直接复制卡片到酒馆 characters 目录。
                     </van-notice-bar>
-                    <van-field
-                        v-model="tavernUrl"
-                        label="酒馆地址"
-                        placeholder="http://192.168.1.100:8000"
-                        @update:model-value="savePushConfig"
-                    />
-                    <van-field
-                        v-model="tavernKey"
-                        label="API 密码"
-                        type="password"
-                        placeholder="留空 = 未开启 API 扩展"
-                        @update:model-value="savePushConfig"
-                    />
+                    <van-cell-group inset>
+                        <van-cell
+                            title="酒馆 characters 目录"
+                            :label="tavernUrl || '未选择（点击选择酒馆数据目录）'"
+                            icon="folder-o"
+                            is-link
+                            @click="pickTavernDir"
+                        />
+                    </van-cell-group>
                     <div class="push-tip">
-                        将以角色名「{{ card ? card.name : '' }}」向酒馆推送本卡片。
-                        <span style="color:#faad14">注意：该接口可能已被你的酒馆版本移除，推荐改用「卡库目录」模式。</span>
+                        选择酒馆 data/&lt;用户名&gt;/characters 目录后，将直接复制卡片 PNG 进去，酒馆自动扫描加载；无需开启 API 扩展。
                     </div>
                 </template>
 
@@ -405,7 +420,7 @@
             </div>
             <div class="push-ops">
                 <van-button block type="primary" :loading="pushing" @click="doPush">
-                    {{ pushTargetMode === 'sillytavern' ? '推送到酒馆' : '复制到所选目录' }}
+                    {{ pushTargetMode === 'sillytavern' ? '推送到酒馆目录' : '复制到所选目录' }}
                 </van-button>
             </div>
         </van-popup>
@@ -488,7 +503,8 @@ import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
-import { findCard, saveCardData, loadLibrary, mobileLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
+import TestSidebar from '../components/TestSidebar.vue';
+import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
@@ -498,6 +514,10 @@ import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled } from '
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
+import { buildMacroContext, applyMacros } from '../useChatMacros';
+import { applyRegexScripts, extractRegexFromCard } from '../useChatRegex';
+import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure } from '../useChatPresets';
+import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
 
 // 推送酒馆配置存储键
 const LS_TAVERN_URL = 'jsmobile-tavern-url';
@@ -505,7 +525,7 @@ const LS_TAVERN_KEY = 'jsmobile-tavern-key';
 
 export default {
     name: 'CardDetailView',
-    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal },
+    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal, TestSidebar },
     setup() {
         const route = useRoute();
         const router = useRouter();
@@ -529,6 +549,17 @@ export default {
             localStorage.setItem(LS_TAVERN_URL, tavernUrl.value.trim());
             localStorage.setItem(LS_TAVERN_KEY, tavernKey.value.trim());
         }
+        // 酒馆 API 已停用 → 选择酒馆 characters 目录，直接复制卡片文件
+        async function pickTavernDir() {
+            const uri = await api.selectGenericFolder();
+            if (uri) {
+                tavernUrl.value = uri;
+                savePushConfig();
+                showSuccessToast('已选择酒馆目录');
+            } else {
+                showToast('未选择目录');
+            }
+        }
 
         // ---------- 推送目标管理(对齐桌面 PushModal:酒馆 API / 自定义卡库目录多目标) ----------
         const LS_PUSH_TARGETS = 'jsmobile-push-targets'; // { mode, currentId, targets: [{id,name,uri,title}] }
@@ -537,10 +568,10 @@ export default {
         const pushTargets = ref([]);
         const currentPushTargetId = ref('');
         try {
-            const saved = JSON.parse(localStorage.getItem(LS_PUSH_TARGETS) || '{}');
-            if (saved.mode) pushTargetMode.value = saved.mode;
-            if (Array.isArray(saved.targets)) pushTargets.value = saved.targets;
-            if (saved.currentId) currentPushTargetId.value = saved.currentId;
+            const pushCfg = JSON.parse(localStorage.getItem(LS_PUSH_TARGETS) || '{}');
+            if (pushCfg.mode) pushTargetMode.value = pushCfg.mode;
+            if (Array.isArray(pushCfg.targets)) pushTargets.value = pushCfg.targets;
+            if (pushCfg.currentId) currentPushTargetId.value = pushCfg.currentId;
         } catch (e) { /* 首次无配置 */ }
         function savePushTargets() {
             localStorage.setItem(LS_PUSH_TARGETS, JSON.stringify({
@@ -610,24 +641,22 @@ export default {
                     }
                     const url = tavernUrl.value.trim().replace(/\/+$/, '');
                     if (!url) {
-                        showToast('请先填写酒馆地址');
+                        showToast('请先选择酒馆 characters 目录');
                         return;
                     }
-                    const res = await race(api.pushToTavern({
-                    filePath: card.value.path,
-                    targetUrl: url,
-                    apiKey: tavernKey.value.trim(),
-                    cardName: card.value.name
-                }));
-                if (res && res.__timeout) {
-                    showToast('推送超时，请检查酒馆地址与网络');
-                } else if (res && res.success) {
-                    showPush.value = false;
-                    showSuccessToast('推送成功！请在酒馆刷新角色列表查看');
-                } else {
-                    showToast((res && res.error) || '推送失败');
-                }
-            } catch (e) {
+                    // 酒馆 API 已停用：改为直接复制卡片 PNG 到酒馆 characters 目录（酒馆自动扫描加载）
+                    const res2 = await race(api.pushToCustomDir({ filePaths: [card.value.path], targetDir: url }));
+                    if (res2 && res2.__timeout) {
+                        showToast('推送超时，请检查目标目录是否可访问');
+                        return;
+                    }
+                    if (res2 && res2.success) {
+                        showPush.value = false;
+                        showSuccessToast('已推送到酒馆目录');
+                    } else {
+                        showToast((res2 && res2.error) || '推送失败');
+                    }
+                } catch (e) {
                 showToast((e && e.message) || '推送失败');
             } finally {
                 if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -637,7 +666,43 @@ export default {
 
         function resolveId() {
             // query.p 由 vue-router 解析时已 decode,无需二次 decodeURIComponent
-            id.value = String(route.query.p || '');
+            // 兜底:hash 路由在部分 WebView 下会丢失中文/斜杠 query,退回内存中的"最后点开卡片路径"
+            id.value = String(route.query.p || getLastOpenedPath() || '');
+        }
+
+        // 等待库就绪（冷启动/竞态下 findCard 可能因库未加载完成而返回 null → 误判「卡片不存在」）
+        async function ensureLibraryReady() {
+            if (mobileLibrary.ready && mobileLibrary.library.length > 0) return;
+            if (!mobileLibrary.loading) {
+                try { await loadLibrary(); } catch (e) { /* 忽略 */ }
+                return;
+            }
+            // 正在加载中：轮询等待 ready（最多 15s）
+            await new Promise((resolve) => {
+                const t0 = Date.now();
+                const timer = setInterval(() => {
+                    if (mobileLibrary.ready || Date.now() - t0 > 15000) {
+                        clearInterval(timer);
+                        resolve();
+                    }
+                }, 200);
+            });
+        }
+
+        // 查找卡片：路径归一化精确匹配 → 解码容错 → 按 id 兜底 → 按文件名兜底
+        function locateCard(target) {
+            if (!target) return null;
+            const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+            const t = norm(target);
+            let c = mobileLibrary.library.find((x) => norm(x.path) === t);
+            if (c) return c;
+            try { c = findCard(decodeURIComponent(target)); if (c) return c; } catch (e) { /* 忽略 */ }
+            c = mobileLibrary.library.find((x) => x.id === target) || null;
+            if (c) return c;
+            // 兜底：path 前缀不一致（历史版本/目录迁移）时按文件名匹配
+            const base = t.split('/').pop();
+            if (base) c = mobileLibrary.library.find((x) => norm(x.path).split('/').pop() === base) || null;
+            return c;
         }
 
         // 角色数据层(card.data.data);不存在则初始化
@@ -1088,9 +1153,6 @@ export default {
             rows.forEach((r) => { r.pct = Math.max(r.value ? 2 : 0, Math.round((r.value / total) * 100)); });
             return rows.filter((r) => r.value > 0 || r.label === '详细设定');
         });
-        const tokenDetailText = computed(() =>
-            `详细设定: ${t(d.value.description)}\n性格: ${t(d.value.personality)}\n开场白: ${t(d.value.first_mes)}\n场景: ${t(d.value.scenario)}\n示例对话: ${t(d.value.mes_example)}\n备用开场白: ${t(greetingsText.value)}\n世界书: ${wbTokenCount.value}\n合计: ${tokenTotal.value}`
-        );
 
         async function save() {
             if (!card.value) return;
@@ -1120,6 +1182,10 @@ export default {
             }
             // 内嵌世界书 entries 字典 → 数组(对齐桌面 character_book.entries 标准)
             serializeCardEmbeddedWb(card.value);
+            // 覆盖保存前自动备份旧版本到 .bak_history（对齐桌面行为；新建卡无旧版时静默跳过）
+            try {
+                await api.createManualSnapshot(card.value.path);
+            } catch (e) { /* 首次保存无旧文件，忽略 */ }
             const res = await saveCardData(card.value);
             if (res.success) {
                 saved.value = true;
@@ -1310,6 +1376,8 @@ export default {
 
         const chatApiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
         const chatApiKey = ref(localStorage.getItem(LS_KEY) || '');
+        // 异步解密 API Key（Keystore 密文 → 明文，兼容旧明文存储）
+        getApiKey().then((k) => { if (k) chatApiKey.value = k; });
         const chatApiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const chatApiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
         // 启动时解密读取 API Key（兼容历史明文；无有效 Key 保持空）
@@ -1338,6 +1406,180 @@ export default {
             setUserName(userName.value);
             setUserPersona(userPersona.value);
         }
+
+        // ---------- 测卡增强：预设 / 正则 / 插件 / 宏 ----------
+        const activePreset = ref(loadActivePreset()); // { name, data, activatedAt } | null
+        const plugins = ref(loadPlugins());
+        const showPresetPicker = ref(false);
+        const showPluginPanel = ref(false);
+        const showRegexImport = ref(false);
+        const externalPresets = ref([]); // 从外部目录扫描的预设列表
+        const presetScanning = ref(false);
+        const regexImportText = ref('');
+        const pluginImportText = ref('');
+        const showPluginImport = ref(false);
+
+        // 测卡右侧侧边栏
+        const sidebarOpen = ref(false);
+        // 用户在侧边栏中调整的预设参数覆盖（优先于预设默认值）
+        const paramOverrides = ref({});
+
+        // 宏字典（响应式 computed，随卡片/用户名变化自动更新）
+        const macroContext = computed(() => buildMacroContext(card.value, userName.value, userPersona.value));
+
+        // 合并插件宏后的完整宏字典
+        const fullMacros = computed(() => mergePluginMacros(plugins.value, macroContext.value));
+
+        // 卡片内嵌正则 + 插件正则的合集
+        const allRegexScripts = computed(() => {
+            const cardRegex = extractRegexFromCard(card.value);
+            const pluginRegex = collectPluginRegex(plugins.value);
+            return [...cardRegex, ...pluginRegex];
+        });
+
+        // 当前激活预设名（显示用）
+        const activePresetName = computed(() => activePreset.value ? (activePreset.value.name || '未命名预设') : '');
+
+        // 当前预设参数（从预设 JSON 提取，传给侧边栏展示和编辑）
+        const currentPresetParams = computed(() => {
+            if (!activePreset.value || !activePreset.value.data) return {};
+            return getPresetParams(activePreset.value.data);
+        });
+
+        // 应用预设到测卡
+        function applyPreset(presetData) {
+            if (!presetData || !isValidPresetStructure(presetData)) {
+                showToast('无效的预设格式（需含 prompts 数组）');
+                return;
+            }
+            const obj = { name: presetData.name || '未命名预设', data: presetData, activatedAt: Date.now() };
+            saveActivePreset(obj.data);
+            activePreset.value = obj;
+            showPresetPicker.value = false;
+            showSuccessToast('已应用预设：' + obj.name);
+        }
+
+        function clearPreset() {
+            clearActivePreset();
+            activePreset.value = null;
+            showToast('已取消预设');
+        }
+
+        // 从外部预设目录扫描
+        async function scanExternalPresetDir() {
+            presetScanning.value = true;
+            try {
+                const dirRes = await api.pickExternalWbDir();
+                if (!dirRes || !dirRes.success || !dirRes.uri) {
+                    if (dirRes && dirRes.error) showToast(dirRes.error);
+                    presetScanning.value = false;
+                    return;
+                }
+                const res = await api.scanExternalPresets(dirRes.uri);
+                externalPresets.value = res.presets || [];
+                if (externalPresets.value.length === 0) {
+                    showToast('该目录未发现有效预设');
+                }
+            } catch (e) {
+                showToast('扫描失败: ' + (e.message || e));
+            } finally {
+                presetScanning.value = false;
+            }
+        }
+
+        // 导入正则脚本（从 JSON 文本）
+        function importRegexFromText() {
+            const raw = (regexImportText.value || '').trim();
+            if (!raw) { showToast('请粘贴正则 JSON'); return; }
+            try {
+                const data = JSON.parse(raw);
+                const scripts = Array.isArray(data) ? data : (Array.isArray(data.regex_scripts) ? data.regex_scripts : [data]);
+                if (!scripts.length) { showToast('未找到正则脚本'); return; }
+                // 写入卡片正则
+                const dd = card.value.data.data;
+                if (!dd.extensions) dd.extensions = {};
+                if (!Array.isArray(dd.extensions.regex_scripts)) dd.extensions.regex_scripts = [];
+                let added = 0;
+                for (const s of scripts) {
+                    if (s && (s.findRegex || s.find_regex)) {
+                        dd.extensions.regex_scripts.push({
+                            scriptName: s.scriptName || s.script_name || '导入正则',
+                            findRegex: s.findRegex || s.find_regex,
+                            replaceString: s.replaceString || s.replace_string || '',
+                            disabled: s.disabled === true || s.enabled === false,
+                            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+                        });
+                        added++;
+                    }
+                }
+                regexImportText.value = '';
+                showRegexImport.value = false;
+                showSuccessToast('已导入 ' + added + ' 条正则脚本');
+            } catch (e) {
+                showToast('JSON 解析失败: ' + e.message);
+            }
+        }
+
+        // 导入插件（从 JSON 文本）
+        function importPluginFromText() {
+            const raw = (pluginImportText.value || '').trim();
+            if (!raw) { showToast('请粘贴插件 JSON'); return; }
+            try {
+                const data = JSON.parse(raw);
+                plugins.value = addPlugin(plugins.value, data);
+                pluginImportText.value = '';
+                showPluginImport.value = false;
+                showSuccessToast('已导入插件：' + (data.name || '未命名插件'));
+            } catch (e) {
+                showToast('JSON 解析失败: ' + e.message);
+            }
+        }
+
+        function removePluginByName(name) {
+            plugins.value = removePlugin(plugins.value, name);
+            showToast('已移除插件');
+        }
+
+        function togglePluginByName(name) {
+            plugins.value = togglePlugin(plugins.value, name);
+        }
+
+        // ---------- 侧边栏事件处理 ----------
+        // 导入正则（从侧边栏接收已解析的 JSON 对象/数组）
+        function handleImportRegex(data) {
+            const scripts = Array.isArray(data) ? data : (Array.isArray(data.regex_scripts) ? data.regex_scripts : [data]);
+            if (!scripts.length) { showToast('未找到正则脚本'); return; }
+            const dd = card.value.data.data;
+            if (!dd.extensions) dd.extensions = {};
+            if (!Array.isArray(dd.extensions.regex_scripts)) dd.extensions.regex_scripts = [];
+            let added = 0;
+            for (const s of scripts) {
+                if (s && (s.findRegex || s.find_regex)) {
+                    dd.extensions.regex_scripts.push({
+                        scriptName: s.scriptName || s.script_name || '导入正则',
+                        findRegex: s.findRegex || s.find_regex,
+                        replaceString: s.replaceString || s.replace_string || '',
+                        disabled: s.disabled === true || s.enabled === false,
+                        placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+                    });
+                    added++;
+                }
+            }
+            saved.value = false;
+            showSuccessToast('已导入 ' + added + ' 条正则脚本');
+        }
+
+        // 导入插件（从侧边栏接收已解析的 JSON 对象）
+        function handleImportPlugin(data) {
+            plugins.value = addPlugin(plugins.value, data);
+            showSuccessToast('已导入插件：' + (data.name || '未命名插件'));
+        }
+
+        // 侧边栏参数覆盖更新
+        function handleUpdateParams(params) {
+            paramOverrides.value = params || {};
+        }
+
         // 测卡页面底部可快捷跳到设置页（全局 API 唯一入口）
         function goApiSettings() {
             router.push('/settings');
@@ -1368,9 +1610,19 @@ export default {
             chatDraft.value = '';
             const dd = card.value && card.value.data && card.value.data.data;
             if (dd && dd.first_mes) {
-                const swipes = [String(dd.first_mes)];
+                const macros = fullMacros.value;
+                // 对开场白和备选开场白应用宏替换 + AI 方向正则
+                let first = applyMacros(String(dd.first_mes), macros);
+                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
+                const swipes = [first];
                 const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
-                alt.forEach((a) => { if (a && a !== swipes[0]) swipes.push(a); });
+                alt.forEach((a) => {
+                    if (a) {
+                        let processed = applyMacros(a, macros);
+                        processed = applyRegexScripts(processed, allRegexScripts.value, 'AI', macros);
+                        if (processed !== swipes[0]) swipes.push(processed);
+                    }
+                });
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
             }
         }
@@ -1386,21 +1638,83 @@ export default {
         }
 
         async function buildPayload(type) {
+            const macros = fullMacros.value;
+            // 历史对话（不含最后一条刚发出的 user 消息——buildPayload 在 push user 之后调用）
+            const chatHistory = chatMessages.value
+                .slice(0, -1)
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({ role: m.role, content: messageText(m) }));
+
+            // ===== 预设模式：用预设 prompts 构建 system + messages =====
+            const presetData = activePreset.value && activePreset.value.data;
+            if (presetData && isValidPresetStructure(presetData)) {
+                const presetMsgs = buildPresetMessages(presetData, macros, { chatHistory });
+                const presetParams = { ...getPresetParams(presetData), ...paramOverrides.value };
+                // 插件额外 system 提示词
+                const pluginSys = collectPluginSystemPrompts(plugins.value);
+                // 长期记忆
+                let memCtx = '';
+                if (isMemoryEnabled()) {
+                    const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
+                    memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
+                }
+                // 合并 system 文本（预设 system 消息 + 插件 + 记忆 + 用户人设）
+                const sysTexts = presetMsgs.filter((m) => m.role === 'system').map((m) => m.content);
+                if (userPersona.value) sysTexts.push(applyMacros('### 用户(你)的角色设定\n{{persona}}', macros));
+                sysTexts.push(...pluginSys);
+                if (memCtx) sysTexts.push(memCtx);
+                const systemText = sysTexts.filter(Boolean).join('\n\n');
+                const nonSysMsgs = presetMsgs.filter((m) => m.role !== 'system');
+                const allMsgs = [{ role: 'system', content: systemText }, ...nonSysMsgs];
+                const lastMsg = chatMessages.value[chatMessages.value.length - 1];
+                if (lastMsg) allMsgs.push({ role: lastMsg.role, content: applyMacros(messageText(lastMsg), macros) });
+
+                if (type === 'anthropic') {
+                    return {
+                        model: chatApiModel.value.trim() || 'claude-3-haiku-20240307',
+                        max_tokens: presetParams.max_tokens || 2048,
+                        system: systemText,
+                        messages: allMsgs.filter((m) => m.role !== 'system'),
+                        ...(presetParams.temperature !== undefined ? { temperature: presetParams.temperature } : {})
+                    };
+                }
+                return {
+                    model: chatApiModel.value.trim() || 'local-model',
+                    messages: allMsgs,
+                    stream: false,
+                    temperature: presetParams.temperature !== undefined ? presetParams.temperature : 0.7,
+                    ...(presetParams.max_tokens !== undefined ? { max_tokens: presetParams.max_tokens } : {}),
+                    ...(presetParams.top_p !== undefined ? { top_p: presetParams.top_p } : {}),
+                    ...(presetParams.frequency_penalty !== undefined ? { frequency_penalty: presetParams.frequency_penalty } : {}),
+                    ...(presetParams.presence_penalty !== undefined ? { presence_penalty: presetParams.presence_penalty } : {}),
+                };
+            }
+
+            // ===== 无预设模式：经典拼接（增强宏替换 + 插件 + 正则） =====
             const sysParts = [];
             const system = buildSystem(card.value);
-            if (system) sysParts.push(system);
-            if (userPersona.value) sysParts.push('### 用户(你)的角色设定\n' + userPersona.value);
+            if (system) sysParts.push(applyMacros(system, macros));
+            if (userPersona.value) sysParts.push(applyMacros('### 用户(你)的角色设定\n{{persona}}', macros));
+            // 插件额外 system 提示词
+            const pluginSys = collectPluginSystemPrompts(plugins.value);
+            sysParts.push(...pluginSys);
             // 长期记忆:检索最后一条用户提问的关键词注入 system
             if (isMemoryEnabled()) {
                 const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
                 const memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
                 if (memCtx) sysParts.push(memCtx);
             }
-            const systemText = sysParts.join('\n\n');
-            const messages = chatMessages.value
-                .slice(0, -1)
-                .filter((m) => m.role === 'user' || m.role === 'assistant')
-                .map((m) => ({ role: m.role, content: messageText(m) }));
+            const systemText = sysParts.filter(Boolean).join('\n\n');
+            // 对历史消息应用宏替换
+            const messages = chatHistory.map((m) => ({ role: m.role, content: applyMacros(messageText(m), macros) }));
+            // 最后一条消息也应用宏 + 正则(USER 方向)
+            const lastMsg = chatMessages.value[chatMessages.value.length - 1];
+            if (lastMsg) {
+                let lastContent = applyMacros(messageText(lastMsg), macros);
+                lastContent = applyRegexScripts(lastContent, allRegexScripts.value, 'USER', macros);
+                messages.push({ role: lastMsg.role, content: lastContent });
+            }
+
             if (type === 'anthropic') {
                 return {
                     model: chatApiModel.value.trim() || 'claude-3-haiku-20240307',
@@ -1429,7 +1743,9 @@ export default {
                 return;
             }
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
-            chatMessages.value.push({ role: 'user', content: text });
+            // 对用户输入应用宏替换
+            const processedText = applyMacros(text, fullMacros.value);
+            chatMessages.value.push({ role: 'user', content: processedText });
             chatDraft.value = '';
             const count = Math.max(1, replyCount.value || 1);
             chatSending.value = true;
@@ -1439,8 +1755,12 @@ export default {
 
             try {
                 const swipes = [];
+                const macros = fullMacros.value;
                 for (let n = 0; n < count; n++) {
-                    swipes.push(await requestReply(payload, type));
+                    let reply = await requestReply(payload, type);
+                    // 对 AI 回复应用 AI 方向正则脚本
+                    reply = applyRegexScripts(reply, allRegexScripts.value, 'AI', macros);
+                    swipes.push(reply);
                 }
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
                 // 记录对话到长期记忆(不阻塞)
@@ -1805,14 +2125,29 @@ export default {
         }
 
         onMounted(async () => {
-            resolveId();
-            // 🐛 修复:若库尚未加载(冷启动直链 / 库状态被重置),先加载再解析卡片,
-            // 避免详情页一进来就误报「卡片不存在」。库已加载时(正常列表点入)零额外开销。
-            if (!mobileLibrary.ready) {
-                try { await loadLibrary(); } catch (e) { /* 加载失败保持空态,由页面提示 */ }
+            try {
+                resolveId();
+                await ensureLibraryReady();
+                card.value = locateCard(id.value) || null;
+                // 兜底:库可能为空/陈旧(如上次扫描失败、SAF 授权失效后重扫),强制重扫后重试一次
+                if (!card.value) {
+                    try { await loadLibrary(true); } catch (e) { /* 忽略重扫异常 */ }
+                    card.value = locateCard(id.value) || null;
+                }
+                if (!card.value) {
+                    console.error('[CardDetail] 未找到卡片', JSON.stringify({
+                        id: id.value,
+                        ready: mobileLibrary.ready,
+                        loading: mobileLibrary.loading,
+                        error: mobileLibrary.error,
+                        count: mobileLibrary.library.length,
+                        samples: mobileLibrary.library.slice(0, 5).map((x) => x.path)
+                    }));
+                }
+                initChat();
+            } catch (e) {
+                console.error('[CardDetail] 挂载异常', e && e.message, e);
             }
-            card.value = findCard(id.value) || null;
-            initChat();
         });
 
         // 兜底:库数据到达/刷新后若仍未找到卡(并发加载、导入后重扫等场景),再解析一次
@@ -1826,7 +2161,7 @@ export default {
         return {
             card, id, activeTab, advancedOpen, descOpen, showTokenDetail, showTokenPanel, personalityOpen, saved,
             d, tags, greetingsText, wbEntries, regexList,
-            tokenText, tokenDetailText, tokenRows, tokenTotal, wbTokenCount,
+            tokenText, tokenRows, tokenTotal, wbTokenCount,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
             moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,
@@ -1840,13 +2175,22 @@ export default {
             restoreSnapshot, deleteSnapshot, cleanSnapshots,
             statusInput, previewText, statusScripts, statusApplied, statusHtml, statusNeedsIframe, statusSrcdoc, resetStatusDemo,
             showStatusTemplates, STATUSBAR_TEMPLATES, STATUSBAR_PROMPT_TEMPLATES, injectStatusTemplate, injectPromptTemplate,
-            showPush, pushing, tavernUrl, tavernKey, savePushConfig, doPush,
+            showPush, pushing, tavernUrl, tavernKey, savePushConfig, pickTavernDir, doPush,
             pushTargetMode, pushTargets, currentPushTargetId, switchPushMode, addPushTarget, removePushTarget,
             chatMessages, chatDraft, chatSending, chatListEl, chatRenderMode, toggleChatRender, renderChatHtml,
             chatApiEndpoint, chatApiKey, chatApiModel, chatApiType,
             replyCount, userName, userPersona, bubbleName, messageText, goApiSettings, showUserRole, openUserRole, saveInlineUser,
             sendChat, clearChat,
             nextSwipe, prevSwipe, onSwipeStart, onSwipeEnd, moreSwipe, continueSwipe, regenerateSwipe,
+            // 测卡增强：预设 / 正则 / 插件 / 宏
+            activePreset, activePresetName, currentPresetParams, applyPreset, clearPreset,
+            showPresetPicker, externalPresets, presetScanning, scanExternalPresetDir,
+            showRegexImport, regexImportText, importRegexFromText,
+            plugins, showPluginPanel, showPluginImport, pluginImportText, importPluginFromText,
+            removePluginByName, togglePluginByName,
+            allRegexScripts,
+            // 侧边栏
+            sidebarOpen, handleImportRegex, handleImportPlugin, handleUpdateParams,
             showAiTools, aiMode, aiRunning, aiProgress, aiCandidates, openAiTools,
             showAutoTagRules, disabledRuleNames, customAutoTagRules, toggleSystemRule, addCustomRule, removeCustomRule,
             addAICandidate, removeAICandidate, startAiTagging, startAiTranslate, startAiRefactor
@@ -1893,10 +2237,6 @@ export default {
 .pt-label { font-size: 11px; color: var(--van-gray-6); flex-shrink: 0; margin-right: 2px; cursor: pointer; }
 .pt-item { cursor: pointer; }
 .sec-label { font-size: 12px; color: var(--van-gray-6); margin: 6px 0 2px; }
-.token-detail {
-    white-space: pre-line; font-size: 12px; color: var(--van-gray-6);
-    background: var(--van-gray-1); border-radius: 8px; padding: 8px; margin-bottom: 8px;
-}
 .token-analysis {
     background: var(--van-gray-1); border-radius: 8px; padding: 10px; margin-bottom: 8px;
 }
@@ -2056,7 +2396,7 @@ export default {
 .push-ops { padding: 6px 16px 16px; }
 
 /* 测卡 Tab 聊天 */
-.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 260px; }
+.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 260px; position: relative; overflow: hidden; }
 .chat-toolbar {
     display: flex; align-items: center;
     padding: 10px 14px;
@@ -2114,4 +2454,22 @@ export default {
 .chat-tip {
     padding: 8px 16px; font-size: 11px; color: var(--van-gray-5, #969799);
 }
+/* 测卡增强工具栏 */
+.chat-enhance-bar {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--van-gray-2, #ebedf0);
+}
+.chat-enhance-bar .van-button { font-size: 11px; }
+/* 预设选择列表 */
+.preset-pick-item {
+    padding: 12px; border-radius: 8px; background: var(--van-background-2, #f7f8fa);
+    margin-bottom: 8px; cursor: pointer;
+}
+.preset-pick-item:active { background: var(--van-active-color, #f2f3f5); }
+.preset-pick-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.preset-pick-meta { font-size: 11px; color: var(--van-gray-5, #969799); }
+/* 插件列表 */
+.plugin-name { font-size: 14px; font-weight: 600; }
+.plugin-desc { font-size: 11px; color: var(--van-gray-5, #969799); margin-top: 2px; }
 </style>

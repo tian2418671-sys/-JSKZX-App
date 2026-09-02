@@ -328,7 +328,7 @@ export default {
 <style scoped>
 .presets-view { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--van-background, #f7f8fa); }
 .pv-body { flex: 1; overflow-y: auto; }
-.pv-btn { width: 200px; margin-top: 8px; }
+.pv-btn { width: 200px; margin: 8px auto 0; display: flex; justify-content: center; align-items: center; }
 .pv-tip { margin-top: 12px; font-size: 12px; color: var(--van-gray-6, #969799); }
 .pv-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; flex-wrap: wrap; }
 .pv-count { margin-left: auto; font-size: 12px; color: var(--van-gray-6, #969799); }

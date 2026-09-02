@@ -46,9 +46,11 @@
                             <van-dropdown-item v-model="entryFilterState" :options="ENTRY_FILTER_OPTIONS" />
                             <van-dropdown-item v-model="entrySortBy" :options="ENTRY_SORT_OPTIONS" />
                         </van-dropdown-menu>
+                    </div>
+                    <div class="wb-toolbar-actions">
                         <van-button size="small" plain icon="medal-o" @click="runEntryHealthCheck">体检</van-button>
-                        <van-button size="small" plain @click="expandAllEntries">展开</van-button>
-                        <van-button size="small" plain @click="collapseAllEntries">折叠</van-button>
+                        <van-button size="small" plain icon="down" @click="expandAllEntries">展开</van-button>
+                        <van-button size="small" plain icon="up" @click="collapseAllEntries">折叠</van-button>
                         <van-button size="small" plain :type="entryBatchMode ? 'warning' : 'default'" @click="toggleEntryBatch">批量</van-button>
                     </div>
                 </div>
@@ -294,7 +296,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { showSuccessToast, showToast, showConfirmDialog } from 'vant';
-import { mobileLibrary, loadLibrary, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
+import { mobileLibrary, loadLibrary, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb, setLastOpenedPath } from '../useMobileLibrary';
 import DedupeModal from '../components/DedupeModal.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import GlobalEntrySearchModal from '../components/GlobalEntrySearchModal.vue';
@@ -1178,7 +1180,7 @@ export default {
             if (ed.card) {
                 // 卡内世界书:保存整卡(entries 字典→数组对齐桌面 character_book.entries 标准)
                 serializeCardEmbeddedWb(ed.card);
-                const res = await window.electronAPI.saveCard(ed.path, JSON.parse(JSON.stringify(ed.card.data)));
+                const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(JSON.parse(JSON.stringify(ed.card.data)), null, 2));
                 res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
             } else if (ed.external) {
                 // 外部世界书目录:写回原 SAF 树
@@ -1275,7 +1277,7 @@ export default {
             if (v === undefined || v === null) return [];
             return String(v).split(/[,，]/).map((s) => s.trim()).filter(Boolean);
         }
-        function normalizeEntry(entry, sourceType, sourceName, sourcePath) {
+        function buildSearchEntry(entry, sourceType, sourceName, sourcePath) {
             if (!entry || typeof entry !== 'object') return null;
             const isWb = sourceType === 'worldbook';
             const keys = toArray(isWb ? entry.key : entry.keys);
@@ -1295,7 +1297,7 @@ export default {
                 const name = (wb.wb && wb.wb.name) || (wb.name || '').replace(/\.json$/i, '') || '未命名世界书';
                 const entries = extractBookEntries(wb.wb || {});
                 entries.forEach((e) => {
-                    const n = normalizeEntry(e, 'worldbook', name, wb.path || '');
+                    const n = buildSearchEntry(e, 'worldbook', name, wb.path || '');
                     if (n) list.push(n);
                 });
             });
@@ -1303,7 +1305,7 @@ export default {
                 const name = (wb.wb && wb.wb.name) || (wb.name || '').replace(/\.json$/i, '') || '未命名世界书';
                 const entries = extractBookEntries(wb.wb || {});
                 entries.forEach((e) => {
-                    const n = normalizeEntry(e, 'worldbook', name, wb.path || '');
+                    const n = buildSearchEntry(e, 'worldbook', name, wb.path || '');
                     if (n) list.push(n);
                 });
             });
@@ -1313,7 +1315,7 @@ export default {
                 const entries = extractBookEntries(book);
                 const name = d.name || item.name || '未知角色';
                 entries.forEach((e) => {
-                    const n = normalizeEntry(e, 'card', name, item.path || '');
+                    const n = buildSearchEntry(e, 'card', name, item.path || '');
                     if (n) list.push(n);
                 });
             });
@@ -1353,7 +1355,7 @@ export default {
                     (result.sourcePath && i.path === result.sourcePath) ||
                     (!result.sourcePath && (((i.data && i.data.data) || i.data || {}).name || i.name) === result.sourceName)
                 );
-                if (item) router.push({ path: '/card', query: { p: item.path } }); // 🐛 详情页只认 query.p,传 id 会导致「卡片不存在」
+                if (item) { setLastOpenedPath(item.path); router.push({ path: '/card', query: { p: item.path } }); }
             }
             showGlobalEntrySearch.value = false;
         }
@@ -1418,7 +1420,7 @@ export default {
 
 <style scoped>
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 24px; }
+.view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 80px; }
 .sub-nav { box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 4px; }
 .status-wrap { padding: 40px 0; text-align: center; }
 .wb-item {
@@ -1428,8 +1430,10 @@ export default {
     margin: 10px 12px 0;
     background: var(--van-background-2, #fff);
 }
-.wb-head { display: flex; align-items: center; gap: 8px; }
-.wb-name { flex: 1; }
+.wb-head { display: flex; align-items: center; gap: 6px; }
+.wb-head > * { flex-shrink: 0; }
+.wb-name { flex: 1; min-width: 0; }
+.wb-name :deep(.van-field__control) { min-width: 0; }
 .wb-arrow { color: var(--van-gray-5, #c8c9cc); transition: transform .2s; cursor: pointer; flex-shrink: 0; }
 .wb-arrow-open { transform: rotate(90deg); }
 .wb-detail { padding-top: 6px; }
@@ -1437,9 +1441,10 @@ export default {
 .wb-num-row { display: flex; gap: 10px; }
 .wb-num-row .van-field { flex: 1; }
 .wb-toolbar { position: sticky; top: 0; z-index: 5; background: var(--van-background, #f7f8fa); border-bottom: 1px solid var(--van-gray-3, #ebedf0); }
-.wb-toolbar-row { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; overflow-x: auto; }
-.wb-toolbar-row :deep(.van-dropdown-menu) { flex: 1; min-width: 140px; }
+.wb-toolbar-row { display: flex; align-items: center; padding: 0 12px 4px; }
+.wb-toolbar-row :deep(.van-dropdown-menu) { flex: 1; min-width: 0; }
 .wb-toolbar-row :deep(.van-dropdown-menu__bar) { box-shadow: none; background: transparent; height: auto; }
+.wb-toolbar-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 0 12px 10px; }
 .wb-batch-bar {
     position: sticky; bottom: 0; z-index: 5;
     display: flex; align-items: center; gap: 6px;

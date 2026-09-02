@@ -4,7 +4,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 
 import androidx.activity.result.ActivityResult;
 import androidx.documentfile.provider.DocumentFile;
@@ -16,6 +19,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
@@ -153,7 +157,31 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void pickFolder(final PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        putInitialDownloadsUri(intent);
         startActivityForResult(call, intent, "pickFolderResult");
+    }
+
+    /**
+     * 目录选择器默认定位到「下载」目录。
+     * 部分 ROM(尤其国产定制系统)的 SAF 根列表不显示 Download 或将其灰显导致无法选择,
+     * 设置 EXTRA_INITIAL_URI 后选择器直接打开在 Download,点「使用此文件夹」即可选定。
+     * 该 URI 仅为初始定位,用户仍可导航到任意其他目录。
+     */
+    private void putInitialDownloadsUri(Intent intent) {
+        try {
+            Uri initial = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                initial = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+            } else {
+                File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (dl != null) initial = Uri.fromFile(dl);
+            }
+            if (initial != null) {
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+            }
+        } catch (Throwable t) {
+            // 某些设备不支持初始目录,回退默认选择器
+        }
     }
 
     /**
@@ -240,6 +268,7 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void pickPushFolder(final PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        putInitialDownloadsUri(intent);
         startActivityForResult(call, intent, "pickPushFolderResult");
     }
 
@@ -315,15 +344,8 @@ public class LibraryFsPlugin extends Plugin {
         List<JSObject> files = new ArrayList<>();
         Set<String> categories = new LinkedHashSet<>();
         walkDir(startDir, prefix, rel == null || rel.isEmpty(), files, categories);
-        // 幽灵分组过滤:仅保留确实包含卡片的一级文件夹
-        if (rel == null || rel.isEmpty()) {
-            Set<String> cardFolders = new LinkedHashSet<>();
-            for (JSObject f : files) {
-                String sub = f.optString("subFolder");
-                if (sub != null && !sub.isEmpty()) cardFolders.add(sub.split("/")[0]);
-            }
-            categories.removeIf(c -> !cardFolders.contains(c));
-        }
+        // 分组 = 库根下所有一级文件夹(含空分组)。不做“幽灵分组过滤”:
+        // 空分组(新建后尚未放卡片)也必须显示,否则新建分组在列表/分组管理里不可见,分组功能看似失效。
         JSObject ret = new JSObject();
         JSArray arr = new JSArray(files);
         ret.put("files", arr);
@@ -1181,6 +1203,7 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void scanFolder(final PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        putInitialDownloadsUri(intent);
         intent.putExtra("__ext", call.getString("ext", ".png"));
         intent.putExtra("__skipLarge", call.getBoolean("skipLarge", true));
         startActivityForResult(call, intent, "scanFolderResult");

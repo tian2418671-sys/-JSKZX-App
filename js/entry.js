@@ -14,8 +14,12 @@ import 'vant/lib/index.css';
 import { androidImpl } from './bridge/android';
 
 // 是否运行在 Capacitor 原生容器内（Android/iOS WebView）
-const isNative = typeof window !== 'undefined'
-    && !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+// 预览调试开关：URL 带 ?mobile=1 或 localStorage 设 jsx_mobile_preview=1 时强制进入移动端界面（仅浏览器调试用，对 APK 实际运行零影响）
+const forceMobile = typeof window !== 'undefined'
+    && (new URLSearchParams(window.location.search).has('mobile')
+        || window.localStorage.getItem('jsx_mobile_preview') === '1');
+const isNative = forceMobile || (typeof window !== 'undefined'
+    && !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()));
 
 const rootComponent = isNative ? MobileApp : App;
 const app = createApp(rootComponent);

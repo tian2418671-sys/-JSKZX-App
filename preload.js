@@ -1,4 +1,11 @@
 /**
+ * ⚠️【桌面版参考文件 · 请勿修改】
+ * 本文件是桌面版(Electron)预加载脚本，移动版(Capacitor/Android)不依赖本文件。
+ * 移动版维护范围仅限：js/mobile/、android/、js/bridge/android.js 等移动端代码。
+ * 本文件仅供移动版开发时对照参考桌面端行为，请勿修改。
+ */
+
+/**
  * 预加载脚本：通过 contextBridge 安全地把主进程能力暴露给渲染进程
  * 渲染进程只能通过 window.electronAPI 访问这些受控方法，无法直接触碰 Node.js
  */

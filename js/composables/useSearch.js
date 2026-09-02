@@ -66,7 +66,8 @@ export function extractCardSearchableText(item) {
         });
     }
 
-    // 鎷煎悎鎴愬崟涓€鐨勫叏閲忓皬鍐欏瓧绗︿覆娴?    return textSegments.join(' ').toLowerCase();
+    // 鎷煎悎鎴愬崟涓€鐨勫叏閲忓皬鍐欏瓧绗︿覆娴?
+    return textSegments.join(' ').toLowerCase();
 }
 
 /**
