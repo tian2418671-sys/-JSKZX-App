@@ -490,7 +490,7 @@ export default {
                 const rel = safeWbName(name);
                 const res = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + rel, name, wb: defaultWbJson(name) });
                 res && res.success ? showSuccessToast('已创建') : showToast((res && res.error) || '创建失败');
-                if (res && res.success) await loadLibrary();
+                if (res && res.success) await loadLibrary(true); // 新增文件后强制重扫
             }
         }
 
@@ -506,7 +506,7 @@ export default {
                 const newPath = dir + '/' + safeWbName(newBaseName);
                 const res = await api.renameWorldbookFile({ path: wb.path, newPath });
                 res && res.success ? showSuccessToast('已重命名') : showToast((res && res.error) || '重命名失败');
-                if (res && res.success) await loadLibrary();
+                if (res && res.success) await loadLibrary(true); // 文件改名后强制重扫
             }
         }
 
@@ -524,7 +524,7 @@ export default {
                 const rel = safeWbName(base);
                 const res = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + rel, name: base, wb: clone });
                 res && res.success ? showSuccessToast('已复制') : showToast((res && res.error) || '复制失败');
-                if (res && res.success) await loadLibrary();
+                if (res && res.success) await loadLibrary(true); // 副本落盘后强制重扫
             }
         }
 
@@ -543,7 +543,7 @@ export default {
                 if (res && res.success) {
                     const key = wb.path || wb.name || '';
                     if (key && wbCategoryMap[key] !== undefined) { delete wbCategoryMap[key]; saveWbCatMap(); }
-                    await loadLibrary();
+                    await loadLibrary(true); // 删除文件后强制重扫
                 }
             }
         }
@@ -599,7 +599,7 @@ export default {
                 const wb = { name: json.name || baseName, entries };
                 const wr = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + name, name: baseName, wb });
                 wr && wr.success ? showSuccessToast('已导入') : showToast((wr && wr.error) || '导入失败');
-                if (wr && wr.success) await loadLibrary();
+                if (wr && wr.success) await loadLibrary(true); // 导入新世界书后强制重扫
             }
         }
 
@@ -611,7 +611,7 @@ export default {
                 if (res.skipped && res.skipped.length) m.push(`跳过 ${res.skipped.length}`);
                 if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length}`);
                 showSuccessToast(m.join(' · '));
-                await loadLibrary();
+                await loadLibrary(true); // 🐛 世界书导入后强制重扫,否则库已加载时新书不进入列表
             } else {
                 showToast((res && res.error) || '导入失败');
             }
@@ -682,7 +682,7 @@ export default {
                 else showToast((res && res.error) || '合并失败');
             } else {
                 const res = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + safeWbName(mergeName), name: mergeName, wb });
-                if (res && res.success) { showSuccessToast(`已合并 ${targets.length} 本 · ${n} 个去重词条`); await loadLibrary(); }
+                if (res && res.success) { showSuccessToast(`已合并 ${targets.length} 本 · ${n} 个去重词条`); await loadLibrary(true); }
                 else showToast((res && res.error) || '合并失败');
             }
             showWbMerge.value = false;
@@ -715,7 +715,7 @@ export default {
                 else showToast((res && res.error) || '提取失败');
             } else {
                 const res = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + safeWbName(wbName), name: wbName, wb });
-                if (res && res.success) { showSuccessToast(`已提取《${wbName}》(${entries.length} 词条)`); await loadLibrary(); }
+                if (res && res.success) { showSuccessToast(`已提取《${wbName}》(${entries.length} 词条)`); await loadLibrary(true); }
                 else showToast((res && res.error) || '提取失败');
             }
         }
@@ -775,7 +775,7 @@ export default {
             }
             if (okCount) {
                 showSuccessToast(`已从 JSONL 导入 ${okCount} 本世界书`);
-                await loadLibrary();
+                await loadLibrary(true); // JSONL 导入后强制重扫
             } else {
                 showToast('未解析到可导入的 JSONL 世界书');
             }
@@ -890,7 +890,7 @@ export default {
             return extractBookEntries(book).length;
         }
 
-        function reload() { loadLibrary(); }
+        function reload() { loadLibrary(true); } // 下拉刷新/手动刷新:强制重扫
 
         async function openCardWb(card) {
             const { entries } = getCardEmbeddedWb(card);
@@ -1199,7 +1199,7 @@ export default {
             const res = await api.restoreWorldbookSnapshot({ filePath: ed.path, snapshotPath: snap.path });
             if (res && res.success) {
                 showSuccessToast('已恢复');
-                await loadLibrary();
+                await loadLibrary(true); // 快照恢复后强制重扫
                 const path = ed.path;
                 const newWb = library.worldbooks.find((w) => w.path === path);
                 if (newWb) {
@@ -1327,7 +1327,7 @@ export default {
                     (result.sourcePath && i.path === result.sourcePath) ||
                     (!result.sourcePath && (((i.data && i.data.data) || i.data || {}).name || i.name) === result.sourceName)
                 );
-                if (item) router.push({ path: '/card', query: { id: item.path } });
+                if (item) router.push({ path: '/card', query: { p: item.path } }); // 🐛 详情页只认 query.p,传 id 会导致「卡片不存在」
             }
             showGlobalEntrySearch.value = false;
         }

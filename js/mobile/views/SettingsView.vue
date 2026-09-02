@@ -324,7 +324,7 @@ export default {
                 }
                 const n = (res.files || []).length;
                 scanInfo.value = `${n} 张`;
-                loadLibrary();
+                loadLibrary(true); // 授权/切换库目录后强制重扫
                 showSuccessToast(`已授权库目录 · 扫描到 ${n} 张`);
             } catch (e) {
                 showToast('已取消或失败');
@@ -384,7 +384,7 @@ export default {
                 showSuccessToast('已恢复');
                 await loadTrash();
                 await refreshStats();
-                loadLibrary();
+                loadLibrary(true); // 回收站恢复文件后强制重扫
             } else {
                 showToast((res && res.error) || '恢复失败');
             }

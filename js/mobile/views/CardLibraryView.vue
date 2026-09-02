@@ -366,9 +366,9 @@ export default {
             }
             showDedupe.value = true;
         }
-        /** 查重清理完成后刷新分组(空分组/统计) */
+        /** 查重清理完成后刷新分组(空分组/统计)——查重可能删除卡片,必须强制重扫 */
         function onDedupeCleaned() {
-            load();
+            load(true);
         }
 
         const groupChips = computed(() => {
@@ -489,7 +489,10 @@ export default {
                 if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
                 if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
                 showSuccessToast(m.join(' · '));
-                load();
+                // 🐛 修复:导入后必须强制重扫(load(true))。若库已加载,load() 会命中 loadLibrary 的
+                // "已加载且非空则跳过" 守卫而不再扫描,新导入的卡不会进入 mobileLibrary.library,
+                // 导致点开卡片时 findCard 找不到 → 显示「卡片不存在」。
+                load(true);
             } else {
                 showToast((res && res.error) || '已取消导入');
             }
@@ -561,7 +564,7 @@ export default {
                 if (res && res.success) {
                     showSuccessToast(`已导入「${res.fileName || '卡片'}」`);
                     urlInput.value = '';
-                    load();
+                    load(true); // 🐛 导入后强制重扫,避免新卡不入库导致详情页「卡片不存在」
                     return true;
                 }
                 showToast((res && res.error) || '导入失败');
@@ -687,7 +690,7 @@ export default {
             }
             showSuccessToast(`已移入回收站 ${okCount}/${cards.length} 张`);
             if (!batchSet.size) exitBatch();
-            load();
+            load(true); // 已删除文件,强制重扫让列表/分类同步
         }
 
 
@@ -752,14 +755,14 @@ export default {
                 if (res && res.success) {
                     showSuccessToast('已重命名');
                     if (selected.value === target) selected.value = newName.trim();
-                    load();
+                    load(true); // 分组改名,强制重扫同步 subFolder/分类
                 } else showToast((res && res.error) || '重命名失败');
             } else if (action.value === 'delete') {
                 const res = await window.electronAPI.deleteEmptyGroupFolder({ libraryPath: LIBRARY_ROOT, groupName: target });
                 if (res && res.success) {
                     showSuccessToast(res.deleted ? '已删除空分组' : '分组非空，未删除');
                     if (selected.value === target) selected.value = '全部';
-                    load();
+                    load(true); // 分组变更,强制重扫同步分类列表
                 } else showToast((res && res.error) || '删除失败');
             }
         }
@@ -770,7 +773,7 @@ export default {
             const res = await window.electronAPI.createGroupFolder({ libraryPath: LIBRARY_ROOT, groupName: name.trim() });
             if (res && res.success) {
                 showSuccessToast(`已创建「${name.trim()}」`);
-                load();
+                load(true); // 新分组需重扫后才会出现在分类列表
             } else showToast((res && res.error) || '创建失败');
         }
 
@@ -786,7 +789,7 @@ export default {
             } else if (action.value === 'duplicate') {
                 const res = await window.electronAPI.duplicateFile(activeCard.path);
                 res && res.success ? showSuccessToast('已创建副本') : showToast((res && res.error) || '复制失败');
-                if (res && res.success) load();
+                if (res && res.success) load(true); // 物理副本入盘,强制重扫
             } else if (action.value === 'locate') {
                 const res = await window.electronAPI.showItemInFolder(activeCard.path);
                 if (res && res.success) { /* 系统文件管理器已定位 */ }
@@ -852,7 +855,7 @@ export default {
                 const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
                     ? LIBRARY_ROOT + '/' + selected.value : LIBRARY_ROOT;
                 const res = await window.electronAPI.downloadCardFromUrl({ url: url.trim(), destFolder: dest });
-                if (res && res.success) { showSuccessToast('已导入'); load(); }
+                if (res && res.success) { showSuccessToast('已导入'); load(true); } // 🐛 同导入:强制重扫
                 else showToast((res && res.error) || '下载失败');
                 return;
             }

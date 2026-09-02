@@ -494,7 +494,7 @@
 </template>
 
 <script>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue';
 import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules } from '../../utils/cardLoader.js';
 import { useRoute } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog, showImagePreview } from 'vant';
@@ -502,7 +502,7 @@ import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
-import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
+import { findCard, saveCardData, loadLibrary, mobileLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
@@ -1238,7 +1238,7 @@ export default {
             const res = await api.restoreCardSnapshot({ filePath: card.value.path, snapshotPath: snap.path });
             if (res && res.success) {
                 showSuccessToast('已恢复');
-                await loadLibrary();
+                await loadLibrary(true); // 快照恢复会覆盖文件内容,强制重扫以重解析卡片数据
                 card.value = findCard(id.value) || null;
                 initChat();
                 showSnapshots.value = false;
@@ -1715,10 +1715,23 @@ export default {
             }
         }
 
-        onMounted(() => {
+        onMounted(async () => {
             resolveId();
+            // 🐛 修复:若库尚未加载(冷启动直链 / 库状态被重置),先加载再解析卡片,
+            // 避免详情页一进来就误报「卡片不存在」。库已加载时(正常列表点入)零额外开销。
+            if (!mobileLibrary.ready) {
+                try { await loadLibrary(); } catch (e) { /* 加载失败保持空态,由页面提示 */ }
+            }
             card.value = findCard(id.value) || null;
             initChat();
+        });
+
+        // 兜底:库数据到达/刷新后若仍未找到卡(并发加载、导入后重扫等场景),再解析一次
+        watch(() => mobileLibrary.library, () => {
+            if (!card.value && id.value) {
+                card.value = findCard(id.value) || null;
+                if (card.value) initChat();
+            }
         });
 
         return {

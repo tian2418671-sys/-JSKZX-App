@@ -140,7 +140,7 @@ export default {
                     if (res.failed && res.failed.length) msg.push(`失败 ${res.failed.length} 个`);
                     showSuccessToast(msg.join(' · '));
                     // 重新加载库,新卡即刻可见
-                    try { await loadLibrary(); } catch (e) { /* 忽略 */ }
+                    try { await loadLibrary(true); } catch (e) { /* 忽略 */ } // 🐛 磁盘扫描导入后强制重扫
                     // 清空本次扫描结果
                     files.value = [];
                     selected.value = [];
