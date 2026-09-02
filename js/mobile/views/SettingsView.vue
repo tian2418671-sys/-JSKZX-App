@@ -32,14 +32,16 @@
                 <van-cell title="全部卡片" :value="granted ? scanInfo : '—'" />
             </van-cell-group>
 
-            <!-- API 配置(与卡片详情页「测卡」Tab 共用) -->
-            <van-cell-group inset title="聊天测卡 API">
+            <!-- API 配置(全局唯一入口，测卡 Tab / AI 工具共用) -->
+            <van-cell-group inset title="聊天测卡 API（全局）">
                 <van-field v-model="apiEndpoint" label="端点" placeholder="http://127.0.0.1:1234/v1/chat/completions" />
-                <van-field v-model="apiKey" label="Key" placeholder="sk-... 或留空" />
-                <van-field v-model="apiModel" label="模型" placeholder="local-model" />
+                <van-field v-model="apiKey" label="Key" type="password" placeholder="sk-... 或留空" />
+                <van-field v-model="apiModel" label="模型" placeholder="local-model" is-link readonly clickable @click="openModelPicker" />
+                <van-cell title="拉取模型" :value="modelFetchStatus || '点击获取服务端模型列表'" is-link :disabled="fetchingModels" @click="fetchAvailableModels" />
+                <van-cell v-if="availableModels.length" :title="`已拉取 ${availableModels.length} 个模型`" is-link @click="showModelPicker = true" />
                 <van-cell title="协议">
                     <template #value>
-                        <van-radio-group v-model="apiType" direction="horizontal">
+                        <van-radio-group v-model="apiType" direction="horizontal" @change="onApiTypeChange">
                             <van-radio name="openai" :style="radioStyle">OpenAI</van-radio>
                             <van-radio name="anthropic" :style="radioStyle">Anthropic</van-radio>
                         </van-radio-group>
@@ -48,6 +50,17 @@
                 <div class="save-row">
                     <van-button block size="small" type="primary" @click="saveApi">保存 API 配置</van-button>
                 </div>
+            </van-cell-group>
+
+            <!-- 测卡设置(全局) -->
+            <van-cell-group inset title="测卡设置">
+                <van-cell title="AI 回复数量" label="每次生成几条候选回复，可左右滑动切换">
+                    <template #value>
+                        <van-stepper v-model="replyCount" min="1" max="10" integer @change="saveReplyCount" />
+                    </template>
+                </van-cell>
+                <van-field v-model="userName" label="用户名" placeholder="我" @blur="saveUserName" />
+                <van-field v-model="userPersona" label="用户人设" type="textarea" rows="3" autosize placeholder="{{user}} 的角色设定（可选，注入对话）" @blur="saveUserPersona" />
             </van-cell-group>
 
             <!-- 外观 -->
@@ -176,14 +189,36 @@
                 <van-button v-else block disabled loading>下载中…</van-button>
             </div>
         </van-popup>
+
+        <!-- 模型选择弹窗 -->
+        <van-popup v-model:show="showModelPicker" position="bottom" round style="max-height: 60%">
+            <van-nav-bar title="选择模型" @click-right="showModelPicker = false">
+                <template #right><van-icon name="cross" /></template>
+            </van-nav-bar>
+            <van-search v-model="modelFilter" placeholder="搜索模型" />
+            <div style="overflow-y: auto; max-height: calc(60vh - 100px)">
+                <van-cell
+                    v-for="m in filteredModels"
+                    :key="m"
+                    :title="m"
+                    clickable
+                    @click="pickModel(m)"
+                >
+                    <template #right-icon>
+                        <van-icon v-if="m === apiModel" name="success" color="#06b6d4" />
+                    </template>
+                </van-cell>
+            </div>
+        </van-popup>
     </div>
 </template>
 
 <script>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 import { loadApiKey, saveApiKey } from '../useChatApiConfig';
+import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { loadLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
@@ -293,6 +328,86 @@ export default {
         loadApiKey().then(k => { apiKey.value = k; });
         const apiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const apiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
+
+        // ---------- 模型列表拉取(全局唯一入口) ----------
+        const availableModels = ref([]);
+        const fetchingModels = ref(false);
+        const modelFetchStatus = ref('');
+        const showModelPicker = ref(false);
+        const modelFilter = ref('');
+        const filteredModels = computed(() => {
+            const q = modelFilter.value.trim().toLowerCase();
+            if (!q) return availableModels.value;
+            return availableModels.value.filter((m) => m.toLowerCase().includes(q));
+        });
+        async function fetchAvailableModels() {
+            const ep = (apiEndpoint.value || '').trim();
+            if (!ep) { showToast('请先填写 API 端点'); return; }
+            fetchingModels.value = true;
+            modelFetchStatus.value = '拉取中…';
+            availableModels.value = [];
+            try {
+                const res = await api.fetchModels(ep, apiKey.value.trim(), apiType.value);
+                if (!res || !res.success) {
+                    modelFetchStatus.value = '失败: ' + ((res && res.error) || '未知错误');
+                    showToast(modelFetchStatus.value);
+                    return;
+                }
+                const raw = res.data;
+                let list = [];
+                if (Array.isArray(raw && raw.data)) {
+                    list = raw.data.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                } else if (Array.isArray(raw)) {
+                    list = raw.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                }
+                if (list.length) {
+                    availableModels.value = list;
+                    modelFetchStatus.value = `已拉取 ${list.length} 个模型`;
+                    if (!list.includes(apiModel.value.trim())) apiModel.value = list[0];
+                    showModelPicker.value = true;
+                } else {
+                    modelFetchStatus.value = '接口已响应，但未抓取到模型';
+                }
+            } catch (e) {
+                modelFetchStatus.value = '失败: ' + (e.message || e);
+                showToast(modelFetchStatus.value);
+            } finally {
+                fetchingModels.value = false;
+            }
+        }
+        function pickModel(m) {
+            apiModel.value = m;
+            showModelPicker.value = false;
+            modelFilter.value = '';
+        }
+        function openModelPicker() {
+            if (!availableModels.value.length) { showToast('请先点击「拉取模型」获取列表'); return; }
+            showModelPicker.value = true;
+        }
+        function onApiTypeChange(v) {
+            const ep = apiEndpoint.value || '';
+            if (v === 'anthropic') {
+                if (!ep || ep.includes('openai') || ep.includes('1234')) {
+                    apiEndpoint.value = 'https://api.anthropic.com';
+                    apiModel.value = 'claude-3-5-sonnet-20241022';
+                }
+            } else {
+                if (!ep || ep.includes('anthropic')) {
+                    apiEndpoint.value = 'http://127.0.0.1:1234/v1/chat/completions';
+                    apiModel.value = 'local-model';
+                }
+            }
+            availableModels.value = [];
+            modelFetchStatus.value = '';
+        }
+
+        // ---------- 测卡全局设置(回复数量 / 用户角色) ----------
+        const replyCount = ref(getReplyCount());
+        const userName = ref(getUserName());
+        const userPersona = ref(getUserPersona());
+        function saveReplyCount() { setReplyCount(replyCount.value); }
+        function saveUserName() { setUserName(userName.value); showSuccessToast('用户名已保存'); }
+        function saveUserPersona() { setUserPersona(userPersona.value); showSuccessToast('用户人设已保存'); }
 
         const libraryState = () => (granted.value ? '已授权 ✓' : (authLost.value ? '已失效' : '未授权'));
 
@@ -469,6 +584,9 @@ export default {
             granted, authLost, rootUri, scanInfo, darkTheme, theme, uiFs, onThemePick, onFsPick,
             apiEndpoint, apiKey, apiModel, apiType, radioStyle,
             libraryState, handlePickFolder, saveApi, onThemeChange,
+            availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
+            fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
+            replyCount, userName, userPersona, saveReplyCount, saveUserName, saveUserPersona,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
             fmtSize, checkUpdate, doDownload,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,

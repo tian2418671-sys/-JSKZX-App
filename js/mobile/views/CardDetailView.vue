@@ -1,4 +1,4 @@
-<template>
+﻿<template>
     <div class="detail-page">
         <van-nav-bar :title="card ? card.name : '卡片详情'" left-arrow @click-left="$router.back()" safe-area-inset-top>
             <template #right>
@@ -285,19 +285,44 @@
                             <span class="ct-title">与「{{ card ? card.name : '' }}」对话</span>
                             <van-icon name="replay" size="18" style="margin: 0 12px 0 auto" @click="clearChat" />
                             <van-button size="mini" plain type="primary" @click="toggleChatRender">{{ chatRenderMode === 'render' ? '切换到源码' : '切换到渲染' }}</van-button>
-                            <van-icon name="setting-o" size="18" style="margin-left: 8px" @click="showChatApi = true" />
+                            <van-icon name="setting-o" size="18" style="margin-left: 8px" @click="goApiSettings" />
                         </div>
                         <div ref="chatListEl" class="chat-list">
-                            <div v-for="(m, i) in chatMessages" :key="i" class="bubble" :class="m.role">
-                                <div class="b-name">{{ m.role === 'user' ? '我' : (card ? card.name : 'AI') }}</div>
-                                <pre v-if="chatRenderMode === 'source'" class="b-content">{{ m.content }}</pre>
-                                <div v-else class="b-content b-render" v-html="renderChatHtml(m.content)"></div>
+                            <div
+                                v-for="(m, i) in chatMessages"
+                                :key="i"
+                                class="msg-row"
+                                :class="m.role"
+                            >
+                                <div
+                                    class="bubble"
+                                    :class="m.role"
+                                    @touchstart="onSwipeStart($event, i)"
+                                    @touchend="onSwipeEnd($event, i)"
+                                >
+                                    <div class="b-name">{{ bubbleName(m) }}</div>
+                                    <pre v-if="chatRenderMode === 'source'" class="b-content">{{ messageText(m) }}</pre>
+                                    <div v-else class="b-content b-render" v-html="renderChatHtml(messageText(m))"></div>
+                                </div>
+                                <div v-if="m.role === 'assistant' && m.swipes && m.swipes.length" class="swipe-bar">
+                                    <div v-if="m.swipes.length > 1" class="swipe-nav">
+                                        <van-icon name="arrow-left" class="swipe-arrow" @click="prevSwipe(i)" />
+                                        <span class="swipe-idx">{{ (m.index || 0) + 1 }}/{{ m.swipes.length }}</span>
+                                        <van-icon name="arrow" class="swipe-arrow" @click="nextSwipe(i)" />
+                                    </div>
+                                    <div class="swipe-ops">
+                                        <van-button size="mini" plain :disabled="chatSending" @click="moreSwipe(i)">再生成一个</van-button>
+                                        <van-button size="mini" plain :disabled="chatSending" @click="continueSwipe(i)">继续生成</van-button>
+                                        <van-button size="mini" plain :disabled="chatSending" @click="regenerateSwipe(i)">重新生成</van-button>
+                                    </div>
+                                </div>
                             </div>
                             <van-loading v-if="chatSending" size="20">思考中…</van-loading>
                             <van-empty v-if="!chatMessages.length && !chatSending" description="暂无对话，输入消息开始测卡" image-size="60" />
                         </div>
                         <div class="input-bar">
                             <van-field v-model="chatDraft" type="textarea" autosize rows="1" placeholder="输入消息…" />
+                            <van-icon name="contact" size="20" style="color:#969799; padding:4px" @click="openUserRole" />
                             <van-button type="primary" size="small" :loading="chatSending" @click="sendChat">发送</van-button>
                         </div>
                     </div>
@@ -397,52 +422,6 @@
             @clean="cleanSnapshots"
         />
 
-        <!-- 测卡 API 配置弹窗(与设置页共享 stc-api-* 存储键) -->
-        <van-popup v-model:show="showChatApi" position="bottom" round style="height: 60%">
-            <van-nav-bar title="API 设置" @click-left="showChatApi = false">
-                <template #left><van-icon name="arrow-left" /></template>
-            </van-nav-bar>
-            <van-cell-group inset style="margin-top: 12px">
-                <van-field v-model="chatApiEndpoint" label="端点" placeholder="http://127.0.0.1:1234/v1/chat/completions" />
-                <van-field v-model="chatApiKey" label="Key" placeholder="sk-... 或留空" />
-                <van-field v-model="chatApiModel" label="模型" placeholder="local-model" is-link readonly clickable @click="showModelPicker = availableModels.length > 0" />
-                <van-cell title="拉取模型" :value="modelFetchStatus || '点击获取服务端模型列表'" is-link :disabled="fetchingModels" @click="fetchAvailableModels" />
-                <van-cell v-if="availableModels.length" :title="`已拉取 ${availableModels.length} 个模型`" is-link @click="showModelPicker = true" />
-                <van-cell title="协议">
-                    <template #value>
-                        <van-radio-group :model-value="chatApiType" direction="horizontal" @update:model-value="onApiTypeChange">
-                            <van-radio name="openai" :style="radioStyle">OpenAI</van-radio>
-                            <van-radio name="anthropic" :style="radioStyle">Anthropic</van-radio>
-                        </van-radio-group>
-                    </template>
-                </van-cell>
-            </van-cell-group>
-            <div style="padding: 16px">
-                <van-button block type="primary" @click="saveChatApi">保存</van-button>
-            </div>
-        </van-popup>
-
-        <!-- 模型选择弹窗 -->
-        <van-popup v-model:show="showModelPicker" position="bottom" round style="max-height: 60%">
-            <van-nav-bar title="选择模型" @click-right="showModelPicker = false">
-                <template #right><van-icon name="cross" /></template>
-            </van-nav-bar>
-            <van-search v-model="modelFilter" placeholder="搜索模型" />
-            <div style="overflow-y: auto; max-height: calc(60vh - 100px)">
-                <van-cell
-                    v-for="m in filteredModels"
-                    :key="m"
-                    :title="m"
-                    clickable
-                    @click="pickModel(m)"
-                >
-                    <template #right-icon>
-                        <van-icon v-if="m === chatApiModel" name="success" color="#06b6d4" />
-                    </template>
-                </van-cell>
-            </div>
-        </van-popup>
-
         <!-- 输入弹窗(自定义标签等) -->
         <van-dialog
             v-model:show="showInputDialog"
@@ -454,22 +433,29 @@
             <van-field v-model="inputValue" :placeholder="inputPlaceholder" style="margin: 16px 0" />
         </van-dialog>
 
+        <!-- 用户角色设置弹窗 -->
+        <van-popup v-model:show="showUserRole" position="bottom" round style="height: 55%">
+            <van-nav-bar title="用户角色设置" @click-left="showUserRole = false">
+                <template #left><van-icon name="arrow-left" /></template>
+            </van-nav-bar>
+            <van-cell-group inset style="margin-top: 12px">
+                <van-field v-model="userName" label="用户名" placeholder="我" @blur="saveInlineUser" />
+                <van-field v-model="userPersona" label="用户人设" type="textarea" rows="5" autosize placeholder="{{user}} 的角色设定（可选，注入对话）" @blur="saveInlineUser" />
+            </van-cell-group>
+            <div class="chat-tip">用户名与人设全局生效（与设置页同步）。</div>
+            <div style="padding: 16px">
+                <van-button block type="primary" @click="showUserRole = false">完成</van-button>
+            </div>
+        </van-popup>
+
         <!-- AI 智能工具弹窗 -->
         <AiToolModal
             :show="showAiTools"
             :mode="aiMode"
-            :endpoint="chatApiEndpoint"
-            :key="chatApiKey"
-            :model="chatApiModel"
-            :api-type="chatApiType"
             :candidates="aiCandidates"
             :running="aiRunning"
             :progress="aiProgress"
             @close="showAiTools = false; aiMode = ''"
-            @update:endpoint="chatApiEndpoint = $event"
-            @update:key="chatApiKey = $event"
-            @update:model="chatApiModel = $event"
-            @update:apiType="chatApiType = $event"
             @tag="startAiTagging"
             @rules="showAutoTagRules = true"
             @translate="startAiTranslate"
@@ -496,7 +482,7 @@
 <script>
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue';
 import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules } from '../../utils/cardLoader.js';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog, showImagePreview } from 'vant';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
@@ -506,6 +492,8 @@ import { findCard, saveCardData, loadLibrary, mobileLibrary, getCardEmbeddedWb, 
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
+import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
+import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
@@ -519,6 +507,7 @@ export default {
     components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal },
     setup() {
         const route = useRoute();
+        const router = useRouter();
         const id = ref('');
         const card = ref(null);
         const activeTab = ref('basic');
@@ -1293,7 +1282,6 @@ export default {
         const chatDraft = ref('');
         const chatSending = ref(false);
         const chatListEl = ref(null);
-        const showChatApi = ref(false);
         // 聊测展示模式:source=纯文本/代码, render=Markdown+HTML 渲染;默认渲染
         const chatRenderMode = ref('render');
         function toggleChatRender() {
@@ -1323,91 +1311,47 @@ export default {
         const chatApiKey = ref(localStorage.getItem(LS_KEY) || '');
         const chatApiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const chatApiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
-        const radioStyle = { marginRight: '16px' };
         // 启动时解密读取 API Key（兼容历史明文；无有效 Key 保持空）
         loadChatApiKey().then((k) => { if (k) chatApiKey.value = k; });
 
-        // ---------- 模型列表拉取(桥接 fetchModels 已支持双协议) + 协议切换自动填端点 ----------
-        const availableModels = ref([]);
-        const fetchingModels = ref(false);
-        const modelFetchStatus = ref('');
-        const showModelPicker = ref(false);
-        const modelFilter = ref('');
-        const filteredModels = computed(() => {
-            const q = modelFilter.value.trim().toLowerCase();
-            if (!q) return availableModels.value;
-            return availableModels.value.filter((m) => m.toLowerCase().includes(q));
-        });
+        function refreshChatConfig() {
+            chatApiEndpoint.value = localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions';
+            chatApiModel.value = localStorage.getItem(LS_MODEL) || 'local-model';
+            chatApiType.value = localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai';
+            loadChatApiKey().then((k) => { if (k) chatApiKey.value = k; });
+            // 测卡全局设置（设置页为唯一录入入口）
+            replyCount.value = getReplyCount();
+            userName.value = getUserName();
+            userPersona.value = getUserPersona();
+        }
+        // 切到「测卡」Tab 时重新同步全局配置（可能刚在设置页改过）
+        watch(activeTab, (t) => { if (t === 'chat') { refreshChatConfig(); scrollChat(); } });
 
-        async function fetchAvailableModels() {
-            const ep = (chatApiEndpoint.value || '').trim();
-            if (!ep) { showToast('请先填写 API 端点'); return; }
-            fetchingModels.value = true;
-            modelFetchStatus.value = '拉取中…';
-            availableModels.value = [];
-            try {
-                const res = await api.fetchModels(ep, chatApiKey.value.trim(), chatApiType.value);
-                if (!res || !res.success) {
-                    modelFetchStatus.value = '失败: ' + ((res && res.error) || '未知错误');
-                    showToast(modelFetchStatus.value);
-                    return;
-                }
-                const raw = res.data;
-                let list = [];
-                if (Array.isArray(raw && raw.data)) {
-                    list = raw.data.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
-                } else if (Array.isArray(raw)) {
-                    list = raw.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
-                }
-                if (list.length) {
-                    availableModels.value = list;
-                    modelFetchStatus.value = `已拉取 ${list.length} 个模型`;
-                    if (!list.includes(chatApiModel.value.trim())) chatApiModel.value = list[0];
-                    showModelPicker.value = true;
-                } else {
-                    modelFetchStatus.value = '接口已响应，但未抓取到模型';
-                }
-            } catch (e) {
-                modelFetchStatus.value = '失败: ' + (e.message || e);
-                showToast(modelFetchStatus.value);
-            } finally {
-                fetchingModels.value = false;
+        // ---------- 测卡全局设置(回复数量 / 用户角色) ----------
+        const replyCount = ref(getReplyCount());
+        const userName = ref(getUserName());
+        const userPersona = ref(getUserPersona());
+        const showUserRole = ref(false);
+        function openUserRole() { showUserRole.value = true; }
+        function saveInlineUser() {
+            setUserName(userName.value);
+            setUserPersona(userPersona.value);
+        }
+        // 测卡页面底部可快捷跳到设置页（全局 API 唯一入口）
+        function goApiSettings() {
+            router.push('/settings');
+        }
+        function bubbleName(m) {
+            return (m && m.role === 'user') ? (userName.value || '我') : ((card.value && card.value.name) || 'AI');
+        }
+        function messageText(m) {
+            if (m && m.role === 'assistant' && Array.isArray(m.swipes) && m.swipes.length) {
+                const idx = Math.max(0, Math.min(Number(m.index) || 0, m.swipes.length - 1));
+                return m.swipes[idx] || '';
             }
+            return (m && m.content) || '';
         }
 
-        function pickModel(m) {
-            chatApiModel.value = m;
-            showModelPicker.value = false;
-            modelFilter.value = '';
-        }
-
-        function onApiTypeChange(v) {
-            chatApiType.value = v;
-            const ep = chatApiEndpoint.value || '';
-            if (v === 'anthropic') {
-                if (!ep || ep.includes('openai') || ep.includes('1234')) {
-                    chatApiEndpoint.value = 'https://api.anthropic.com';
-                    chatApiModel.value = 'claude-3-5-sonnet-20241022';
-                }
-            } else {
-                if (!ep || ep.includes('anthropic')) {
-                    chatApiEndpoint.value = 'http://127.0.0.1:1234/v1/chat/completions';
-                    chatApiModel.value = 'local-model';
-                }
-            }
-            availableModels.value = []; // 协议切换后旧模型列表失效
-            modelFetchStatus.value = '';
-        }
-
-        async function saveChatApi() {
-            localStorage.setItem(LS_ENDPOINT, chatApiEndpoint.value.trim());
-            localStorage.setItem(LS_MODEL, chatApiModel.value.trim());
-            localStorage.setItem(LS_TYPE, chatApiType.value);
-            // API Key 加密后落盘(Keystore AES-256-GCM;兼容读取旧明文)
-            await saveChatApiKey(chatApiKey.value.trim());
-            showChatApi.value = false;
-            showSuccessToast('已保存 API 配置');
-        }
 
         function buildSystem(cardObj) {
             const dd = cardObj && cardObj.data && cardObj.data.data;
@@ -1423,7 +1367,10 @@ export default {
             chatDraft.value = '';
             const dd = card.value && card.value.data && card.value.data.data;
             if (dd && dd.first_mes) {
-                chatMessages.value.push({ role: 'assistant', content: dd.first_mes });
+                const swipes = [String(dd.first_mes)];
+                const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
+                alt.forEach((a) => { if (a && a !== swipes[0]) swipes.push(a); });
+                chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
             }
         }
 
@@ -1437,6 +1384,37 @@ export default {
             if (chatListEl.value) chatListEl.value.scrollTop = chatListEl.value.scrollHeight;
         }
 
+        function buildPayload(type) {
+            const sysParts = [];
+            const system = buildSystem(card.value);
+            if (system) sysParts.push(system);
+            if (userPersona.value) sysParts.push('### 用户(你)的角色设定\n' + userPersona.value);
+            const systemText = sysParts.join('\n\n');
+            const messages = chatMessages.value
+                .slice(0, -1)
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({ role: m.role, content: messageText(m) }));
+            if (type === 'anthropic') {
+                return {
+                    model: chatApiModel.value.trim() || 'claude-3-haiku-20240307',
+                    max_tokens: 2048,
+                    system: systemText,
+                    messages
+                };
+            }
+            return {
+                model: chatApiModel.value.trim() || 'local-model',
+                messages: [{ role: 'system', content: systemText }, ...messages],
+                stream: false,
+                temperature: 0.7
+            };
+        }
+
+        async function requestReply(payload, type) {
+            const res = await api.sendChatMessage(chatApiEndpoint.value.trim(), payload, chatApiKey.value.trim(), type);
+            return replyToSwipe(res, type);
+        }
+
         async function sendChat() {
             const text = (chatDraft.value || '').trim();
             if (!text || !card.value) {
@@ -1446,38 +1424,20 @@ export default {
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
             chatMessages.value.push({ role: 'user', content: text });
             chatDraft.value = '';
+            const count = Math.max(1, replyCount.value || 1);
             chatSending.value = true;
             scrollChat();
 
-            const system = buildSystem(card.value);
-            const history = chatMessages.value.slice(0, -1).filter((m) => m.role === 'user' || m.role === 'assistant');
-            let payload;
-            if (type === 'anthropic') {
-                payload = {
-                    model: chatApiModel.value.trim() || 'claude-3-haiku-20240307',
-                    max_tokens: 2048,
-                    system,
-                    messages: history.map((m) => ({ role: m.role, content: m.content }))
-                };
-            } else {
-                payload = {
-                    model: chatApiModel.value.trim() || 'local-model',
-                    messages: [{ role: 'system', content: system }, ...history],
-                    stream: false,
-                    temperature: 0.7
-                };
-            }
+            const payload = buildPayload(type);
 
             try {
-                const res = await api.sendChatMessage(chatApiEndpoint.value.trim(), payload, chatApiKey.value.trim(), type);
-                const reply = extractChatReply(res, type);
-                if (res && res.success && reply) {
-                    chatMessages.value.push({ role: 'assistant', content: reply });
-                } else {
-                    chatMessages.value.push({ role: 'assistant', content: '⚠ ' + ((res && res.error) || '返回为空') });
+                const swipes = [];
+                for (let n = 0; n < count; n++) {
+                    swipes.push(await requestReply(payload, type));
                 }
+                chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
             } catch (e) {
-                chatMessages.value.push({ role: 'assistant', content: '⚠ 请求异常: ' + (e.message || e) });
+                chatMessages.value.push({ role: 'assistant', swipes: ['⚠ 请求异常: ' + (e.message || e)], index: 0 });
             } finally {
                 chatSending.value = false;
                 scrollChat();
@@ -1493,6 +1453,125 @@ export default {
             return (dd.choices && dd.choices[0] && dd.choices[0].message && dd.choices[0].message.content) || '';
         }
 
+        function nextSwipe(i) {
+            const msg = chatMessages.value[i];
+            if (!msg || !Array.isArray(msg.swipes) || msg.swipes.length < 2) return;
+            msg.index = ((msg.index || 0) + 1) % msg.swipes.length;
+            scrollChat();
+        }
+        function prevSwipe(i) {
+            const msg = chatMessages.value[i];
+            if (!msg || !Array.isArray(msg.swipes) || msg.swipes.length < 2) return;
+            msg.index = (msg.index - 1 + msg.swipes.length) % msg.swipes.length;
+            scrollChat();
+        }
+        let _swipeStartX = null;
+        let _swipeStartY = null;
+        function onSwipeStart(e, i) {
+            const t = e.changedTouches && e.changedTouches[0];
+            if (!t) return;
+            _swipeStartX = t.clientX;
+            _swipeStartY = t.clientY;
+        }
+        function onSwipeEnd(e, i) {
+            const msg = chatMessages.value[i];
+            if (!msg || msg.role !== 'assistant' || !Array.isArray(msg.swipes) || msg.swipes.length < 2) { _swipeStartX = null; _swipeStartY = null; return; }
+            const t = e.changedTouches && e.changedTouches[0];
+            if (!t || _swipeStartX == null || _swipeStartY == null) return;
+            const dx = t.clientX - _swipeStartX;
+            const dy = t.clientY - _swipeStartY;
+            _swipeStartX = null; _swipeStartY = null;
+            if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx)) return;
+            if (dx < 0) nextSwipe(i); else prevSwipe(i);
+        }
+
+        // 在指定 assistant 消息后追加一条新候选（再生成一个）
+        async function moreSwipe(i) {
+            const msg = chatMessages.value[i];
+            if (!msg || msg.role !== 'assistant' || chatSending.value) return;
+            const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
+            const payload = buildPayload(type);
+            msg.swipes = Array.isArray(msg.swipes) ? msg.swipes.slice() : [messageText(msg)];
+            chatSending.value = true;
+            try {
+                const reply = await requestReply(payload, type);
+                msg.swipes.push(reply);
+                msg.index = msg.swipes.length - 1;
+                scrollChat();
+            } catch (e) {
+                showToast('生成失败: ' + (e.message || e));
+            } finally {
+                chatSending.value = false;
+            }
+        }
+
+        // 重新生成：整组改写当前候选（按全局回复数量生成新的一组）
+        async function regenerateSwipe(i) {
+            const msg = chatMessages.value[i];
+            if (!msg || msg.role !== 'assistant' || chatSending.value) return;
+            const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
+            const payload = buildPayload(type);
+            const count = Math.max(1, replyCount.value || 1);
+            chatSending.value = true;
+            try {
+                const swipes = [];
+                for (let n = 0; n < count; n++) {
+                    swipes.push(await requestReply(payload, type));
+                }
+                msg.swipes = swipes;
+                msg.index = 0;
+                scrollChat();
+            } catch (e) {
+                showToast('重新生成失败: ' + (e.message || e));
+            } finally {
+                chatSending.value = false;
+            }
+        }
+
+        // 继续生成：以当前选中 reply 为起点续写一条新回复
+        async function continueSwipe(i) {
+            const msg = chatMessages.value[i];
+            if (!msg || msg.role !== 'assistant' || chatSending.value) return;
+            const text = messageText(msg);
+            const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
+            const sysParts = [];
+            const system = buildSystem(card.value);
+            if (system) sysParts.push(system);
+            if (userPersona.value) sysParts.push('### 用户(你)的角色设定\n' + userPersona.value);
+            const systemText = sysParts.join('\n\n');
+            const prior = chatMessages.value
+                .slice(0, i)
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({ role: m.role, content: messageText(m) }));
+            prior.push({ role: 'assistant', content: text });
+            prior.push({ role: 'user', content: '[continue]' });
+            let payload;
+            if (type === 'anthropic') {
+                payload = {
+                    model: chatApiModel.value.trim() || 'claude-3-haiku-20240307',
+                    max_tokens: 2048,
+                    system: systemText,
+                    messages: prior
+                };
+            } else {
+                payload = {
+                    model: chatApiModel.value.trim() || 'local-model',
+                    messages: [{ role: 'system', content: systemText }, ...prior],
+                    stream: false,
+                    temperature: 0.7
+                };
+            }
+            chatSending.value = true;
+            try {
+                const reply = await requestReply(payload, type);
+                chatMessages.value.push({ role: 'assistant', swipes: [reply], index: 0 });
+                scrollChat();
+            } catch (e) {
+                showToast('续写失败: ' + (e.message || e));
+            } finally {
+                chatSending.value = false;
+            }
+        }
         // Raw JSON 只读查看(对齐桌面 raw 页签)
         const rawJsonText = computed(() => {
             try {
@@ -1582,7 +1661,7 @@ export default {
 
         // 统一 AI 调用（复用测卡 API 配置，桥接 sendChatMessage 绕过 CORS）
         async function callAI(payload) {
-            if (!chatApiEndpoint.value.trim()) throw new Error('请先配置 API 端点（点击右上角 🤖 或测卡 Tab 内设置）');
+            if (!chatApiEndpoint.value.trim()) throw new Error('请先配置 API 端点（在「设置」页填写）');
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
             const res = await api.sendChatMessage(chatApiEndpoint.value.trim(), payload, chatApiKey.value.trim(), type);
             if (!res || !res.success) throw new Error((res && res.error) || 'API 请求失败');
@@ -1597,7 +1676,7 @@ export default {
         // 🏷️ AI 打标（单卡：提取/补充标签到 data.tags）
         async function startAiTagging() {
             if (!card.value || aiRunning.value) return;
-            if (!chatApiEndpoint.value.trim()) { showToast('请先配置 API（设置页或测卡 Tab）'); return; }
+            if (!chatApiEndpoint.value.trim()) { showToast('请先在「设置」页配置 API'); return; }
             aiMode.value = 'tag';
             aiRunning.value = true;
             aiProgress.value = '正在分析卡片特征…';
@@ -1653,7 +1732,7 @@ export default {
         // 🌐 一键汉化（翻译 设定/开场白/场景/示例对话）
         async function startAiTranslate() {
             if (!card.value || aiRunning.value) return;
-            if (!chatApiEndpoint.value.trim()) { showToast('请先配置 API（设置页或测卡 Tab）'); return; }
+            if (!chatApiEndpoint.value.trim()) { showToast('请先在「设置」页配置 API'); return; }
             const ok = await showConfirmDialog({ title: 'AI 汉化', message: '将调用 AI 翻译「角色设定」「首条消息」「场景」「对话示例」，可能消耗 Token，是否继续？' }).catch(() => false);
             if (!ok) return;
             aiMode.value = 'translate';
@@ -1690,7 +1769,7 @@ export default {
         // ✨ 提示词重构（W++/JSON → 紧凑 Markdown）
         async function startAiRefactor() {
             if (!card.value || aiRunning.value) return;
-            if (!chatApiEndpoint.value.trim()) { showToast('请先配置 API（设置页或测卡 Tab）'); return; }
+            if (!chatApiEndpoint.value.trim()) { showToast('请先在「设置」页配置 API'); return; }
             const d = (card.value.data && card.value.data.data) || card.value.data || {};
             if (!d.description || !String(d.description).trim()) { showToast('当前卡片设定为空，无需重构'); return; }
             const ok = await showConfirmDialog({ title: '提示词重构', message: '将调用 AI 把「角色设定」重构为紧凑 Markdown，覆盖原设定，是否继续？' }).catch(() => false);
@@ -1753,11 +1832,11 @@ export default {
             showStatusTemplates, STATUSBAR_TEMPLATES, STATUSBAR_PROMPT_TEMPLATES, injectStatusTemplate, injectPromptTemplate,
             showPush, pushing, tavernUrl, tavernKey, savePushConfig, doPush,
             pushTargetMode, pushTargets, currentPushTargetId, switchPushMode, addPushTarget, removePushTarget,
-            chatMessages, chatDraft, chatSending, chatListEl, showChatApi, chatRenderMode, toggleChatRender, renderChatHtml,
-            chatApiEndpoint, chatApiKey, chatApiModel, chatApiType, radioStyle,
-            saveChatApi, sendChat, clearChat,
-            availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
-            fetchAvailableModels, pickModel, onApiTypeChange,
+            chatMessages, chatDraft, chatSending, chatListEl, chatRenderMode, toggleChatRender, renderChatHtml,
+            chatApiEndpoint, chatApiKey, chatApiModel, chatApiType,
+            replyCount, userName, userPersona, bubbleName, messageText, goApiSettings, showUserRole, openUserRole, saveInlineUser,
+            sendChat, clearChat,
+            nextSwipe, prevSwipe, onSwipeStart, onSwipeEnd, moreSwipe, continueSwipe, regenerateSwipe,
             showAiTools, aiMode, aiRunning, aiProgress, aiCandidates, openAiTools,
             showAutoTagRules, disabledRuleNames, customAutoTagRules, toggleSystemRule, addCustomRule, removeCustomRule,
             addAICandidate, removeAICandidate, startAiTagging, startAiTranslate, startAiRefactor
@@ -1967,7 +2046,7 @@ export default {
 .push-ops { padding: 6px 16px 16px; }
 
 /* 测卡 Tab 聊天 */
-.chat-wrap { display: flex; flex-direction: column; }
+.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 260px; }
 .chat-toolbar {
     display: flex; align-items: center;
     padding: 10px 14px;
@@ -1976,11 +2055,15 @@ export default {
 }
 .ct-title { font-size: 13px; font-weight: 600; }
 .chat-list {
-    max-height: 50vh;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px;
     display: flex; flex-direction: column; gap: 10px;
 }
+.msg-row { display: flex; flex-direction: column; align-items: flex-start; width: 100%; }
+.msg-row.user .bubble { align-self: flex-end; }
+.msg-row.assistant .bubble { align-self: flex-start; }
 .bubble {
     max-width: 85%;
     padding: 10px 12px;
@@ -2006,4 +2089,19 @@ export default {
     border-top: 1px solid var(--van-gray-2, #ebedf0);
 }
 .input-bar .van-field { flex: 1; }
+.swipe-bar {
+    margin-top: 6px;
+    display: flex; flex-direction: column; gap: 6px;
+    align-self: stretch;
+}
+.swipe-nav {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--van-gray-6, #969799);
+}
+.swipe-arrow { font-size: 16px; padding: 2px; }
+.swipe-idx { font-size: 11px; }
+.swipe-ops { display: flex; gap: 6px; }
+.chat-tip {
+    padding: 8px 16px; font-size: 11px; color: var(--van-gray-5, #969799);
+}
 </style>
