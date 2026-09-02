@@ -66,23 +66,25 @@
                     <van-dropdown-menu class="sort-menu">
                         <van-dropdown-item v-model="sortBy" :options="sortOptions" />
                     </van-dropdown-menu>
-                    <van-icon name="apps-o" :color="gridMode ? '#06b6d4' : ''" size="20" @click="setGridMode(true)" />
-                    <van-icon name="list" :color="!gridMode ? '#06b6d4' : ''" size="20" @click="setGridMode(false)" />
+                    <van-icon name="apps-o" :color="viewMode === 'grid' ? '#06b6d4' : ''" size="20" @click="setViewMode('grid')" />
+                    <van-icon name="bars" :color="viewMode === 'list' ? '#06b6d4' : ''" size="20" @click="setViewMode('list')" />
+                    <van-icon name="photo-o" :color="viewMode === 'poster' ? '#06b6d4' : ''" size="20" @click="setViewMode('poster')" />
+                    <van-icon name="exchange" :color="viewMode === 'page' ? '#06b6d4' : ''" size="20" @click="setViewMode('page')" />
                 </div>
 
-                <!-- 卡片网格 / 列表 -->
+                <!-- 卡片网格 / 列表 / 海报 / 翻页 -->
                 <div v-if="loading" class="status-wrap">
                     <van-loading size="28">
                         {{ loadTip }}
                     </van-loading>
                 </div>
                 <van-empty v-else-if="!filtered.length" description="没有卡片" />
-                <div v-else class="cards-wrap" :class="{ list: !gridMode }">
+                <div v-else class="cards-wrap" :class="{ list: viewMode === 'list', poster: viewMode === 'poster', page: viewMode === 'page' }">
                     <div
-                        v-for="card in visibleList"
+                        v-for="card in paginatedList"
                         :key="card.path"
                         class="card-item"
-                        :class="{ 'is-list': !gridMode, 'batch-on': batchMode }"
+                        :class="{ 'is-list': viewMode === 'list', 'is-poster': viewMode === 'poster', 'is-page': viewMode === 'page', 'batch-on': batchMode }"
                         @click="batchMode ? toggleBatch(card.path) : openCard(card)"
                         @longpress="batchMode ? toggleBatch(card.path) : showActions(card)"
                     >
@@ -92,19 +94,22 @@
                             :class="{ checked: batchSet.has(card.path) }"
                             @click.stop="toggleBatch(card.path)"
                         >✓</div>
-                        <MobileCardCover v-if="gridMode" :card="card" class="grid-cover" />
+                        <MobileCardCover v-if="viewMode !== 'list'" :card="card" class="grid-cover" />
                         <div class="card-meta">
                             <div class="c-name">{{ card.name }}</div>
-                            <div v-if="gridMode" class="c-cat">{{ card.category }}</div>
+                            <div v-if="viewMode === 'grid'" class="c-cat">{{ card.category }}</div>
                             <div v-else class="c-desc">{{ snippet(card) }}</div>
                         </div>
                     </div>
-                    <div
-                        v-if="filtered.length > renderCount"
-                        class="load-more-hint"
-                    >
-                        <van-loading size="20">下滑加载更多…</van-loading>
-                    </div>
+                </div>
+                <!-- 分页条 -->
+                <div v-if="filtered.length" class="pager-bar">
+                    <van-icon name="arrow-left" size="18" :class="{ 'pager-dis': pageNo <= 1 }" @click="prevPage" />
+                    <span class="pager-info">{{ pageNo }} / {{ totalPages }}</span>
+                    <van-icon name="arrow" size="18" :class="{ 'pager-dis': pageNo >= totalPages }" @click="nextPage" />
+                    <van-dropdown-menu class="pager-size">
+                        <van-dropdown-item v-model="pageSize" :options="pageSizeOptions" />
+                    </van-dropdown-menu>
                 </div>
                 <div class="bottom-pad" />
                 </template>
@@ -272,10 +277,11 @@ export default {
         const searchQueryInput = queryInput;
         const isDark = currentTheme() === 'dark';
         const selected = ref('全部');
-        const gridMode = ref(localStorage.getItem('jsmobile_grid') !== 'list');
-        function setGridMode(v) {
-            gridMode.value = v;
-            try { localStorage.setItem('jsmobile_grid', v ? 'grid' : 'list'); } catch (e) { /* 忽略 */ }
+        // 视图模式:grid 网格 / list 列表 / poster 海报 / page 翻页
+        const viewMode = ref(localStorage.getItem('jsmobile_view') || 'grid');
+        function setViewMode(v) {
+            viewMode.value = v;
+            try { localStorage.setItem('jsmobile_view', v); } catch (e) { /* 忽略 */ }
         }
         const refreshing = ref(false);
         const pullRefKey = ref(0);
@@ -305,57 +311,39 @@ export default {
             else if (action.value === 'urlimport') showUrlImport.value = true;
             else if (action.value === 'export') showExportSheet.value = true;
         }
-        // 增量渲染:首次只渲染 24 张,触底每次加 16 张
-        const BATCH_STEP = 16;
-        const renderCount = ref(24);
-        const visibleList = computed(() => filtered.value.slice(0, renderCount.value));
-        function extendRender() {
-            if (renderCount.value >= filtered.value.length) return;
-            renderCount.value += BATCH_STEP;
-            if (renderCount.value > filtered.value.length) renderCount.value = filtered.value.length;
-        }
-        // 触底加载:基于滚动方向判定,避免 van-pull-refresh 回弹导致哨兵反复触发。
-        // 只在大于 lastScrollTop 且距底部 < 180px 时加载;筛选/搜索/分组切换时重置 scrollTop。
-        let lastScrollTop = 0;
-        let sentinelGuard = false;
-        let scrollListener = null;
+        // 分页:每页数量 + 翻页(替代原无限滚动)
+        const pageSize = ref(parseInt(localStorage.getItem('jsmobile_pagesize') || '20', 10));
+        const pageSizeOptions = [
+            { text: '10 张/页', value: 10 },
+            { text: '20 张/页', value: 20 },
+            { text: '50 张/页', value: 50 },
+            { text: '100 张/页', value: 100 }
+        ];
+        const pageNo = ref(1);
+        const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)));
+        const paginatedList = computed(() => {
+            const start = (pageNo.value - 1) * pageSize.value;
+            return filtered.value.slice(start, start + pageSize.value);
+        });
+        function nextPage() { if (pageNo.value < totalPages.value) pageNo.value++; }
+        function prevPage() { if (pageNo.value > 1) pageNo.value--; }
         let touchStartListener = null;
-        const sentinelThreshold = 180;
         onMounted(() => {
             const scroller = document.querySelector('.van-pull-refresh__track');
             if (!scroller) return;
-            // 关键修复:在 touchstart 时锁定 pullDisabled 状态。
-            // 手指按下时不在顶部(scrollTop>5)→ 整个手势期间禁用下拉刷新,
-            // 即使手指滚回顶部也不会误触发。只有从顶部开始的新手势才能下拉刷新。
+            // 手指按下时不在顶部(scrollTop>5)→ 整个手势期间禁用下拉刷新,避免与列表滚动冲突
             touchStartListener = () => {
                 pullDisabled.value = scroller.scrollTop > 5;
             };
             scroller.addEventListener('touchstart', touchStartListener, { passive: true });
-            scrollListener = () => {
-                const st = scroller.scrollTop;
-                if (sentinelGuard) return;
-                if (st < lastScrollTop) { lastScrollTop = st; return; } // 上滑忽略
-                lastScrollTop = st;
-                const sh = scroller.scrollHeight;
-                const ch = scroller.clientHeight;
-                if (sh - st - ch < sentinelThreshold) {
-                    sentinelGuard = true;
-                    extendRender();
-                    setTimeout(() => { sentinelGuard = false; }, 250);
-                }
-            };
-            scroller.addEventListener('scroll', scrollListener, { passive: true });
         });
         onBeforeUnmount(() => {
             const scroller = document.querySelector('.van-pull-refresh__track');
-            if (scroller) {
-                if (scrollListener) scroller.removeEventListener('scroll', scrollListener);
-                if (touchStartListener) scroller.removeEventListener('touchstart', touchStartListener);
-            }
-            scrollListener = null;
+            if (scroller && touchStartListener) scroller.removeEventListener('touchstart', touchStartListener);
             touchStartListener = null;
         });
-        watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
+        // 搜索/筛选/分组/排序/视图/每页数量 变化时回到第 1 页
+        watch([() => selected.value, () => quickFilter.value, () => queryInput.value, () => sortBy.value, viewMode, pageSize], () => { pageNo.value = 1; });
         let activeCard = null;
 
         /** 查重入口(角色卡) */
@@ -501,7 +489,7 @@ export default {
         async function load(refresh = false) {
             loading.value = true;
             needsAuth.value = false;
-            renderCount.value = 24;
+            currentPage.value = 1;
             await loadLibrary(refresh);
             loading.value = false;
             needsAuth.value = !mobileLibrary.ready && !!mobileLibrary.error;
@@ -912,10 +900,10 @@ export default {
 
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
-            query, selected, gridMode, refreshing, pullRefKey, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
-            filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
+            query, selected, viewMode, refreshing, pullRefKey, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
+            filtered, paginatedList, pageSize, pageSizeOptions, pageNo, totalPages, nextPage, prevPage, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
-            onQuickFilter, onSelectCategory, setGridMode,
+            onQuickFilter, onSelectCategory, setViewMode,
             sortBy, sortOptions,
             showGroupAction, groupActionTarget, groupActionItems, onGroupActionSelect,
             sheetActions, groupSheetActions, exportSheetActions,
@@ -984,6 +972,8 @@ export default {
     padding: 0 12px;
 }
 .cards-wrap.list { grid-template-columns: 1fr; }
+.cards-wrap.poster { grid-template-columns: 1fr; }
+.cards-wrap.page { grid-template-columns: 1fr; }
 .card-item {
     position: relative;
     border-radius: 12px;
@@ -1015,6 +1005,10 @@ export default {
 }
 .bb-count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; margin-right: 2px; }
 .grid-cover { aspect-ratio: 3 / 4; }
+.is-poster .grid-cover { aspect-ratio: 16 / 10; }
+.is-page .grid-cover { aspect-ratio: 16 / 10; }
+.is-page .card-meta { padding: 14px 14px 16px; }
+.is-page .c-name { font-size: 16px; }
 .card-meta { padding: 8px 10px 10px; }
 .c-name {
     font-size: 14px; font-weight: 600;
@@ -1034,6 +1028,15 @@ export default {
     font-size: 12px;
     color: var(--van-gray-5, #c8c9cc);
 }
+.pager-bar {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 10px 14px 4px;
+}
+.pager-info { font-size: 13px; color: var(--van-gray-6, #969799); }
+.pager-dis { color: var(--van-gray-3, #ebedf0) !important; }
+.pager-size { min-width: 0; }
+.pager-size :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 28px; }
+.pager-size :deep(.van-dropdown-menu__title) { font-size: 12px; }
 .bottom-pad { height: 16px; }
 
 /* 未授权引导 */

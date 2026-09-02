@@ -63,6 +63,19 @@
                 <van-field v-model="userPersona" label="用户人设" type="textarea" rows="3" autosize placeholder="{{user}} 的角色设定（可选，注入对话）" @blur="saveUserPersona" />
             </van-cell-group>
 
+            <!-- 长期记忆(移动端专属) -->
+            <van-cell-group inset title="长期记忆">
+                <van-cell title="启用记忆" label="测卡时自动记录对话并检索相关记忆注入">
+                    <template #right-icon><van-switch v-model="memoryEnabled" size="20px" @change="saveMemoryEnabled" /></template>
+                </van-cell>
+                <van-cell title="记忆检索条数" label="每次发送前注入的最多相关记忆条数">
+                    <template #value>
+                        <van-stepper v-model="memoryLimit" min="1" max="50" integer @change="saveMemoryLimit" />
+                    </template>
+                </van-cell>
+                <van-cell title="记忆查看 / 管理" label="浏览已存记忆，可删除或清空" is-link @click="openMemoryViewer" />
+            </van-cell-group>
+
             <!-- 外观 -->
             <van-cell-group inset title="外观">
                 <van-cell title="界面主题" label="白昼 / 暗夜 / 青灰三主题即时切换">
@@ -210,15 +223,45 @@
                 </van-cell>
             </div>
         </van-popup>
+
+        <!-- 记忆查看 / 管理弹窗 -->
+        <van-popup v-model:show="showMemoryViewer" position="bottom" round style="height: 70%">
+            <van-nav-bar title="长期记忆" @click-left="showMemoryViewer = false">
+                <template #left><van-icon name="arrow-left" /></template>
+                <template #right>
+                    <van-icon name="delete-o" size="18" style="margin-right: 12px" @click="clearAllMemory" />
+                </template>
+            </van-nav-bar>
+            <div class="mem-toolbar">
+                <van-radio-group v-model="memoryFilter" direction="horizontal">
+                    <van-radio name="all" :style="radioStyle">全部</van-radio>
+                    <van-radio name="fact" :style="radioStyle">事实</van-radio>
+                    <van-radio name="message" :style="radioStyle">消息</van-radio>
+                </van-radio-group>
+            </div>
+            <div class="mem-list">
+                <van-loading v-if="memoryLoading" size="20">加载中…</van-loading>
+                <van-empty v-else-if="!memoryItems.length" description="暂无记忆" />
+                <div v-else v-for="m in memoryItems" :key="m.id" class="mem-item">
+                    <div class="mem-item-body">
+                        <div class="mem-item-type">{{ m.type === 'fact' ? '📌 事实' : '💬 消息' }}</div>
+                        <div class="mem-item-content">{{ m.content }}</div>
+                        <div class="mem-item-meta">{{ m.cardName || '全局' }} · {{ fmtTime(m.createdAt) }}</div>
+                    </div>
+                    <van-icon name="cross" size="16" color="#c8c9cc" @click="removeOneMemory(m)" />
+                </div>
+            </div>
+        </van-popup>
     </div>
 </template>
 
 <script>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
+import { isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit, listMemory, removeMemory, clearMemory } from '../useChatMemory';
 import { loadLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
@@ -409,6 +452,44 @@ export default {
         function saveUserName() { setUserName(userName.value); showSuccessToast('用户名已保存'); }
         function saveUserPersona() { setUserPersona(userPersona.value); showSuccessToast('用户人设已保存'); }
 
+        // ---------- 长期记忆 ----------
+        const memoryEnabled = ref(isMemoryEnabled());
+        const memoryLimit = ref(getMemoryLimit());
+        const showMemoryViewer = ref(false);
+        const memoryLoading = ref(false);
+        const memoryItems = ref([]);
+        const memoryFilter = ref('all');
+        function saveMemoryEnabled() { setMemoryEnabled(memoryEnabled.value); }
+        function saveMemoryLimit() { setMemoryLimit(memoryLimit.value); }
+        function fmtTime(ts) {
+            if (!ts) return '';
+            const d = new Date(Number(ts));
+            const p = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+        }
+        async function openMemoryViewer() {
+            showMemoryViewer.value = true;
+            await refreshMemory();
+        }
+        async function refreshMemory() {
+            memoryLoading.value = true;
+            const type = memoryFilter.value === 'all' ? '' : memoryFilter.value;
+            memoryItems.value = await listMemory(type, 200);
+            memoryLoading.value = false;
+        }
+        async function removeOneMemory(m) {
+            await removeMemory(m.id);
+            await refreshMemory();
+        }
+        async function clearAllMemory() {
+            try {
+                await showConfirmDialog({ title: '清空记忆', message: '将删除全部记忆，不可恢复。', confirmButtonText: '清空', confirmButtonColor: '#ee0a24' });
+            } catch (e) { return; }
+            await clearMemory('');
+            await refreshMemory();
+        }
+        watch(memoryFilter, () => { refreshMemory(); });
+
         const libraryState = () => (granted.value ? '已授权 ✓' : (authLost.value ? '已失效' : '未授权'));
 
         async function refreshInfo() {
@@ -587,6 +668,8 @@ export default {
             availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
             fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
             replyCount, userName, userPersona, saveReplyCount, saveUserName, saveUserPersona,
+            memoryEnabled, memoryLimit, saveMemoryEnabled, saveMemoryLimit, showMemoryViewer, openMemoryViewer,
+            memoryItems, memoryFilter, memoryLoading, removeOneMemory, clearAllMemory, fmtTime,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
             fmtSize, checkUpdate, doDownload,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
@@ -646,4 +729,15 @@ export default {
 .ota-progress { margin-top: 14px; }
 .ota-progress-text { margin-top: 6px; font-size: 12px; color: var(--van-gray-6, #969799); text-align: center; }
 .ota-ops { padding: 6px 16px 16px; }
+.mem-toolbar { padding: 10px 16px; }
+.mem-list { padding: 0 16px 24px; overflow-y: auto; flex: 1; }
+.mem-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--van-gray-2, #ebedf0);
+}
+.mem-item-body { flex: 1; min-width: 0; }
+.mem-item-type { font-size: 12px; color: #06b6d4; margin-bottom: 2px; }
+.mem-item-content { font-size: 13px; word-break: break-word; }
+.mem-item-meta { margin-top: 4px; font-size: 11px; color: var(--van-gray-5, #c8c9cc); }
 </style>

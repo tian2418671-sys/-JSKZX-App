@@ -53,7 +53,7 @@
                     </div>
                 </div>
 
-                <div v-for="item in entryList" :key="item.key" class="wb-item">
+                <div v-for="item in entryPaginatedList" :key="item.key" class="wb-item">
                     <div class="wb-head">
                         <van-checkbox
                             v-if="entryBatchMode"
@@ -94,6 +94,14 @@
                 </div>
                 <van-empty v-if="!entryList.length && !entrySearchQuery && entryFilterState === 'all'" description="无条目" image-size="60" />
                 <van-empty v-else-if="!entryList.length" description="无匹配词条" image-size="60" />
+                <div v-if="entryList.length" class="wb-pager-bar">
+                    <van-icon name="arrow-left" size="18" :class="{ 'pager-dis': entryPage <= 1 }" @click="prevEntryPage" />
+                    <span class="pager-info">{{ entryPage }} / {{ entryTotalPages }}</span>
+                    <van-icon name="arrow" size="18" :class="{ 'pager-dis': entryPage >= entryTotalPages }" @click="nextEntryPage" />
+                    <van-dropdown-menu class="pager-size">
+                        <van-dropdown-item v-model="entryPageSize" :options="entryPageSizeOptions" />
+                    </van-dropdown-menu>
+                </div>
 
                 <!-- 词条批量操作栏 -->
                 <div v-if="entryBatchMode" class="wb-batch-bar">
@@ -283,7 +291,7 @@
 </template>
 
 <script>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { showSuccessToast, showToast, showConfirmDialog } from 'vant';
 import { mobileLibrary, loadLibrary, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb } from '../useMobileLibrary';
@@ -1015,6 +1023,24 @@ export default {
             return list;
         });
 
+        // 词条列表分页
+        const entryPageSize = ref(parseInt(localStorage.getItem('jsmobile_wb_pagesize') || '20', 10));
+        const entryPageSizeOptions = [
+            { text: '10 条/页', value: 10 },
+            { text: '20 条/页', value: 20 },
+            { text: '50 条/页', value: 50 },
+            { text: '100 条/页', value: 100 }
+        ];
+        const entryPage = ref(1);
+        const entryTotalPages = computed(() => Math.max(1, Math.ceil(entryList.value.length / entryPageSize.value)));
+        const entryPaginatedList = computed(() => {
+            const start = (entryPage.value - 1) * entryPageSize.value;
+            return entryList.value.slice(start, start + entryPageSize.value);
+        });
+        function nextEntryPage() { if (entryPage.value < entryTotalPages.value) entryPage.value++; }
+        function prevEntryPage() { if (entryPage.value > 1) entryPage.value--; }
+        watch([entrySearchQuery, entryFilterState, entrySortBy, entryPageSize], () => { entryPage.value = 1; });
+
         // 上移 / 下移：真实调序（对象字典重建，保持插入顺序）
         function moveEntryByKey(key, dir) {
             if (!editing.value) return;
@@ -1368,6 +1394,7 @@ export default {
             openCardWb, openFileWb, closeEditor, addEntry, removeEntry, saveAll,
             WB_POSITIONS, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys,
             ENTRY_FILTER_OPTIONS, ENTRY_SORT_OPTIONS, entrySearchQuery, entryFilterState, entrySortBy, entryList,
+            entryPageSize, entryPageSizeOptions, entryPage, entryTotalPages, entryPaginatedList, nextEntryPage, prevEntryPage,
             entryName, entryDisplayName, wbToolsOpen,
             moveEntryByKey, duplicateEntry, expandAllEntries, collapseAllEntries, runEntryHealthCheck,
             entryBatchMode, entryBatchSet, toggleEntryBatch, toggleEntryBatchSelect, selectAllEntries, batchDeleteEntries, batchDisableEntries,
@@ -1422,4 +1449,13 @@ export default {
     overflow-x: auto;
 }
 .wb-batch-count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; }
+.wb-pager-bar {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 10px 14px 4px;
+}
+.wb-pager-bar .pager-info { font-size: 13px; color: var(--van-gray-6, #969799); }
+.wb-pager-bar .pager-dis { color: var(--van-gray-3, #ebedf0) !important; }
+.wb-pager-bar .pager-size { min-width: 0; }
+.wb-pager-bar .pager-size :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 28px; }
+.wb-pager-bar .pager-size :deep(.van-dropdown-menu__title) { font-size: 12px; }
 </style>

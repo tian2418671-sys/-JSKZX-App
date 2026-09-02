@@ -13,6 +13,7 @@ const AppConfig = registerPlugin('AppConfigPlugin');
 const Http = registerPlugin('HttpPlugin');
 const Update = registerPlugin('UpdatePlugin');
 const Keystore = registerPlugin('KeystorePlugin');
+const Memory = registerPlugin('MemoryPlugin');
 
 // 虚拟库根:渲染层眼中的"绝对路径"前缀(与桌面 file:// 语义对齐)
 export const LIBRARY_ROOT = '/library';
@@ -59,6 +60,18 @@ export function toRelativePath(p) {
     if (normalized.startsWith(LIBRARY_ROOT)) return normalized.slice(LIBRARY_ROOT.length).replace(/^\/+/, '');
     // 允许直接传相对路径
     return normalized.replace(/^\/+/, '');
+}
+
+/** 统一记忆条目字段名(原生 snake_case → JS camelCase) */
+function normalizeMemoryItem(it) {
+    if (!it) return { id: 0, type: '', content: '', cardName: '', createdAt: 0 };
+    return {
+        id: it.id || 0,
+        type: it.type || '',
+        content: it.content || '',
+        cardName: it.cardName || it.card_name || '',
+        createdAt: it.createdAt || it.created_at || 0
+    };
 }
 
 // ---------- M4:PNG 工具函数(用于 replaceCardImage / 快照) ----------
@@ -647,6 +660,54 @@ export const androidImpl = {
             return { success: true, data };
         } catch (e) {
             return { success: false, error: (e && e.message) || '获取模型列表失败' };
+        }
+    },
+    // ---------- 长期记忆(MemoryChat 方案 B,移动端专属,与桌面无关) ----------
+    /** 新增记忆:{ type: fact|summary|message, content, cardName? } */
+    async memoryAdd({ type, content, cardName } = {}) {
+        try {
+            const res = await Memory.add({ type: type || 'message', content: content || '', cardName: cardName || '' });
+            return { success: !!(res && res.success), id: (res && res.id) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '记忆写入失败' };
+        }
+    },
+    /** 关键词检索:{ query, limit? } → { success, items } */
+    async memorySearch({ query, limit } = {}) {
+        try {
+            const res = await Memory.search({ query: query || '', limit: limit || 20 });
+            if (!res || !res.success) return { success: false, items: [], error: (res && res.message) || '检索失败' };
+            return { success: true, items: (res.items || []).map(normalizeMemoryItem), error: null };
+        } catch (e) {
+            return { success: false, items: [], error: (e && e.message) || '检索失败' };
+        }
+    },
+    /** 列出记忆:{ type?, limit? } → { success, items } */
+    async memoryList({ type, limit } = {}) {
+        try {
+            const res = await Memory.list({ type: type || '', limit: limit || 100 });
+            if (!res || !res.success) return { success: false, items: [], error: (res && res.message) || '读取失败' };
+            return { success: true, items: (res.items || []).map(normalizeMemoryItem), error: null };
+        } catch (e) {
+            return { success: false, items: [], error: (e && e.message) || '读取失败' };
+        }
+    },
+    /** 删除单条:{ id } */
+    async memoryRemove(id) {
+        try {
+            const res = await Memory.remove({ id });
+            return { success: !!(res && res.success), removed: (res && res.removed) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '删除失败' };
+        }
+    },
+    /** 清空:{ type? } */
+    async memoryClear(type) {
+        try {
+            const res = await Memory.clear({ type: type || '' });
+            return { success: !!(res && res.success), cleared: (res && res.cleared) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '清空失败' };
         }
     },
     /** 从网络拉取世界书 JSON:经 HttpPlugin GET 转发(绕 WebView CORS) */

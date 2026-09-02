@@ -494,6 +494,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
+import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
@@ -1384,11 +1385,17 @@ export default {
             if (chatListEl.value) chatListEl.value.scrollTop = chatListEl.value.scrollHeight;
         }
 
-        function buildPayload(type) {
+        async function buildPayload(type) {
             const sysParts = [];
             const system = buildSystem(card.value);
             if (system) sysParts.push(system);
             if (userPersona.value) sysParts.push('### 用户(你)的角色设定\n' + userPersona.value);
+            // 长期记忆:检索最后一条用户提问的关键词注入 system
+            if (isMemoryEnabled()) {
+                const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
+                const memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
+                if (memCtx) sysParts.push(memCtx);
+            }
             const systemText = sysParts.join('\n\n');
             const messages = chatMessages.value
                 .slice(0, -1)
@@ -1428,7 +1435,7 @@ export default {
             chatSending.value = true;
             scrollChat();
 
-            const payload = buildPayload(type);
+            const payload = await buildPayload(type);
 
             try {
                 const swipes = [];
@@ -1436,6 +1443,9 @@ export default {
                     swipes.push(await requestReply(payload, type));
                 }
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
+                // 记录对话到长期记忆(不阻塞)
+                recordMessage('user', text, card.value.name);
+                if (swipes && swipes[0]) recordMessage('assistant', swipes[0], card.value.name);
             } catch (e) {
                 chatMessages.value.push({ role: 'assistant', swipes: ['⚠ 请求异常: ' + (e.message || e)], index: 0 });
             } finally {
@@ -1490,7 +1500,7 @@ export default {
             const msg = chatMessages.value[i];
             if (!msg || msg.role !== 'assistant' || chatSending.value) return;
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
-            const payload = buildPayload(type);
+            const payload = await buildPayload(type);
             msg.swipes = Array.isArray(msg.swipes) ? msg.swipes.slice() : [messageText(msg)];
             chatSending.value = true;
             try {
@@ -1510,7 +1520,7 @@ export default {
             const msg = chatMessages.value[i];
             if (!msg || msg.role !== 'assistant' || chatSending.value) return;
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
-            const payload = buildPayload(type);
+            const payload = await buildPayload(type);
             const count = Math.max(1, replyCount.value || 1);
             chatSending.value = true;
             try {

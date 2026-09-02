@@ -33,8 +33,8 @@
                 <van-loading v-if="loading" class="pv-loading" size="28">扫描预设…</van-loading>
 
                 <!-- 列表 -->
-                <div v-else-if="filtered.length" class="pv-list">
-                    <div v-for="p in filtered" :key="p.path" class="pv-card" @click="openEditor(p)">
+                <div v-else-if="paginatedList.length" class="pv-list">
+                    <div v-for="p in paginatedList" :key="p.path" class="pv-card" @click="openEditor(p)">
                         <div class="pv-card-main">
                             <div class="pv-name">{{ pName(p) }}</div>
                             <div class="pv-meta">
@@ -48,6 +48,14 @@
                             <van-icon name="delete-o" size="18" @click="remove(p)" />
                         </div>
                     </div>
+                </div>
+                <div v-if="filtered.length" class="pv-pager-bar">
+                    <van-icon name="arrow-left" size="18" :class="{ 'pager-dis': currentPage <= 1 }" @click="prevPage" />
+                    <span class="pager-info">{{ currentPage }} / {{ totalPages }}</span>
+                    <van-icon name="arrow" size="18" :class="{ 'pager-dis': currentPage >= totalPages }" @click="nextPage" />
+                    <van-dropdown-menu class="pager-size">
+                        <van-dropdown-item v-model="pageSize" :options="pageSizeOptions" />
+                    </van-dropdown-menu>
                 </div>
                 <van-empty v-else description="该目录未发现有效预设（含 prompts/prompt_order/temperature 的 JSON）" />
             </template>
@@ -81,7 +89,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 
@@ -108,6 +116,24 @@ export default {
             if (!kw) return presets.value;
             return presets.value.filter((p) => (p.name || '').toLowerCase().includes(kw));
         });
+
+        // 预设列表分页
+        const pageSize = ref(parseInt(localStorage.getItem('jsmobile_preset_pagesize') || '20', 10));
+        const pageSizeOptions = [
+            { text: '10 个/页', value: 10 },
+            { text: '20 个/页', value: 20 },
+            { text: '50 个/页', value: 50 },
+            { text: '100 个/页', value: 100 }
+        ];
+        const currentPage = ref(1);
+        const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)));
+        const paginatedList = computed(() => {
+            const start = (currentPage.value - 1) * pageSize.value;
+            return filtered.value.slice(start, start + pageSize.value);
+        });
+        function nextPage() { if (currentPage.value < totalPages.value) currentPage.value++; }
+        function prevPage() { if (currentPage.value > 1) currentPage.value--; }
+        watch([q, pageSize], () => { currentPage.value = 1; });
 
         function pName(p) {
             return (p.data && p.data.name) || p.name || '未命名预设';
@@ -292,6 +318,7 @@ export default {
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             title, treeUri, q, loading, filtered, presets, showEditor, edName, edJson, saving, edError,
+            pageSize, pageSizeOptions, currentPage, totalPages, paginatedList, nextPage, prevPage,
             pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta
         };
     }
@@ -307,6 +334,15 @@ export default {
 .pv-count { margin-left: auto; font-size: 12px; color: var(--van-gray-6, #969799); }
 .pv-loading { padding: 48px 0; text-align: center; }
 .pv-list { padding: 4px 12px 20px; display: flex; flex-direction: column; gap: 8px; }
+.pv-pager-bar {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 8px 14px 12px;
+}
+.pv-pager-bar .pager-info { font-size: 13px; color: var(--van-gray-6, #969799); }
+.pv-pager-bar .pager-dis { color: var(--van-gray-3, #ebedf0) !important; }
+.pv-pager-bar .pager-size { min-width: 0; }
+.pv-pager-bar .pager-size :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 28px; }
+.pv-pager-bar .pager-size :deep(.van-dropdown-menu__title) { font-size: 12px; }
 .pv-card {
     display: flex; align-items: center; gap: 8px;
     background: var(--van-background-2, #fff);
