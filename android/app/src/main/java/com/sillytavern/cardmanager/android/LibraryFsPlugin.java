@@ -1502,6 +1502,46 @@ public class LibraryFsPlugin extends Plugin {
     /**
      * 用系统默认应用打开文件/目录:文件按 MIME 类型选择应用,目录用文件管理器浏览。
      */
+    /**
+     * 系统文件选择器选单个 JSON/文本文件并直接读内容(不复制入库)。
+     * 用于测卡侧边栏预设/正则/插件的「从文件导入」。
+     */
+    @PluginMethod()
+    public void pickJsonFile(final PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                new String[]{"application/json", "text/plain", "application/octet-stream"});
+        startActivityForResult(call, intent, "pickJsonFileResult");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void pickJsonFileResult(PluginCall call, ActivityResult result) {
+        if (result == null || result.getResultCode() != android.app.Activity.RESULT_OK
+                || result.getData() == null) {
+            call.reject("用户取消选择");
+            return;
+        }
+        Uri uri = result.getData().getData();
+        if (uri == null) {
+            call.reject("未获取到文件");
+            return;
+        }
+        String name = queryDisplayName(uri);
+        if (name == null || name.isEmpty()) name = "import.json";
+        String text = readStream(uri, false, 20 * 1024 * 1024);
+        if (text == null) {
+            call.reject("读取失败或文件过大(>20MB)");
+            return;
+        }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("name", name);
+        ret.put("text", text);
+        call.resolve(ret);
+    }
+
     @PluginMethod()
     public void openFile(PluginCall call) {
         String rel = call.getString("path");

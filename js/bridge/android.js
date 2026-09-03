@@ -1265,6 +1265,19 @@ export const androidImpl = {
             return { success: false, error: (e && e.message) || '保存失败' };
         }
     },
+    /** 系统文件选择器选单个 JSON 文本文件并读取内容(不复制入库,用于测卡侧边栏导入) */
+    async pickJsonFile() {
+        try {
+            const res = await LibraryFs.pickJsonFile();
+            if (res && res.success) {
+                return { success: true, name: res.name || 'import.json', text: res.text || '' };
+            }
+            return { success: false, error: (res && res.error) || '选择失败' };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '选择失败' };
+        }
+    },
+
     /**
      * ============ 外部世界书目录(独立 SAF 树) ============
      * 桌面端「打开世界书目录」的移动端等价:选择一个任意目录树,扫描/读写其中的世界书 .json。

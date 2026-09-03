@@ -1,6 +1,6 @@
 # 项目自检报告
 
-生成时间：2026/9/1 16:48:11
+生成时间：2026/9/3 15:53:32
 
 ## 汇总
 
@@ -8,8 +8,8 @@
 | --- | --- |
 | P0 | 0 |
 | P1 | 0 |
-| P2 | 143 |
-| **总计** | **143** |
+| P2 | 150 |
+| **总计** | **150** |
 
 ## 标签-双数据源
 
@@ -20,15 +20,23 @@
 
 - **P2** `/js/utils/cardLoader.js:247`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
+- **P2** `/js/mobile/views/CardDetailView.vue:2149`：存在 console 调试输出  
+  → 修复建议：上线前清理或改为日志组件
+- **P2** `/js/mobile/views/CardDetailView.vue:2138`：存在 console 调试输出  
+  → 修复建议：上线前清理或改为日志组件
+- **P2** `/js/mobile/useChatRegex.js:72`：存在 console 调试输出  
+  → 修复建议：上线前清理或改为日志组件
+- **P2** `/js/mobile/useChatRegex.js:35`：存在 console 调试输出  
+  → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/mobile/components/GraphModal.vue:260`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/mobile/components/DedupeModal.vue:353`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/entry.js:104`：存在 console 调试输出  
+- **P2** `/js/entry.js:108`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/entry.js:101`：存在 console 调试输出  
+- **P2** `/js/entry.js:105`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/entry.js:92`：存在 console 调试输出  
+- **P2** `/js/entry.js:96`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/composables/useWorldbooks.js:259`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
@@ -50,11 +58,11 @@
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/composables/useSnapshots.js:37`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useSearch.js:367`：存在 console 调试输出  
+- **P2** `/js/composables/useSearch.js:368`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useSearch.js:291`：存在 console 调试输出  
+- **P2** `/js/composables/useSearch.js:292`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/composables/useSearch.js:265`：存在 console 调试输出  
+- **P2** `/js/composables/useSearch.js:266`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/composables/useGraph.js:210`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
@@ -142,15 +150,12 @@
   → 修复建议：上线前清理或改为日志组件
 - **P2** `/js/bridge/electron.js:10`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/bridge/android.js:551`：存在 console 调试输出  
+- **P2** `/js/bridge/android.js:588`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-- **P2** `/js/bridge/android.js:213`：存在 console 调试输出  
+- **P2** `/js/bridge/android.js:574`：存在 console 调试输出  
   → 修复建议：上线前清理或改为日志组件
-
-## 代码-nativeAlert兜底
-
-- **P2** `/js/bridge/android.js:563`：存在 window.alert 原生弹窗  
-  → 修复建议：统一使用 nativeAlert/Toast
+- **P2** `/js/bridge/android.js:235`：存在 console 调试输出  
+  → 修复建议：上线前清理或改为日志组件
 
 ## 功能缺失-快照入口
 
@@ -161,11 +166,6 @@
 
 - **P2** `/js/components/App.vue:1888`：配置字段被修改但该行未见持久化调用: snapshotConfig.value = { ...snapshotConfig.value, ...cfg.ui.snapshotConfig };  
   → 修复建议：确认是否有 watch 做持久化，否则立即同步
-
-## 桥接-占位标记
-
-- **P2** `/js/bridge/android.js:52`：存在 NOT_IMPLEMENTED / 尚未接入标记  
-  → 修复建议：检查是否已可接入或已废弃
 
 ## 桥接-IPC差距
 
@@ -286,6 +286,12 @@
 
 ## 异步-错误被吞
 
+- **P2** `/js/mobile/views/CardDetailView.vue:2128`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/mobile/useChatRegex.js:69`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
+- **P2** `/js/mobile/useChatRegex.js:30`：try/catch 内仅 console 输出，用户感知不到错误  
+  → 修复建议：（桌面端）catch 加失败明细提示
 - **P2** `/js/components/DiskScanModal.vue:288`：try/catch 内仅 console 输出，用户感知不到错误  
   → 修复建议：（桌面端）catch 加失败明细提示
 - **P2** `/js/components/DiskScanModal.vue:269`：try/catch 内仅 console 输出，用户感知不到错误  
@@ -313,11 +319,13 @@
 
 ## API-本地默认地址
 
-- **P2** `/js/mobile/views/SettingsView.vue:290`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+- **P2** `/js/mobile/views/SettingsView.vue:439`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
   → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
-- **P2** `/js/mobile/views/CardDetailView.vue:1389`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+- **P2** `/js/mobile/views/SettingsView.vue:368`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
   → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
-- **P2** `/js/mobile/views/CardDetailView.vue:1317`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+- **P2** `/js/mobile/views/CardDetailView.vue:1387`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
+  → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
+- **P2** `/js/mobile/views/CardDetailView.vue:1377`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
   → 修复建议：如需支持第三方中转默认，可增加默认地址设置项
 - **P2** `/js/components/App.vue:1760`：本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞  
   → 修复建议：如需支持第三方中转默认，可增加默认地址设置项

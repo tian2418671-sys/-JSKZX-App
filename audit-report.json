@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-09-01T08:48:11.706Z",
+  "generatedAt": "2026-09-03T07:53:32.164Z",
   "counts": {
     "P0": 0,
     "P1": 0,
-    "P2": 143
+    "P2": 150
   },
   "issues": [
     {
@@ -26,7 +26,7 @@
       "sev": "P2",
       "area": "API-本地默认地址",
       "file": "/js/mobile/views/CardDetailView.vue",
-      "line": 1317,
+      "line": 1377,
       "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
       "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
@@ -34,7 +34,7 @@
       "sev": "P2",
       "area": "API-本地默认地址",
       "file": "/js/mobile/views/CardDetailView.vue",
-      "line": 1389,
+      "line": 1387,
       "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
       "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
@@ -42,17 +42,17 @@
       "sev": "P2",
       "area": "API-本地默认地址",
       "file": "/js/mobile/views/SettingsView.vue",
-      "line": 290,
+      "line": 368,
       "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
       "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
       "sev": "P2",
-      "area": "桥接-占位标记",
-      "file": "/js/bridge/android.js",
-      "line": 52,
-      "desc": "存在 NOT_IMPLEMENTED / 尚未接入标记",
-      "fix": "检查是否已可接入或已废弃"
+      "area": "API-本地默认地址",
+      "file": "/js/mobile/views/SettingsView.vue",
+      "line": 439,
+      "desc": "本地 LM Studio 默认地址（DEFAULT_API_ENDPOINT/重置/协议回填），用户可随时在输入框改 endpoint，非阻塞",
+      "fix": "如需支持第三方中转默认，可增加默认地址设置项"
     },
     {
       "sev": "P2",
@@ -530,7 +530,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/bridge/android.js",
-      "line": 213,
+      "line": 235,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -538,17 +538,17 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/bridge/android.js",
-      "line": 551,
+      "line": 574,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
     {
       "sev": "P2",
-      "area": "代码-nativeAlert兜底",
+      "area": "代码-调试输出",
       "file": "/js/bridge/android.js",
-      "line": 563,
-      "desc": "存在 window.alert 原生弹窗",
-      "fix": "统一使用 nativeAlert/Toast"
+      "line": 588,
+      "desc": "存在 console 调试输出",
+      "fix": "上线前清理或改为日志组件"
     },
     {
       "sev": "P2",
@@ -898,7 +898,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useSearch.js",
-      "line": 265,
+      "line": 266,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -906,7 +906,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useSearch.js",
-      "line": 291,
+      "line": 292,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -914,7 +914,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/composables/useSearch.js",
-      "line": 367,
+      "line": 368,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1002,7 +1002,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/entry.js",
-      "line": 92,
+      "line": 96,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1010,7 +1010,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/entry.js",
-      "line": 101,
+      "line": 105,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1018,7 +1018,7 @@
       "sev": "P2",
       "area": "代码-调试输出",
       "file": "/js/entry.js",
-      "line": 104,
+      "line": 108,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1035,6 +1035,38 @@
       "area": "代码-调试输出",
       "file": "/js/mobile/components/GraphModal.vue",
       "line": 260,
+      "desc": "存在 console 调试输出",
+      "fix": "上线前清理或改为日志组件"
+    },
+    {
+      "sev": "P2",
+      "area": "代码-调试输出",
+      "file": "/js/mobile/useChatRegex.js",
+      "line": 35,
+      "desc": "存在 console 调试输出",
+      "fix": "上线前清理或改为日志组件"
+    },
+    {
+      "sev": "P2",
+      "area": "代码-调试输出",
+      "file": "/js/mobile/useChatRegex.js",
+      "line": 72,
+      "desc": "存在 console 调试输出",
+      "fix": "上线前清理或改为日志组件"
+    },
+    {
+      "sev": "P2",
+      "area": "代码-调试输出",
+      "file": "/js/mobile/views/CardDetailView.vue",
+      "line": 2138,
+      "desc": "存在 console 调试输出",
+      "fix": "上线前清理或改为日志组件"
+    },
+    {
+      "sev": "P2",
+      "area": "代码-调试输出",
+      "file": "/js/mobile/views/CardDetailView.vue",
+      "line": 2149,
       "desc": "存在 console 调试输出",
       "fix": "上线前清理或改为日志组件"
     },
@@ -1139,6 +1171,30 @@
       "area": "异步-错误被吞",
       "file": "/js/components/DiskScanModal.vue",
       "line": 288,
+      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
+      "fix": "（桌面端）catch 加失败明细提示"
+    },
+    {
+      "sev": "P2",
+      "area": "异步-错误被吞",
+      "file": "/js/mobile/useChatRegex.js",
+      "line": 30,
+      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
+      "fix": "（桌面端）catch 加失败明细提示"
+    },
+    {
+      "sev": "P2",
+      "area": "异步-错误被吞",
+      "file": "/js/mobile/useChatRegex.js",
+      "line": 69,
+      "desc": "try/catch 内仅 console 输出，用户感知不到错误",
+      "fix": "（桌面端）catch 加失败明细提示"
+    },
+    {
+      "sev": "P2",
+      "area": "异步-错误被吞",
+      "file": "/js/mobile/views/CardDetailView.vue",
+      "line": 2128,
       "desc": "try/catch 内仅 console 输出，用户感知不到错误",
       "fix": "（桌面端）catch 加失败明细提示"
     },

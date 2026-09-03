@@ -406,7 +406,8 @@ export default {
         onActivated(() => { nextTick(bindScroll); });
         onDeactivated(unbindScroll);
         onBeforeUnmount(unbindScroll);
-        watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
+        // 修复 TDZ：quickFilter 在下方才初始化，watch 不能在此处先行执行
+        // watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
         let activeCard = null;
 
         /** 查重入口(角色卡) */
@@ -429,6 +430,9 @@ export default {
 
         // ---------- 快捷过滤 ----------
         const quickFilter = ref('all');
+        // 修复 TDZ：原来 watch 在 quickFilter 定义之前注册(初始化求值)，抛 Cannot access 'quickFilter' before
+        // initialization → 移动端首屏渲染即崩溃。移到定义后注册，语义不变。
+        watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
         const quickFilters = [
             { label: '全部', value: 'all' },
             { label: '📚 有世界书', value: 'has_lorebook' },

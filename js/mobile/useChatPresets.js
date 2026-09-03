@@ -130,6 +130,53 @@ export function isValidPresetStructure(data) {
     return Array.isArray(data.prompts) && data.prompts.length > 0;
 }
 
+/**
+ * 从预设 JSON 中提取正则脚本(酒馆预设可内嵌 regex_scripts)
+ * 兼容两种位置:预设顶层 extensions.regex_scripts / 预设顶层 regex_scripts
+ */
+export function extractRegexFromPreset(presetData) {
+    if (!presetData || typeof presetData !== 'object') return [];
+    const ext = presetData.extensions || {};
+    const raw = Array.isArray(ext.regex_scripts) ? ext.regex_scripts
+        : (Array.isArray(presetData.regex_scripts) ? presetData.regex_scripts : []);
+    return raw.map((s) => {
+        if (!s || typeof s !== 'object') return null;
+        return {
+            scriptName: s.scriptName || s.script_name || '预设正则',
+            findRegex: s.findRegex || s.find_regex || '',
+            replaceString: s.replaceString || s.replace_string || '',
+            disabled: s.disabled === true || s.enabled === false,
+            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+            fromPreset: true
+        };
+    }).filter((s) => s && s.findRegex);
+}
+
+/**
+ * 从预设 JSON 中提取插件定义(酒馆预设可内嵌 prompts 插件标记,本移动端定义为:
+ *   extensions.plugins / plugins 数组,每项 { name, description, systemPrompts, macros, regexScripts, worldbookTriggers })
+ */
+export function extractPluginsFromPreset(presetData) {
+    if (!presetData || typeof presetData !== 'object') return [];
+    const ext = presetData.extensions || {};
+    const raw = Array.isArray(ext.plugins) ? ext.plugins
+        : (Array.isArray(presetData.plugins) ? presetData.plugins : []);
+    return raw.map((p) => {
+        if (!p || typeof p !== 'object') return null;
+        return {
+            name: String(p.name || '预设插件'),
+            description: String(p.description || ''),
+            version: String(p.version || '1.0'),
+            enabled: p.enabled !== false,
+            systemPrompts: Array.isArray(p.systemPrompts) ? p.systemPrompts.map(String) : [],
+            macros: (p.macros && typeof p.macros === 'object') ? p.macros : {},
+            regexScripts: Array.isArray(p.regexScripts) ? p.regexScripts : [],
+            worldbookTriggers: Array.isArray(p.worldbookTriggers) ? p.worldbookTriggers.map(String) : [],
+            fromPreset: true
+        };
+    }).filter(Boolean);
+}
+
 // ========== 活跃预设持久化 ==========
 
 /** 保存当前激活的预设到 localStorage */

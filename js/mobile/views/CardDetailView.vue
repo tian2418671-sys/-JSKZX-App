@@ -336,6 +336,17 @@
                             :preset-scanning="presetScanning"
                             :wb-entries="wbEntries"
                             :preset-params="currentPresetParams"
+                            :chat-sessions="chatSessions"
+                            :active-session-id="activeSessionId"
+                            :api-endpoint="chatApiEndpoint"
+                            :api-key="chatApiKey"
+                            :api-model="chatApiModel"
+                            :api-type="chatApiType"
+                            :reply-count="replyCount"
+                            :user-name="userName"
+                            :user-persona="userPersona"
+                            :memory-enabled="memoryEnabled"
+                            :memory-limit="memoryLimit"
                             @scan-presets="scanExternalPresetDir"
                             @apply-preset="applyPreset"
                             @clear-preset="clearPreset"
@@ -344,6 +355,19 @@
                             @remove-plugin="removePluginByName"
                             @toggle-plugin="togglePluginByName"
                             @update-params="handleUpdateParams"
+                            @toggle-wb-entry="handleToggleWbEntry"
+                            @update-wb-entry="handleUpdateWbEntry"
+                            @sync-wb-keys="handleSyncWbKeys"
+                            @new-session="handleNewSession"
+                            @switch-session="handleSwitchSession"
+                            @delete-session="handleDeleteSession"
+                            @rename-session="handleRenameSession"
+                            @update-api-config="handleUpdateApiConfig"
+                            @update-reply-count="handleUpdateReplyCount"
+                            @update-user-name="handleUpdateUserName"
+                            @update-user-persona="handleUpdateUserPersona"
+                            @update-memory-enabled="handleUpdateMemoryEnabled"
+                            @update-memory-limit="handleUpdateMemoryLimit"
                         />
                     </div>
                 </van-tab>
@@ -510,13 +534,14 @@ import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
-import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled } from '../useChatMemory';
+import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
 import { buildMacroContext, applyMacros } from '../useChatMacros';
 import { applyRegexScripts, extractRegexFromCard } from '../useChatRegex';
-import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure } from '../useChatPresets';
+import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
+import { loadSessions, createSession, upsertSession, persistMessages, deleteSession as deleteSessionById, renameSession as renameSessionById, getLastSessionId, setLastSessionId } from '../useChatSessions';
 import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
 
 // 推送酒馆配置存储键
@@ -1377,10 +1402,11 @@ export default {
         const chatApiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
         const chatApiKey = ref(localStorage.getItem(LS_KEY) || '');
         // 异步解密 API Key（Keystore 密文 → 明文，兼容旧明文存储）
-        getApiKey().then((k) => { if (k) chatApiKey.value = k; });
         const chatApiModel = ref(localStorage.getItem(LS_MODEL) || 'local-model');
         const chatApiType = ref(localStorage.getItem(LS_TYPE) === 'anthropic' ? 'anthropic' : 'openai');
         // 启动时解密读取 API Key（兼容历史明文；无有效 Key 保持空）
+        // 修复「卡片不存在」顽固 bug：此前此处误调用未定义的 getApiKey()，导致详情页组件 setup
+        // 抙 ReferenceError → 组件初始化中断 → card 永为 null → 任何卡片都显示「卡片不存在」。
         loadChatApiKey().then((k) => { if (k) chatApiKey.value = k; });
 
         function refreshChatConfig() {
@@ -1424,17 +1450,36 @@ export default {
         // 用户在侧边栏中调整的预设参数覆盖（优先于预设默认值）
         const paramOverrides = ref({});
 
+        // ---------- 会话管理（反馈3：聊天记录持久化） ----------
+        const chatSessions = ref([]);
+        const activeSessionId = ref('');
+        // ---------- 记忆设置状态（反馈6：从设置页移到侧边栏） ----------
+        const memoryEnabled = ref(isMemoryEnabled());
+        const memoryLimit = ref(getMemoryLimit());
+
+        // 持久化当前对话到会话
+        function saveCurrentChat() {
+            if (!activeSessionId.value || !id.value) return;
+            const s = chatSessions.value.find((x) => x.id === activeSessionId.value);
+            if (s) {
+                s.messages = JSON.parse(JSON.stringify(chatMessages.value || []));
+                s.updatedAt = Date.now();
+                upsertSession(id.value, s);
+            }
+        }
+
         // 宏字典（响应式 computed，随卡片/用户名变化自动更新）
         const macroContext = computed(() => buildMacroContext(card.value, userName.value, userPersona.value));
 
         // 合并插件宏后的完整宏字典
         const fullMacros = computed(() => mergePluginMacros(plugins.value, macroContext.value));
 
-        // 卡片内嵌正则 + 插件正则的合集
+        // 卡片内嵌正则 + 插件正则 + 预设内嵌正则 的合集
         const allRegexScripts = computed(() => {
             const cardRegex = extractRegexFromCard(card.value);
             const pluginRegex = collectPluginRegex(plugins.value);
-            return [...cardRegex, ...pluginRegex];
+            const presetRegex = activePreset.value ? extractRegexFromPreset(activePreset.value.data) : [];
+            return [...cardRegex, ...pluginRegex, ...presetRegex];
         });
 
         // 当前激活预设名（显示用）
@@ -1456,6 +1501,14 @@ export default {
             saveActivePreset(obj.data);
             activePreset.value = obj;
             showPresetPicker.value = false;
+            // 反馈2：提取预设内嵌的正则和插件，合并到测卡引擎
+            const presetPlugins = extractPluginsFromPreset(presetData);
+            if (presetPlugins.length) {
+                presetPlugins.forEach((p) => { p._source = 'preset'; });
+                const manualPlugins = plugins.value.filter((p) => p._source !== 'preset');
+                plugins.value = [...manualPlugins, ...presetPlugins];
+                savePlugins(plugins.value);
+            }
             showSuccessToast('已应用预设：' + obj.name);
         }
 
@@ -1580,9 +1633,99 @@ export default {
             paramOverrides.value = params || {};
         }
 
-        // 测卡页面底部可快捷跳到设置页（全局 API 唯一入口）
+        // ---------- 会话管理 handler（反馈3） ----------
+        function handleNewSession() {
+            if (!id.value) return;
+            saveCurrentChat();
+            const s = createSession(id.value);
+            chatSessions.value = upsertSession(id.value, s);
+            activeSessionId.value = s.id;
+            setLastSessionId(id.value, s.id);
+            // 新会话从开场白开始
+            chatMessages.value = [];
+            chatDraft.value = '';
+            const dd = card.value && card.value.data && card.value.data.data;
+            if (dd && dd.first_mes) {
+                const macros = fullMacros.value;
+                let first = applyMacros(String(dd.first_mes), macros);
+                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
+                chatMessages.value.push({ role: 'assistant', swipes: [first], index: 0 });
+            }
+            showSuccessToast('已新建聊天');
+        }
+        function handleSwitchSession(sid) {
+            if (!id.value || sid === activeSessionId.value) return;
+            saveCurrentChat();
+            activeSessionId.value = sid;
+            setLastSessionId(id.value, sid);
+            const s = chatSessions.value.find((x) => x.id === sid);
+            if (s && s.messages && s.messages.length) {
+                chatMessages.value = s.messages.map((m) => ({ ...m }));
+            } else {
+                chatMessages.value = [];
+                const dd = card.value && card.value.data && card.value.data.data;
+                if (dd && dd.first_mes) {
+                    const macros = fullMacros.value;
+                    let first = applyMacros(String(dd.first_mes), macros);
+                    first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
+                    chatMessages.value.push({ role: 'assistant', swipes: [first], index: 0 });
+                }
+            }
+            chatDraft.value = '';
+            scrollChat();
+        }
+        function handleDeleteSession(sid) {
+            if (!id.value) return;
+            chatSessions.value = deleteSessionById(id.value, sid);
+            if (activeSessionId.value === sid) {
+                const next = chatSessions.value[0];
+                if (next) {
+                    handleSwitchSession(next.id);
+                } else {
+                    activeSessionId.value = '';
+                    setLastSessionId(id.value, '');
+                    initChat();
+                }
+            }
+            showToast('已删除会话');
+        }
+        function handleRenameSession(sid, newName) {
+            if (!id.value) return;
+            chatSessions.value = renameSessionById(id.value, sid, newName);
+        }
+
+        // ---------- 世界书同步 handler（反馈4：侧边栏与卡片世界书双向同步） ----------
+        function handleToggleWbEntry(key) {
+            // 开关变化已通过 v-model 直接写入 wbEntries（reactive），标记未保存
+            saved.value = false;
+        }
+        function handleUpdateWbEntry(key) {
+            saved.value = false;
+        }
+        function handleSyncWbKeys(key) {
+            const e = wbEntries.value[key];
+            if (e) { e.keys = String(e._keysText || '').split(',').map((s) => s.trim()).filter(Boolean); saved.value = false; }
+        }
+
+        // ---------- API 配置 handler（反馈6：从设置页移到侧边栏） ----------
+        function handleUpdateApiConfig(cfg) {
+            if (!cfg) return;
+            if (cfg.endpoint !== undefined) { chatApiEndpoint.value = cfg.endpoint; localStorage.setItem(LS_ENDPOINT, cfg.endpoint); }
+            if (cfg.key !== undefined) { chatApiKey.value = cfg.key; saveChatApiKey(cfg.key); }
+            if (cfg.model !== undefined) { chatApiModel.value = cfg.model; localStorage.setItem(LS_MODEL, cfg.model); }
+            if (cfg.type !== undefined) { chatApiType.value = cfg.type; localStorage.setItem(LS_TYPE, cfg.type); }
+        }
+
+        // ---------- 测卡设置 handler（反馈6） ----------
+        function handleUpdateReplyCount(v) { replyCount.value = v; setReplyCount(v); }
+        function handleUpdateUserName(v) { userName.value = v; setUserName(v); }
+        function handleUpdateUserPersona(v) { userPersona.value = v; setUserPersona(v); }
+        function handleUpdateMemoryEnabled(v) { memoryEnabled.value = v; setMemoryEnabled(v); }
+        function handleUpdateMemoryLimit(v) { memoryLimit.value = v; setMemoryLimit(v); }
+
+        // 测卡页面底部快捷入口：打开侧边栏设置 Tab
         function goApiSettings() {
-            router.push('/settings');
+            sidebarOpen.value = true;
         }
         function bubbleName(m) {
             return (m && m.role === 'user') ? (userName.value || '我') : ((card.value && card.value.name) || 'AI');
@@ -1606,6 +1749,14 @@ export default {
         }
 
         function initChat() {
+            // 会话持久化：若有历史会话消息，优先恢复
+            const s = chatSessions.value.find((x) => x.id === activeSessionId.value);
+            if (s && s.messages && s.messages.length > 0) {
+                chatMessages.value = s.messages.map((m) => ({ ...m }));
+                chatDraft.value = '';
+                scrollChat();
+                return;
+            }
             chatMessages.value = [];
             chatDraft.value = '';
             const dd = card.value && card.value.data && card.value.data.data;
@@ -1628,7 +1779,28 @@ export default {
         }
 
         function clearChat() {
-            initChat();
+            // 清空当前会话消息但保留会话条目
+            const s = chatSessions.value.find((x) => x.id === activeSessionId.value);
+            if (s) { s.messages = []; s.updatedAt = Date.now(); persistMessages(id.value, s.id, []); }
+            chatMessages.value = [];
+            chatDraft.value = '';
+            // 重新加载卡片开场白
+            const dd = card.value && card.value.data && card.value.data.data;
+            if (dd && dd.first_mes) {
+                const macros = fullMacros.value;
+                let first = applyMacros(String(dd.first_mes), macros);
+                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
+                const swipes = [first];
+                const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
+                alt.forEach((a) => {
+                    if (a) {
+                        let processed = applyMacros(a, macros);
+                        processed = applyRegexScripts(processed, allRegexScripts.value, 'AI', macros);
+                        if (processed !== swipes[0]) swipes.push(processed);
+                    }
+                });
+                chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
+            }
             showToast('已清空对话');
         }
 
@@ -1770,6 +1942,7 @@ export default {
                 chatMessages.value.push({ role: 'assistant', swipes: ['⚠ 请求异常: ' + (e.message || e)], index: 0 });
             } finally {
                 chatSending.value = false;
+                saveCurrentChat(); // 反馈3：每次发送后持久化会话
                 scrollChat();
             }
         }
@@ -2144,6 +2317,20 @@ export default {
                         samples: mobileLibrary.library.slice(0, 5).map((x) => x.path)
                     }));
                 }
+                // 初始化会话管理（反馈3：聊天记录持久化）
+                chatSessions.value = loadSessions(id.value);
+                const lastSid = getLastSessionId(id.value);
+                if (lastSid && chatSessions.value.find((s) => s.id === lastSid)) {
+                    activeSessionId.value = lastSid;
+                } else if (chatSessions.value.length > 0) {
+                    activeSessionId.value = chatSessions.value[0].id;
+                } else {
+                    // 首次打开：自动创建一个默认会话
+                    const s = createSession(id.value);
+                    chatSessions.value = upsertSession(id.value, s);
+                    activeSessionId.value = s.id;
+                    setLastSessionId(id.value, s.id);
+                }
                 initChat();
             } catch (e) {
                 console.error('[CardDetail] 挂载异常', e && e.message, e);
@@ -2191,6 +2378,16 @@ export default {
             allRegexScripts,
             // 侧边栏
             sidebarOpen, handleImportRegex, handleImportPlugin, handleUpdateParams,
+            // 会话管理（反馈3）
+            chatSessions, activeSessionId,
+            handleNewSession, handleSwitchSession, handleDeleteSession, handleRenameSession,
+            // 世界书同步（反馈4）
+            handleToggleWbEntry, handleUpdateWbEntry, handleSyncWbKeys,
+            // API/设置 handler（反馈6）
+            handleUpdateApiConfig, handleUpdateReplyCount, handleUpdateUserName, handleUpdateUserPersona,
+            handleUpdateMemoryEnabled, handleUpdateMemoryLimit,
+            // 记忆状态（反馈6）
+            memoryEnabled, memoryLimit,
             showAiTools, aiMode, aiRunning, aiProgress, aiCandidates, openAiTools,
             showAutoTagRules, disabledRuleNames, customAutoTagRules, toggleSystemRule, addCustomRule, removeCustomRule,
             addAICandidate, removeAICandidate, startAiTagging, startAiTranslate, startAiRefactor

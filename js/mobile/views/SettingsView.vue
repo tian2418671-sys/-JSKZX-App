@@ -52,30 +52,6 @@
                 </div>
             </van-cell-group>
 
-            <!-- 测卡设置(全局) -->
-            <van-cell-group inset title="测卡设置">
-                <van-cell title="AI 回复数量" label="每次生成几条候选回复，可左右滑动切换">
-                    <template #value>
-                        <van-stepper v-model="replyCount" min="1" max="10" integer @change="saveReplyCount" />
-                    </template>
-                </van-cell>
-                <van-field v-model="userName" label="用户名" placeholder="我" @blur="saveUserName" />
-                <van-field v-model="userPersona" label="用户人设" type="textarea" rows="3" autosize placeholder="{{user}} 的角色设定（可选，注入对话）" @blur="saveUserPersona" />
-            </van-cell-group>
-
-            <!-- 长期记忆(移动端专属) -->
-            <van-cell-group inset title="长期记忆">
-                <van-cell title="启用记忆" label="测卡时自动记录对话并检索相关记忆注入">
-                    <template #right-icon><van-switch v-model="memoryEnabled" size="20px" @change="saveMemoryEnabled" /></template>
-                </van-cell>
-                <van-cell title="记忆检索条数" label="每次发送前注入的最多相关记忆条数">
-                    <template #value>
-                        <van-stepper v-model="memoryLimit" min="1" max="50" integer @change="saveMemoryLimit" />
-                    </template>
-                </van-cell>
-                <van-cell title="记忆查看 / 管理" label="浏览已存记忆，可删除或清空" is-link @click="openMemoryViewer" />
-            </van-cell-group>
-
             <!-- 外观 -->
             <van-cell-group inset title="外观">
                 <van-cell title="界面主题" label="白昼 / 暗夜 / 青灰三主题即时切换">
@@ -432,7 +408,7 @@ export default {
             if (v === 'anthropic') {
                 if (!ep || ep.includes('openai') || ep.includes('1234')) {
                     apiEndpoint.value = 'https://api.anthropic.com';
-                    apiModel.value = 'claude-3-5-sonnet-20241022';
+                    apiModel.value = ''; // 不预设模型名：避免默认模型不存在，由用户「拉取模型」后选择
                 }
             } else {
                 if (!ep || ep.includes('anthropic')) {
