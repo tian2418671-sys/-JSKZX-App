@@ -1,21 +1,24 @@
 <template>
     <transition name="ts-slide">
         <div v-show="visible" class="test-sidebar">
-            <div class="ts-header">
-                <span class="ts-title">测卡配置</span>
-                <van-icon name="cross" size="18" class="ts-close" @click="$emit('update:visible', false)" />
-            </div>
-            <!-- 顶部选项卡 -->
-            <van-tabs v-model:active="activeTab" shrink line-width="20" class="ts-tabs" @change="onTabChange">
-                <van-tab title="配置" name="config" />
-                <van-tab title="正则插件" name="regex" />
-                <van-tab title="世界书" name="wb" />
-                <van-tab title="聊天" name="chat" />
-                <van-tab title="设置" name="settings" />
-            </van-tabs>
-            <div ref="bodyRef" class="ts-body">
-                <!-- ========== 配置 Tab ========== -->
-                <div v-show="activeTab === 'config'" class="ts-panel">
+            <!-- 遮罩层：点击关闭 + 阻止底层滚动穿透 -->
+            <div class="ts-overlay" @click="$emit('update:visible', false)" />
+            <div class="ts-panel-wrap">
+                <div class="ts-header">
+                    <span class="ts-title">测卡配置</span>
+                    <van-icon name="cross" size="18" class="ts-close" @click="$emit('update:visible', false)" />
+                </div>
+                <!-- 顶部选项卡 -->
+                <van-tabs v-model:active="activeTab" shrink line-width="20" class="ts-tabs" @change="onTabChange">
+                    <van-tab title="配置" name="config" />
+                    <van-tab title="正则插件" name="regex" />
+                    <van-tab title="世界书" name="wb" />
+                    <van-tab title="聊天" name="chat" />
+                    <van-tab title="设置" name="settings" />
+                </van-tabs>
+                <div ref="bodyRef" class="ts-body">
+                    <!-- ========== 配置 Tab ========== -->
+                    <div v-show="activeTab === 'config'" class="ts-panel">
                     <!-- 预设 -->
                     <div class="ts-sec-title"><span>📋 预设</span>
                         <van-tag v-if="activePresetName" type="primary" size="mini" round>{{ activePresetName }}</van-tag>
@@ -204,6 +207,7 @@
                     </van-cell>
                 </div>
             </div>
+        </div>
         </div>
     </transition>
 </template>
@@ -456,13 +460,26 @@ export default {
 </script>
 
 <style scoped>
+/* 容器：全屏固定，用于承载遮罩层 + 侧边栏面板 */
 .test-sidebar {
-    position: fixed; right: 0; top: 0; bottom: 0;
-    width: 300px; max-width: 82vw; z-index: 500;
+    position: fixed; inset: 0; z-index: 500;
+    display: flex; justify-content: flex-end;
+    padding-top: env(safe-area-inset-top, 0px);
+}
+/* 半透明遮罩层：点击关闭 + 遮住底层内容 */
+.ts-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+/* 侧边栏面板：从右侧滑出 */
+.ts-panel-wrap {
+    position: relative;
+    width: 300px; max-width: 82vw; height: 100%;
     background: var(--van-background, #fff);
     box-shadow: -2px 0 12px rgba(0,0,0,0.12);
     display: flex; flex-direction: column; overflow: hidden;
-    padding-top: env(safe-area-inset-top, 0px);
 }
 .ts-header {
     display: flex; align-items: center; justify-content: space-between;
