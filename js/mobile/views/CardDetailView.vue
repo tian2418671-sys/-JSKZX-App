@@ -266,6 +266,8 @@
                             </div>
                         </div>
                         <van-empty v-if="!regexList || !regexList.length" description="无正则脚本" image-size="60" />
+                        <!-- 🔍 真机诊断：导出本卡正则数据形态，定位读取断点 -->
+                        <van-button v-if="!regexList || !regexList.length" block plain size="small" icon="info-o" style="margin-top: 8px" @click="dumpRegexDiag">诊断正则数据（导出形态）</van-button>
                     </div>
                 </van-tab>
 
@@ -879,6 +881,31 @@ export default {
         ];
         const regexExpanded = reactive({});
         function toggleRegexExpand(i) { regexExpanded[i] = !regexExpanded[i]; }
+        /** 🔍 真机正则诊断:导出本卡正则数据全形态，定位读取断点
+         *  输出: ①卡路径 ②card.data 顶层键 ③card.data.data 键 ④各位置正则条数 */
+        function dumpRegexDiag() {
+            const c = card.value;
+            if (!c) { showToast('卡片未加载'); return; }
+            const top = c.data || {};
+            const dd = top.data || {};
+            const lines = [
+                '【正则诊断】' + (c.name || c.fileName || ''),
+                '路径: ' + (c.path || '?'),
+                'spec: ' + (top.spec || '无'),
+                '顶层键: ' + Object.keys(top).join(','),
+                'data层键: ' + Object.keys(dd).join(','),
+                '①data.data.ext.regex: ' + ((dd.extensions && Array.isArray(dd.extensions.regex_scripts)) ? dd.extensions.regex_scripts.length : '无'),
+                '②data.ext.regex: ' + ((top.extensions && Array.isArray(top.extensions.regex_scripts)) ? top.extensions.regex_scripts.length : '无'),
+                '③data.data.regex: ' + (Array.isArray(dd.regex_scripts) ? dd.regex_scripts.length : '无'),
+                '④data.regex: ' + (Array.isArray(top.regex_scripts) ? top.regex_scripts.length : '无'),
+                'extract结果: ' + extractRegexFromCard(c).length,
+            ];
+            const text = lines.join('\n');
+            console.log(text);
+            showConfirmDialog({ title: '正则诊断', message: text, confirmButtonText: '复制', cancelButtonText: '关闭' }).then(() => {
+                copyText(text);
+            }).catch(() => {});
+        }
         function toggleRegexPlacement(r, v) {
             if (!Array.isArray(r.placement)) r.placement = [];
             const idx = r.placement.indexOf(v);
@@ -2094,6 +2121,26 @@ export default {
                 showToast('复制失败: ' + (e.message || e));
             }
         }
+        /** 诊断结果复制(兼容无 clipboard 权限的 WebView:回退 execCommand) */
+        async function copyText(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                showSuccessToast('已复制');
+            } catch (e) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    showSuccessToast('已复制');
+                } catch (e2) {
+                    showToast('复制失败，请手动抄录弹窗内容');
+                }
+            }
+        }
 
         // ================= AI 智能工具（单卡：打标 / 汉化 / 重构 + 规则表） =================
         const showAiTools = ref(false);
@@ -2378,7 +2425,7 @@ export default {
             showRegexImport, regexImportText, importRegexFromText,
             plugins, showPluginPanel, showPluginImport, pluginImportText, importPluginFromText,
             removePluginByName, togglePluginByName,
-            allRegexScripts,
+            allRegexScripts, dumpRegexDiag, copyText,
             // 侧边栏
             sidebarOpen, handleImportRegex, handleImportPlugin, handleUpdateParams,
             // 会话管理（反馈3）
