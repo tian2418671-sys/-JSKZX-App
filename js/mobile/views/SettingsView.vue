@@ -54,13 +54,9 @@
 
             <!-- 外观 -->
             <van-cell-group inset title="外观">
-                <van-cell title="界面主题" label="白昼 / 暗夜 / 青灰三主题即时切换">
+                <van-cell title="界面主题" :label="'当前：' + (THEME_LABELS[theme] || theme)" is-link @click="showThemePicker = true">
                     <template #value>
-                        <van-radio-group :model-value="theme" direction="horizontal" @update:model-value="onThemePick">
-                            <van-radio name="light" :style="radioStyle">白昼</van-radio>
-                            <van-radio name="dark" :style="radioStyle">暗夜</van-radio>
-                            <van-radio name="slate">青灰</van-radio>
-                        </van-radio-group>
+                        <span class="theme-swatch" :style="{ background: themeColor(theme) }"></span>
                     </template>
                 </van-cell>
                 <van-cell title="界面字号" label="全局界面文字缩放，对齐桌面字号系统">
@@ -228,6 +224,27 @@
                 </div>
             </div>
         </van-popup>
+
+        <!-- 主题选择弹窗 -->
+        <van-popup v-model:show="showThemePicker" position="bottom" round>
+            <div class="theme-picker-head">
+                <span class="theme-picker-title">界面主题</span>
+                <van-icon name="cross" size="18" @click="showThemePicker = false" />
+            </div>
+            <div class="theme-grid">
+                <div
+                    v-for="opt in themeOptions"
+                    :key="opt.value"
+                    class="theme-opt"
+                    :class="{ active: theme === opt.value }"
+                    @click="onThemePick(opt.value)"
+                >
+                    <span class="theme-opt-swatch" :style="{ background: opt.color, boxShadow: opt.isDark ? 'inset 0 0 0 1px rgba(255,255,255,.15)' : 'inset 0 0 0 1px rgba(0,0,0,.08)' }"></span>
+                    <span class="theme-opt-name">{{ opt.label }}</span>
+                    <van-icon v-if="theme === opt.value" name="success" class="theme-opt-check" />
+                </div>
+            </div>
+        </van-popup>
     </div>
 </template>
 
@@ -239,7 +256,7 @@ import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit, listMemory, removeMemory, clearMemory } from '../useChatMemory';
 import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
-import { applyTheme, currentTheme, currentFs, applyFs } from '../theme';
+import { applyTheme, currentTheme, currentFs, applyFs, THEME_LABELS } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
 
 // 与卡片详情页「测卡」Tab 共用的 API 配置存储键
@@ -264,10 +281,26 @@ export default {
         const theme = ref(currentTheme());
         const uiFs = ref(currentFs());
         const radioStyle = { marginRight: '12px' };
+        const showThemePicker = ref(false);
+        const themeOptions = [
+            { value: 'light', label: '白昼', color: '#f7f8fa', isDark: false },
+            { value: 'dark', label: '暗夜', color: '#09090b', isDark: true },
+            { value: 'slate', label: '青灰', color: '#0f172a', isDark: true },
+            { value: 'ancient', label: '古风', color: '#f5efe0', isDark: false },
+            { value: 'han', label: '汉风', color: '#1a1410', isDark: true },
+            { value: 'future', label: '未来', color: '#0a1220', isDark: true },
+            { value: 'cyberpunk', label: '赛博朋克', color: '#0f0a1a', isDark: true },
+            { value: 'ink', label: '水墨', color: '#f7f7f2', isDark: false },
+        ];
+        function themeColor(v) {
+            const o = themeOptions.find((x) => x.value === v);
+            return o ? o.color : '#f7f8fa';
+        }
         function onThemePick(v) {
             theme.value = v;
             darkTheme.value = v !== 'light';
             applyTheme(v);
+            showThemePicker.value = false;
         }
         function onFsPick(v) {
             uiFs.value = applyFs(v);
@@ -647,6 +680,7 @@ export default {
 
         return {
             granted, authLost, rootUri, scanInfo, darkTheme, theme, uiFs, onThemePick, onFsPick,
+            showThemePicker, themeOptions, themeColor, THEME_LABELS,
             apiEndpoint, apiKey, apiModel, apiType, radioStyle,
             libraryState, handlePickFolder, saveApi, onThemeChange,
             availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
@@ -670,6 +704,55 @@ export default {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+}
+.theme-swatch {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,0,0,.1);
+    vertical-align: middle;
+}
+.theme-picker-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    font-size: 15px;
+    font-weight: 600;
+}
+.theme-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 4px 16px calc(20px + env(safe-area-inset-bottom));
+}
+.theme-opt {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 4px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+.theme-opt.active {
+    border-color: var(--van-primary-color, #06b6d4);
+    background: var(--van-active-color, #f2f3f5);
+}
+.theme-opt-swatch {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+}
+.theme-opt-name { font-size: 12px; }
+.theme-opt-check {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    color: var(--van-primary-color, #06b6d4);
 }
 .view-body {
     flex: 1;

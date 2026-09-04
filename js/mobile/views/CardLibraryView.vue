@@ -171,6 +171,7 @@
             <span class="bb-count">已选 {{ batchSet.size }} 张</span>
             <van-button size="small" plain @click="selectAllBatch">全选</van-button>
             <van-button size="small" plain type="primary" :disabled="!batchSet.size" @click="showBatchTag = true">批量标签</van-button>
+            <van-button size="small" plain :disabled="!batchSet.size || aiTagRunning" @click="showBatchAiTag = true">🤖 AI 打标</van-button>
             <van-button size="small" plain type="warning" :disabled="!batchSet.size" @click="showGroupSheet = true">批量分组</van-button>
             <van-button size="small" plain type="success" :disabled="!batchSet.size" @click="onBatchPush">推送</van-button>
             <van-button size="small" plain type="danger" :disabled="!batchSet.size" @click="onBatchDelete">删除</van-button>
@@ -198,6 +199,26 @@
                 placeholder="例: 奇幻,冒险,Fantasy"
                 style="margin: 8px 0 16px"
             />
+        </van-dialog>
+
+        <!-- 批量 AI 打标进度弹窗 -->
+        <van-dialog
+            v-model:show="showBatchAiTag"
+            title="🤖 批量 AI 打标"
+            show-cancel-button
+            confirm-button-text="开始打标"
+            :confirm-button-disabled="aiTagRunning"
+            :before-close="onBatchAiTagClose"
+            :close-on-click-overlay="false"
+        >
+            <div class="aitag-progress">
+                <p class="aitag-desc">将对选中的 {{ batchSet.size }} 张卡片调用 AI 提取标签并追加到卡片 tags（失败单卡自动跳过）。</p>
+                <div v-if="aiTagRunning" class="aitag-bar">
+                    <van-progress :percentage="aiTagProgress.total ? Math.round(aiTagProgress.current / aiTagProgress.total * 100) : 0" />
+                    <p class="aitag-status">{{ aiTagProgress.status }}</p>
+                    <p class="aitag-count">{{ aiTagProgress.current }} / {{ aiTagProgress.total }}</p>
+                </div>
+            </div>
         </van-dialog>
 
         <!-- 批量导出选择 -->
@@ -287,6 +308,7 @@ import { currentTheme } from '../theme';
 import { useSearch, extractCardSearchableText, extractCardTags } from '../../composables/useSearch';
 import searchIndex from '../../utils/searchIndex.js';
 import { api } from '../../bridge/api';
+import { loadApiKey } from '../useChatApiConfig';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import DedupeModal from '../components/DedupeModal.vue';
 import GraphModal from '../components/GraphModal.vue';
@@ -463,10 +485,12 @@ export default {
         function onQuickFilter(v) {
             quickFilter.value = v;
             selected.value = '全部';
+            pageIndex.value = 0;
         }
         function onSelectCategory(cat) {
             selected.value = cat;
             quickFilter.value = 'all';
+            pageIndex.value = 0;
         }
 
         // ---------- 搜索引擎：桌面 v2.1.0 同款 useSearch（倒排索引 + 中文分词 + 高级语法 + 9种排序） ----------
@@ -655,6 +679,10 @@ export default {
         const batchTagMode = ref('append');
         const batchTagInput = ref('');
         const showBatchGroup = ref(false);
+        // 批量 AI 打标状态
+        const showBatchAiTag = ref(false);
+        const aiTagRunning = ref(false);
+        const aiTagProgress = reactive({ current: 0, total: 0, status: '' });
 
         function enterBatch() {
             batchMode.value = true;
@@ -706,6 +734,81 @@ export default {
             showBatchTag.value = false;
             batchTagInput.value = '';
             showSuccessToast(`批量标签完成 ${okCount}/${cards.length} 张`);
+        }
+
+        // ---------- 批量 AI 打标（对齐桌面 AITagModal 的批量能力） ----------
+        const LS_AI_ENDPOINT = 'stc-api-endpoint';
+        const LS_AI_MODEL = 'stc-api-model';
+        const LS_AI_TYPE = 'stc-api-type';
+        function extractAiReply(res, type) {
+            if (!res || !res.data) return '';
+            const dd = res.data;
+            if (type === 'anthropic') return (dd.content && dd.content[0] && dd.content[0].text) || '';
+            return (dd.choices && dd.choices[0] && dd.choices[0].message && dd.choices[0].message.content) || '';
+        }
+        function parseAiTags(reply) {
+            const s = String(reply || '').trim();
+            // 容忍被 markdown 代码块包裹 / 前后杂质
+            const m = s.match(/\[[\s\S]*?\]/);
+            if (!m) return [];
+            try {
+                const arr = JSON.parse(m[0]);
+                if (Array.isArray(arr)) return arr.map((x) => String(x).trim()).filter(Boolean);
+            } catch (e) { /* 解析失败返回空 */ }
+            return [];
+        }
+        // 弹窗关闭钩子：确认 → 触发打标；取消 → 仅关闭（若正在打标则忽略取消）
+        async function onBatchAiTagClose(action) {
+            if (action === 'confirm' && !aiTagRunning.value) await onBatchAiTag();
+            else if (action !== 'confirm' && !aiTagRunning.value) { showBatchAiTag.value = false; }
+        }
+
+        async function onBatchAiTag() {
+            const cards = batchSelectedCards();
+            if (!cards.length) { showBatchAiTag.value = false; return; }
+            const endpoint = (localStorage.getItem(LS_AI_ENDPOINT) || '').trim();
+            if (!endpoint) { showToast('请先在「设置」页配置 AI API 端点'); return; }
+            const model = (localStorage.getItem(LS_AI_MODEL) || 'local-model').trim();
+            const type = localStorage.getItem(LS_AI_TYPE) === 'anthropic' ? 'anthropic' : 'openai';
+            const key = (await loadApiKey()).trim();
+            aiTagRunning.value = true;
+            aiTagProgress.total = cards.length;
+            aiTagProgress.current = 0;
+            let okCount = 0;
+            for (const c of cards) {
+                aiTagProgress.current++;
+                aiTagProgress.status = `正在分析 ${c.name || '卡片'}…`;
+                const dd = c.data && (c.data.data || c.data);
+                if (!dd) continue;
+                const desc = String(dd.description || '').substring(0, 1500);
+                const mes = String(dd.first_mes || '').substring(0, 500);
+                const pers = String(dd.personality || '').substring(0, 300);
+                const prompt = '你是专业的角色卡片标签分类助手。请根据角色设定提取最精准的标签。\n'
+                    + '【输出强制规则】：必须只返回形如 ["标签1", "标签2"] 的纯 JSON 数组，不要任何解释文字。\n\n'
+                    + `【角色设定】：\n名字：${c.name || '未知'}\n描述：${desc}\n性格：${pers}\n首句：${mes}`;
+                try {
+                    const res = await api.sendChatMessage(endpoint, {
+                        model,
+                        messages: [
+                            { role: 'system', content: '你是一个专业的角色卡分析助手。请提取最符合角色的标签，严格只返回一个 JSON 数组（如 ["标签1","标签2"]），不要返回其他文字。' },
+                            { role: 'user', content: prompt }
+                        ],
+                        temperature: 0.2
+                    }, key, type);
+                    if (!res || !res.success) continue;
+                    const newTags = parseAiTags(extractAiReply(res, type));
+                    if (!newTags.length) continue;
+                    const cur = Array.isArray(dd.tags) ? dd.tags : [];
+                    dd.tags = [...cur, ...newTags.filter((t) => !cur.includes(t))];
+                    const saveRes = await api.saveCard(c.path, JSON.parse(JSON.stringify(c.data)));
+                    if (saveRes && saveRes.success) okCount++;
+                } catch (e) { /* 单卡失败不中断，继续下一张 */ }
+            }
+            aiTagRunning.value = false;
+            showBatchAiTag.value = false;
+            aiTagProgress.status = '';
+            if (okCount) showSuccessToast(`AI 打标完成 ${okCount}/${cards.length} 张`);
+            else showToast('AI 打标未命中任何标签（请检查 API 配置或网络）');
         }
 
         /** 批量推送:复制选中卡片到共享推送目标(卡库目录模式);酒馆模式引导去详情页配地址 */
@@ -999,6 +1102,7 @@ export default {
             showUrlImport, urlInput, urlImporting, doUrlImport, onUrlImportClose,
             showMore, moreActions, onMoreSelect,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
+            showBatchAiTag, aiTagRunning, aiTagProgress, onBatchAiTag, onBatchAiTagClose,
             toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode
         };
     }
@@ -1106,6 +1210,11 @@ export default {
     overflow-x: auto;
 }
 .bb-count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; margin-right: 2px; }
+.aitag-progress { padding: 8px 16px 18px; }
+.aitag-desc { font-size: 13px; color: var(--van-gray-6, #646566); line-height: 1.5; margin: 0 0 14px; }
+.aitag-bar .van-progress { margin-bottom: 10px; }
+.aitag-status { font-size: 13px; color: #06b6d4; margin: 0 0 4px; }
+.aitag-count { font-size: 12px; color: var(--van-gray-5, #969799); margin: 0; font-variant-numeric: tabular-nums; }
 .grid-cover { aspect-ratio: 3 / 4; }
 .poster-cover { aspect-ratio: 3 / 4; }
 .card-meta { padding: 8px 10px 10px; }

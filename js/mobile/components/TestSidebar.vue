@@ -13,7 +13,7 @@
                 <van-tab title="聊天" name="chat" />
                 <van-tab title="设置" name="settings" />
             </van-tabs>
-            <div class="ts-body">
+            <div ref="bodyRef" class="ts-body">
                 <!-- ========== 配置 Tab ========== -->
                 <div v-show="activeTab === 'config'" class="ts-panel">
                     <!-- 预设 -->
@@ -246,6 +246,11 @@ export default {
     ],
     setup(props, { emit }) {
         const activeTab = ref('config');
+        const bodyRef = ref(null);
+        // 切换 Tab 时把内容区滚回顶部，避免残留上一个 Tab 的滚动位置导致「大片空白/内容被顶出」
+        function onTabChange() {
+            if (bodyRef.value) bodyRef.value.scrollTop = 0;
+        }
         const presetPasteText = ref('');
         const regexPasteText = ref('');
         const pluginPasteText = ref('');
@@ -437,7 +442,7 @@ export default {
         }
 
         return {
-            activeTab, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
+            activeTab, bodyRef, onTabChange, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
             paramOverrides, paramKeys, regexCount, wbCount, wbExpanded,
             localApiEndpoint, localApiKey, localApiModel, localApiType,
             localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit,
@@ -452,20 +457,21 @@ export default {
 
 <style scoped>
 .test-sidebar {
-    position: absolute; right: 0; top: 0; bottom: 0;
-    width: 300px; z-index: 20;
+    position: fixed; right: 0; top: 0; bottom: 0;
+    width: 300px; max-width: 82vw; z-index: 500;
     background: var(--van-background, #fff);
     box-shadow: -2px 0 12px rgba(0,0,0,0.12);
     display: flex; flex-direction: column; overflow: hidden;
+    padding-top: env(safe-area-inset-top, 0px);
 }
 .ts-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 16px; border-bottom: 1px solid var(--van-gray-2, #ebedf0); flex-shrink: 0;
+    padding: 8px 14px; border-bottom: 1px solid var(--van-gray-2, #ebedf0); flex-shrink: 0;
 }
 .ts-title { font-size: 14px; font-weight: 600; }
 .ts-close { cursor: pointer; color: var(--van-gray-5, #969799); }
 .ts-tabs { flex-shrink: 0; }
-.ts-body { flex: 1; overflow-y: auto; padding: 0 12px 24px; }
+.ts-body { flex: 1; overflow-y: auto; padding: 0 10px 16px; -webkit-overflow-scrolling: touch; }
 .ts-panel { padding-top: 8px; }
 .ts-sec-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 0 6px; font-size: 13px; font-weight: 600; }
 .ts-sec-title .van-button { margin-left: auto; }
