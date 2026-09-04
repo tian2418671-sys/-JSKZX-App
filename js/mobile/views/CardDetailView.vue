@@ -845,12 +845,15 @@ export default {
         }
 
         // 正则(兼容 enabled/disabled 双字段,统一归一化为 disabled;placement 数组化)
-        // 兼容正则脚本存储位置:标准 data.data.extensions 或旧卡 data.extensions
+        // 兼容正则脚本存储位置:标准 data.data.extensions / 旧卡 data.extensions /
+        // 非标 data.data.regex_scripts / V1 顶层 data.regex_scripts —— 对齐 useChatRegex.extractRegexFromCard
         const regexSource = computed(() => {
             const dd = card.value && card.value.data && card.value.data.data;
             const top = card.value && card.value.data;
             if (dd && dd.extensions && Array.isArray(dd.extensions.regex_scripts)) return dd.extensions.regex_scripts;
             if (top && top.extensions && Array.isArray(top.extensions.regex_scripts)) return top.extensions.regex_scripts;
+            if (dd && Array.isArray(dd.regex_scripts)) return dd.regex_scripts;
+            if (top && Array.isArray(top.regex_scripts)) return top.regex_scripts;
             return [];
         });
         const regexList = computed(() => {

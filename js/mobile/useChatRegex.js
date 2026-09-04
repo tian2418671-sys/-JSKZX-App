@@ -93,15 +93,34 @@ export function normalizeRegexScript(s) {
     return out;
 }
 
-/** 从卡片数据提取正则脚本列表 */
+/**
+ * 从卡片数据提取正则脚本列表（全形态兼容）
+ * 支持的正则存储位置（按优先级）：
+ *   ① card.data.data.extensions.regex_scripts  — V2/V3 标准位置（spec 内 data 层）
+ *   ② card.data.extensions.regex_scripts       — 旧卡（normalizeCardData 归一化后的 V1 data 层）
+ *   ③ card.data.data.regex_scripts             — 非标准：data 层顶层裸 regex_scripts
+ *   ④ card.data.data.regex_scripts             — 同③（部分工具导出）
+ *   ⑤ card.data.regex_scripts                  — V1 顶层裸 regex_scripts（旧酒馆导出）
+ * 注：形态③④⑤ 归一化后挂在 data 层的 extensions 之外，此前均读不到（0 条）
+ */
 export function extractRegexFromCard(card) {
     const dd = (card && card.data && card.data.data) || {};
     const top = (card && card.data) || {};
+    // ① 标准位置（V2/V3：card.data.data.extensions）
     if (dd && dd.extensions && Array.isArray(dd.extensions.regex_scripts)) {
         return dd.extensions.regex_scripts.map(normalizeRegexScript).filter(Boolean);
     }
+    // ② 旧卡 V1（card.data.extensions）
     if (top && top.extensions && Array.isArray(top.extensions.regex_scripts)) {
         return top.extensions.regex_scripts.map(normalizeRegexScript).filter(Boolean);
+    }
+    // ③ V2 数据层顶层裸 regex_scripts
+    if (dd && Array.isArray(dd.regex_scripts)) {
+    		return dd.regex_scripts.map(normalizeRegexScript).filter(Boolean);
+    }
+    // ⑤ V1 顶层裸 regex_scripts（归一化后 card.data.regex_scripts）
+    if (top && Array.isArray(top.regex_scripts)) {
+    		return top.regex_scripts.map(normalizeRegexScript).filter(Boolean);
     }
     return [];
 }

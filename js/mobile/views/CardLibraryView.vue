@@ -473,9 +473,15 @@ export default {
                 });
             }
             if (quickFilter.value === 'has_regex') {
+                // 全形态兼容:对齐 useChatRegex.extractRegexFromCard 的四个读取位置
                 return list.filter((c) => {
-                    const ext = c.data && c.data.data && c.data.data.extensions;
-                    return ext && Array.isArray(ext.regex_scripts) && ext.regex_scripts.length;
+                    const dd = c.data && c.data.data;
+                    const top = c.data;
+                    const ddScripts = dd && dd.extensions && Array.isArray(dd.extensions.regex_scripts) ? dd.extensions.regex_scripts
+                        : (dd && Array.isArray(dd.regex_scripts) ? dd.regex_scripts : null);
+                    const topScripts = top && top.extensions && Array.isArray(top.extensions.regex_scripts) ? top.extensions.regex_scripts
+                        : (top && Array.isArray(top.regex_scripts) ? top.regex_scripts : null);
+                    return !!(ddScripts && ddScripts.length) || !!(topScripts && topScripts.length);
                 });
             }
             return list;
