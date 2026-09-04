@@ -545,4 +545,9 @@ export default {
 
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }
+
+/* ===== 修复 Bug：Vant Tabs 内容面板撑满导致大片空白 ===== */
+.ts-body .van-tabs__content { flex: none !important; }
+.ts-body .van-tab__panel { min-height: auto !important; }
+.ts-body .van-tabs { display: flex; flex-direction: column; height: 100%; }
 </style>

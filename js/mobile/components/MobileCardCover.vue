@@ -60,6 +60,16 @@ export default {
             loading: false
         };
     },
+    watch: {
+        // 修复 Bug #3：翻页/换卡时 card prop 变化，需重置图片
+        card(newCard, oldCard) {
+            if (!newCard || !oldCard || newCard.path === oldCard.path) return;
+            this.src = null;
+            this.failed = false;
+            this.loading = false;
+            this.$nextTick(() => this.loadCover());
+        }
+    },
     computed: {
         phStyle() {
             return { aspectRatio: this.aspect };

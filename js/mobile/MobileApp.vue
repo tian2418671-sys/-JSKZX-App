@@ -25,6 +25,7 @@
 import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { applyTheme, currentTheme, currentFs, applyFs } from './theme';
+import './theme-mobile-app.css';
 
 export default {
     name: 'MobileApp',

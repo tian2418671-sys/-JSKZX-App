@@ -1,0 +1,488 @@
+/* =========================================================
+   🎨 STC Mobile 主题系统 v2 — 每套主题包含：
+      颜色 / 字体 / 圆角 / 阴影 / 边框 / 装饰 / 动画
+   对齐桌面三主题（light / dark / slate），
+   新增古风 ancient / 汉风 han / 未来 future / 赛博朋克 cyberpunk / 水墨 ink
+   ========================================================= */
+
+/* ---------- 全局过渡 ---------- */
+html, html body, .mobile-shell, .van-nav-bar, .van-tabbar,
+.van-cell, .van-popup, .van-button { transition: all .3s ease; }
+
+/* ---------- 基础字号与字体栈 ---------- */
+:root { --ui-fs: 14px; }
+
+/* =========================================================
+   light — 白昼
+   特征：扁平白底 / 蓝主色 / 大圆角 / 柔和阴影 / 无衬线
+   ========================================================= */
+html[data-theme="light"] {
+    /* 字体：现代无衬线，干净 */
+    --stc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --stc-font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    --stc-font-serif: 'Georgia', 'Noto Serif SC', serif;
+
+    /* 圆角：大圆角，亲和友好 */
+    --stc-radius-sm: 6px;
+    --stc-radius-md: 10px;
+    --stc-radius-lg: 16px;
+    --stc-radius-pill: 999px;
+
+    /* 阴影：柔和弥散 */
+    --stc-shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+    --stc-shadow-md: 0 4px 12px rgba(0,0,0,0.10);
+    --stc-shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+
+    /* 边框：细线，浅色 */
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(0,0,0,0.08);
+
+    /* 装饰：无 */
+    --stc-deco-opacity: 0;
+    --stc-deco-blur: 0;
+
+    /* Vant 颜色覆盖 */
+    --van-background: #ffffff;
+    --van-background-2: #f7f8fa;
+    --van-background-3: #f2f3f5;
+    --van-gray-1: #f2f3f5;
+    --van-gray-2: #ebedf0;
+    --van-gray-3: #e5e6eb;
+    --van-gray-5: #969799;
+    --van-text-color: #323233;
+    --van-text-color-2: #646566;
+    --van-text-color-3: #969799;
+    --van-cell-background: #ffffff;
+    --van-nav-bar-background: #ffffff;
+    --van-nav-bar-title-text-color: #323233;
+    --van-nav-bar-icon-color: #1989fa;
+    --van-tabbar-background: #f7f8fa;
+    --van-tabbar-item-text-color: #969799;
+    --van-tabbar-item-active-background: #f7f8fa;
+    --van-popup-background: #ffffff;
+    --van-button-primary-background: #1989fa;
+    --van-button-primary-border-color: #1989fa;
+    --van-primary-color: #1989fa;
+    --van-active-color: #f2f3f5;
+}
+
+/* =========================================================
+   dark — 暗夜
+   特征：深灰蓝背景 / 霓虹蓝主色 / 大圆角 / 辉光阴影 / 等宽数字
+   ========================================================= */
+html[data-theme="dark"] {
+    --stc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --stc-font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    --stc-font-serif: 'Georgia', 'Noto Serif SC', serif;
+
+    --stc-radius-sm: 6px;
+    --stc-radius-md: 10px;
+    --stc-radius-lg: 16px;
+    --stc-radius-pill: 999px;
+
+    /* 辉光阴影 */
+    --stc-shadow-sm: 0 1px 4px rgba(25,137,250,0.20);
+    --stc-shadow-md: 0 4px 16px rgba(25,137,250,0.25);
+    --stc-shadow-lg: 0 8px 32px rgba(25,137,250,0.30);
+
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(255,255,255,0.08);
+
+    --stc-deco-opacity: 0;
+    --stc-deco-blur: 0;
+
+    --van-background: #121212;
+    --van-background-2: #1e1e1e;
+    --van-background-3: #2a2a2a;
+    --van-gray-1: #2a2a2a;
+    --van-gray-2: #3a3a3a;
+    --van-gray-3: #4a4a4a;
+    --van-gray-5: #8a8a8a;
+    --van-text-color: #e0e0e0;
+    --van-text-color-2: #a0a0a0;
+    --van-text-color-3: #6a6a6a;
+    --van-cell-background: #1e1e1e;
+    --van-nav-bar-background: #1e1e1e;
+    --van-nav-bar-title-text-color: #e0e0e0;
+    --van-nav-bar-icon-color: #4facfe;
+    --van-tabbar-background: #121212;
+    --van-tabbar-item-text-color: #8a8a8a;
+    --van-tabbar-item-active-background: #121212;
+    --van-popup-background: #1e1e1e;
+    --van-button-primary-background: #4facfe;
+    --van-button-primary-border-color: #4facfe;
+    --van-primary-color: #4facfe;
+    --van-active-color: #2a2a2a;
+}
+
+/* =========================================================
+   slate — 青灰
+   特征：深青蓝背景 / 天蓝主色 / 大圆角 / 微辉光 / 无衬线
+   ========================================================= */
+html[data-theme="slate"] {
+    --stc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --stc-font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    --stc-font-serif: 'Georgia', 'Noto Serif SC', serif;
+
+    --stc-radius-sm: 6px;
+    --stc-radius-md: 10px;
+    --stc-radius-lg: 16px;
+    --stc-radius-pill: 999px;
+
+    --stc-shadow-sm: 0 1px 4px rgba(56,189,248,0.15);
+    --stc-shadow-md: 0 4px 16px rgba(56,189,248,0.20);
+    --stc-shadow-lg: 0 8px 32px rgba(56,189,248,0.25);
+
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(255,255,255,0.08);
+
+    --stc-deco-opacity: 0;
+    --stc-deco-blur: 0;
+
+    --van-background: #0f172a;
+    --van-background-2: #1e293b;
+    --van-background-3: #334155;
+    --van-gray-1: #1e293b;
+    --van-gray-2: #334155;
+    --van-gray-3: #475569;
+    --van-gray-5: #94a3b8;
+    --van-text-color: #f8fafc;
+    --van-text-color-2: #94a3b8;
+    --van-text-color-3: #64748b;
+    --van-cell-background: #1e293b;
+    --van-nav-bar-background: #0f172a;
+    --van-nav-bar-title-text-color: #f8fafc;
+    --van-nav-bar-icon-color: #38bdf8;
+    --van-tabbar-background: #1e293b;
+    --van-tabbar-item-text-color: #94a3b8;
+    --van-tabbar-item-active-background: #1e293b;
+    --van-popup-background: #1e293b;
+    --van-button-primary-background: #38bdf8;
+    --van-button-primary-border-color: #38bdf8;
+    --van-primary-color: #38bdf8;
+    --van-active-color: #334155;
+}
+
+/* =========================================================
+   ancient — 古风
+   特征：羊皮纸背景 / 朱砂红主色 / 中等圆角 / 宣纸质感阴影 / 衬线标题
+   ========================================================= */
+html[data-theme="ancient"] {
+    --stc-font: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+    --stc-font-mono: 'Courier New', monospace;
+    --stc-font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+
+    /* 圆角：中等，方正中带柔 */
+    --stc-radius-sm: 3px;
+    --stc-radius-md: 6px;
+    --stc-radius-lg: 10px;
+    --stc-radius-pill: 999px;
+
+    /* 阴影：宣纸质感，柔和弥散 */
+    --stc-shadow-sm: 0 1px 2px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.40);
+    --stc-shadow-md: 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.40);
+    --stc-shadow-lg: 0 4px 16px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.40);
+
+    /* 边框：虚线或细实线，朱砂色 */
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(180,80,60,0.20);
+
+    /* 装饰：微弱 */
+    --stc-deco-opacity: 0.03;
+    --stc-deco-blur: 60px;
+
+    --van-background: #f5efe0;
+    --van-background-2: #efe6d0;
+    --van-background-3: #e8dcc0;
+    --van-gray-1: #f5efe0;
+    --van-gray-2: #e8dcc0;
+    --van-gray-3: #d8c9a8;
+    --van-gray-5: #9c8269;
+    --van-text-color: #4a3728;
+    --van-text-color-2: #7a5c43;
+    --van-text-color-3: #9c8269;
+    --van-cell-background: #fbf6ea;
+    --van-nav-bar-background: #f5efe0;
+    --van-nav-bar-title-text-color: #4a3728;
+    --van-nav-bar-icon-color: #b45040;
+    --van-tabbar-background: #efe6d0;
+    --van-tabbar-item-text-color: #7a5c43;
+    --van-tabbar-item-active-background: #efe6d0;
+    --van-popup-background: #fbf6ea;
+    --van-button-primary-background: #b45040;
+    --van-button-primary-border-color: #b45040;
+    --van-primary-color: #b45040;
+    --van-active-color: #e8dcc0;
+}
+
+/* =========================================================
+   han — 汉风
+   特征：深墨绿背景 / 朱红 + 鎏金主色 / 小圆角 / 印章阴影 / 衬线标题
+   ========================================================= */
+html[data-theme="han"] {
+    --stc-font: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+    --stc-font-mono: 'Courier New', monospace;
+    --stc-font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+
+    --stc-radius-sm: 2px;
+    --stc-radius-md: 4px;
+    --stc-radius-lg: 6px;
+    --stc-radius-pill: 999px;
+
+    /* 印章阴影 */
+    --stc-shadow-sm: 0 2px 4px rgba(0,0,0,0.20);
+    --stc-shadow-md: 0 4px 8px rgba(0,0,0,0.25);
+    --stc-shadow-lg: 0 6px 16px rgba(0,0,0,0.30);
+
+    /* 边框：实线，朱红色 */
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(183,50,45,0.30);
+
+    --stc-deco-opacity: 0.05;
+    --stc-deco-blur: 40px;
+
+    --van-background: #1a2e26;
+    --van-background-2: #243b32;
+    --van-background-3: #2f4a3e;
+    --van-gray-1: #243b32;
+    --van-gray-2: #2f4a3e;
+    --van-gray-3: #3a5c4e;
+    --van-gray-5: #8faf9f;
+    --van-text-color: #e8e0d0;
+    --van-text-color-2: #c4b9a8;
+    --van-text-color-3: #8faf9f;
+    --van-cell-background: #243b32;
+    --van-nav-bar-background: #1a2e26;
+    --van-nav-bar-title-text-color: #d4a843;
+    --van-nav-bar-icon-color: #d4a843;
+    --van-tabbar-background: #1a2e26;
+    --van-tabbar-item-text-color: #8faf9f;
+    --van-tabbar-item-active-background: #1a2e26;
+    --van-popup-background: #243b32;
+    --van-button-primary-background: #b7322d;
+    --van-button-primary-border-color: #b7322d;
+    --van-primary-color: #d4a843;
+    --van-active-color: #2f4a3e;
+}
+
+/* =========================================================
+   future — 未来
+   特征：深空蓝背景 / 青霓虹主色 / 大圆角 / 霓虹辉光 / 无衬线+等宽
+   ========================================================= */
+html[data-theme="future"] {
+    --stc-font: 'Orbitron', 'Rajdhani', 'Segoe UI', sans-serif;
+    --stc-font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+    --stc-font-serif: 'Georgia', 'Noto Serif SC', serif;
+
+    --stc-radius-sm: 4px;
+    --stc-radius-md: 8px;
+    --stc-radius-lg: 12px;
+    --stc-radius-pill: 999px;
+
+    /* 霓虹辉光 */
+    --stc-shadow-sm: 0 0 4px rgba(0,255,255,0.30), 0 1px 3px rgba(0,0,0,0.20);
+    --stc-shadow-md: 0 0 8px rgba(0,255,255,0.40), 0 4px 12px rgba(0,0,0,0.30);
+    --stc-shadow-lg: 0 0 16px rgba(0,255,255,0.50), 0 8px 24px rgba(0,0,0,0.40);
+
+    /* 边框：发光边框 */
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(0,255,255,0.30);
+
+    --stc-deco-opacity: 0.10;
+    --stc-deco-blur: 80px;
+
+    --van-background: #0a1220;
+    --van-background-2: #111c30;
+    --van-background-3: #1a2847;
+    --van-gray-1: #111c30;
+    --van-gray-2: #1a2847;
+    --van-gray-3: #2a3a5a;
+    --van-gray-5: #6a8ab0;
+    --van-text-color: #e0f0ff;
+    --van-text-color-2: #8ab4d0;
+    --van-text-color-3: #5a7a9a;
+    --van-cell-background: #111c30;
+    --van-nav-bar-background: #0a1220;
+    --van-nav-bar-title-text-color: #00ffff;
+    --van-nav-bar-icon-color: #00ffff;
+    --van-tabbar-background: #0a1220;
+    --van-tabbar-item-text-color: #6a8ab0;
+    --van-tabbar-item-active-background: #0a1220;
+    --van-popup-background: #111c30;
+    --van-button-primary-background: #00ffff;
+    --van-button-primary-border-color: #00ffff;
+    --van-primary-color: #00ffff;
+    --van-active-color: #1a2847;
+}
+
+/* =========================================================
+   cyberpunk — 赛博朋克
+   特征：深紫黑背景 / 品红+黄绿主色 / 小圆角 / 故障阴影 / 像素/等宽字体
+   ========================================================= */
+html[data-theme="cyberpunk"] {
+    --stc-font: 'Rajdhani', 'Orbitron', 'Segoe UI', sans-serif;
+    --stc-font-mono: 'VT323', 'Press Start 2P', 'JetBrains Mono', monospace;
+    --stc-font-serif: 'Georgia', 'Noto Serif SC', serif;
+
+    --stc-radius-sm: 0px;
+    --stc-radius-md: 2px;
+    --stc-radius-lg: 4px;
+    --stc-radius-pill: 999px;
+
+    /* 故障风阴影 */
+    --stc-shadow-sm: 2px 2px 0 rgba(255,0,128,0.40), -2px -2px 0 rgba(0,255,128,0.40);
+    --stc-shadow-md: 3px 3px 0 rgba(255,0,128,0.50), -3px -3px 0 rgba(0,255,128,0.50);
+    --stc-shadow-lg: 4px 4px 0 rgba(255,0,128,0.60), -4px -4px 0 rgba(0,255,128,0.60);
+
+    /* 边框：粗线 */
+    --stc-border-width: 2px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(255,0,128,0.40);
+
+    --stc-deco-opacity: 0.15;
+    --stc-deco-blur: 100px;
+
+    --van-background: #0f0a1a;
+    --van-background-2: #1a102e;
+    --van-background-3: #251845;
+    --van-gray-1: #1a102e;
+    --van-gray-2: #251845;
+    --van-gray-3: #352060;
+    --van-gray-5: #8a6aaf;
+    --van-text-color: #e8e0ff;
+    --van-text-color-2: #a08fd0;
+    --van-text-color-3: #6a5a9f;
+    --van-cell-background: #1a102e;
+    --van-nav-bar-background: #0f0a1a;
+    --van-nav-bar-title-text-color: #ff0080;
+    --van-nav-bar-icon-color: #00ff80;
+    --van-tabbar-background: #0f0a1a;
+    --van-tabbar-item-text-color: #8a6aaf;
+    --van-tabbar-item-active-background: #0f0a1a;
+    --van-popup-background: #1a102e;
+    --van-button-primary-background: #ff0080;
+    --van-button-primary-border-color: #ff0080;
+    --van-primary-color: #00ff80;
+    --van-active-color: #251845;
+}
+
+/* =========================================================
+   ink — 水墨
+   特征：宣纸白背景 / 墨黑主色 / 大圆角 / 水墨晕染阴影 / 书法字体
+   ========================================================= */
+html[data-theme="ink"] {
+    --stc-font: 'Noto Serif SC', 'ZCOOL XiaoWei', 'Songti SC', serif;
+    --stc-font-mono: 'Courier New', monospace;
+    --stc-font-serif: 'Noto Serif SC', 'ZCOOL XiaoWei', 'Songti SC', serif;
+
+    --stc-radius-sm: 6px;
+    --stc-radius-md: 10px;
+    --stc-radius-lg: 16px;
+    --stc-radius-pill: 999px;
+
+    /* 水墨晕染 */
+    --stc-shadow-sm: 0 2px 6px rgba(0,0,0,0.08);
+    --stc-shadow-md: 0 4px 12px rgba(0,0,0,0.10);
+    --stc-shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+
+    /* 边框：极细淡墨线 */
+    --stc-border-width: 1px;
+    --stc-border-style: solid;
+    --stc-border-color: rgba(0,0,0,0.06);
+
+    --stc-deco-opacity: 0.04;
+    --stc-deco-blur: 60px;
+
+    --van-background: #f7f7f2;
+    --van-background-2: #ecece4;
+    --van-background-3: #e2e2d8;
+    --van-gray-1: #f7f7f2;
+    --van-gray-2: #e2e2d8;
+    --van-gray-3: #d4d4c8;
+    --van-gray-5: #9ca3af;
+    --van-text-color: #1f2937;
+    --van-text-color-2: #4b5563;
+    --van-text-color-3: #9ca3af;
+    --van-cell-background: #fcfcf8;
+    --van-nav-bar-background: #f7f7f2;
+    --van-nav-bar-title-text-color: #1f2937;
+    --van-nav-bar-icon-color: #4b5563;
+    --van-tabbar-background: #ecece4;
+    --van-tabbar-item-text-color: #4b5563;
+    --van-tabbar-item-active-background: #ecece4;
+    --van-popup-background: #fcfcf8;
+    --van-button-primary-background: #1f2937;
+    --van-button-primary-border-color: #1f2937;
+    --van-primary-color: #1f2937;
+    --van-active-color: #e2e2d8;
+}
+
+/* =========================================================
+   主题应用样式
+   ========================================================= */
+html .mobile-shell {
+    font-family: var(--stc-font, -apple-system, sans-serif);
+    font-size: var(--ui-fs, 14px);
+}
+
+/* 标题使用主题字体 */
+html .van-nav-bar__title {
+    font-family: var(--stc-font, -apple-system, sans-serif);
+    font-weight: 600;
+}
+
+/* 按钮使用主题圆角和阴影 */
+html .van-button {
+    border-radius: var(--stc-radius-md, 10px) !important;
+    box-shadow: var(--stc-shadow-sm, none) !important;
+}
+
+/* 卡片/单元格使用主题圆角和阴影 */
+html .van-cell,
+html .van-card,
+html .van-popup {
+    border-radius: var(--stc-radius-md, 10px) !important;
+    box-shadow: var(--stc-shadow-sm, none) !important;
+    border: var(--stc-border-width, 1px) var(--stc-border-style, solid) var(--stc-border-color, transparent) !important;
+}
+
+/* 导航栏 */
+html .van-nav-bar {
+    border-bottom: var(--stc-border-width, 1px) var(--stc-border-style, solid) var(--stc-border-color, transparent) !important;
+}
+
+/* 底部标签栏 */
+html .van-tabbar {
+    border-top: var(--stc-border-width, 1px) var(--stc-border-style, solid) var(--stc-border-color, transparent) !important;
+}
+
+/* 主题装饰层（可选，用于背景纹理） */
+html .mobile-shell::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: var(--stc-deco-opacity, 0);
+    filter: blur(var(--stc-deco-blur, 0));
+    z-index: 0;
+}
+
+/* =========================================================
+   主题切换动画
+   ========================================================= */
+html.theme-transition,
+html.theme-transition body,
+html.theme-transition .mobile-shell,
+html.theme-transition .van-nav-bar,
+html.theme-transition .van-tabbar,
+html.theme-transition .van-cell,
+html.theme-transition .van-popup,
+html.theme-transition .van-button {
+    transition: background-color .4s ease, color .4s ease, border-color .4s ease, box-shadow .4s ease, font-family .2s ease;
+}
