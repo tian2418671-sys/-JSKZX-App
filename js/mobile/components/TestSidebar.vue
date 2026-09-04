@@ -6,7 +6,7 @@
                 <van-icon name="cross" size="18" class="ts-close" @click="$emit('update:visible', false)" />
             </div>
             <!-- 顶部选项卡 -->
-            <van-tabs v-model:active="activeTab" shrink line-width="20" class="ts-tabs">
+            <van-tabs v-model:active="activeTab" shrink line-width="20" class="ts-tabs" @change="onTabChange">
                 <van-tab title="配置" name="config" />
                 <van-tab title="正则插件" name="regex" />
                 <van-tab title="世界书" name="wb" />

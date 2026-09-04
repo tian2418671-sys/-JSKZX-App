@@ -49,6 +49,13 @@ export default {
 :root {
     --ui-fs: 14px;
 }
+/* 深色基底主色（供 dark 主题使用；须置于所有 data-theme 主题之前，
+   否则同等特异性下会覆盖 han/future/cyberpunk 等深色主题的自定义主色） */
+html.van-theme-dark {
+    --van-button-primary-background: #6366f1;
+    --van-button-primary-border-color: #6366f1;
+    --van-primary-color: #6366f1;
+}
 /* 主题切换平滑过渡：背景/文字颜色渐变动画 */
 html.theme-transition,
 html.theme-transition body,
@@ -206,11 +213,6 @@ html[data-theme="ink"] {
     --van-active-color: #e2e2d8;
 }
 
-html.van-theme-dark {
-    --van-button-primary-background: #6366f1;
-    --van-button-primary-border-color: #6366f1;
-    --van-primary-color: #6366f1;
-}
 /* 界面字号跟随 --ui-fs：导航/单元/弹窗/按钮等外围 UI 缩放 */
 html .mobile-shell {
     font-size: var(--ui-fs, 14px);
