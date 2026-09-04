@@ -14,7 +14,7 @@
         </van-empty>
 
         <template v-else>
-            <van-tabs v-model:active="activeTab" sticky offset-top="46">
+            <van-tabs v-model:active="activeTab" sticky offset-top="46" class="detail-tabs">
                 <van-tab title="设定" name="basic">
                     <!-- 基本信息(高频,每屏可见) -->
                     <div class="basic-wrap">
@@ -2399,17 +2399,20 @@ export default {
 <style scoped>
 .detail-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* 滚动修复:补齐 van-tabs 高度链——根节点不控高度会被内容撑开,超出部分被
-   .mobile-shell{overflow:hidden} 裁剪 → 整页无法上下滑动 */
-.detail-page :deep(.van-tabs) {
+   .mobile-shell{overflow:hidden} 裁剪 → 整页无法上下滑动
+   ⚠ 仅圈定本页主 tabs(.detail-tabs),禁止裸 .van-tabs 后代选择器:
+   它会穿透进 TestSidebar 侧边栏,把二级标签栏盒子拉伸 flex:1,
+   造成标签栏下方大面积空白(实测约面板 40%) */
+.detail-page :deep(.detail-tabs) {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
 }
-.detail-page :deep(.van-tabs__content) { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 24px; }
+.detail-page :deep(.detail-tabs .van-tabs__content) { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 24px; }
 /* 单面板占满,保证子滚动容器可用 */
-.detail-page :deep(.van-tab__panel) { min-height: 100%; }
+.detail-page :deep(.detail-tabs .van-tab__panel) { min-height: 100%; }
 .basic-wrap { padding: 4px 12px; }
 .id-row { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 4px; }
 .id-cover-wrap { position: relative; width: 84px; flex-shrink: 0; }

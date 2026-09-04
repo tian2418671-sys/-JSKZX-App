@@ -8,14 +8,14 @@
                     <span class="ts-title">测卡配置</span>
                     <van-icon name="cross" size="18" class="ts-close" @click="$emit('update:visible', false)" />
                 </div>
-                <!-- 顶部选项卡 -->
-                <van-tabs v-model:active="activeTab" shrink line-width="20" class="ts-tabs" @change="onTabChange">
-                    <van-tab title="配置" name="config" />
-                    <van-tab title="正则插件" name="regex" />
-                    <van-tab title="世界书" name="wb" />
-                    <van-tab title="聊天" name="chat" />
-                    <van-tab title="设置" name="settings" />
-                </van-tabs>
+                <!-- 顶部选项卡：自定义 tab 栏，避免 van-tabs 的 __content/Swipe 容器占高 -->
+                <div class="ts-tabs">
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'config' }" @click="switchTab('config')">配置</div>
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'regex' }" @click="switchTab('regex')">正则插件</div>
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'wb' }" @click="switchTab('wb')">世界书</div>
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'chat' }" @click="switchTab('chat')">聊天</div>
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'settings' }" @click="switchTab('settings')">设置</div>
+                </div>
                 <div ref="bodyRef" class="ts-body">
                     <!-- ========== 配置 Tab ========== -->
                     <div v-show="activeTab === 'config'" class="ts-panel">
@@ -255,6 +255,10 @@ export default {
         function onTabChange() {
             if (bodyRef.value) bodyRef.value.scrollTop = 0;
         }
+        function switchTab(tab) {
+            activeTab.value = tab;
+            onTabChange();
+        }
         const presetPasteText = ref('');
         const regexPasteText = ref('');
         const pluginPasteText = ref('');
@@ -446,7 +450,7 @@ export default {
         }
 
         return {
-            activeTab, bodyRef, onTabChange, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
+            activeTab, bodyRef, onTabChange, switchTab, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
             paramOverrides, paramKeys, regexCount, wbCount, wbExpanded,
             localApiEndpoint, localApiKey, localApiModel, localApiType,
             localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit,
@@ -486,8 +490,15 @@ export default {
 }
 .ts-title { font-size: 14px; font-weight: 600; }
 .ts-close { cursor: pointer; color: var(--van-gray-5, #969799); }
-.ts-tabs { flex-shrink: 0; }
-.ts-body { flex: 1; overflow-y: auto; padding: 0 10px 16px; -webkit-overflow-scrolling: touch; }
+.ts-tabs { flex: 0 0 auto; display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch; border-bottom: 1px solid var(--van-gray-2, #ebedf0); background: var(--van-background-2, #fff); }
+/* 双保险:禁止外部深选择器(如详情页 .detail-page :deep(.van-tabs))把本组件二级标签栏拉伸成 flex:1,
+   避免标签栏下方出现大面积空白塌陷 */
+.ts-tabs :deep(.van-tabs) { flex: none; }
+.ts-tabs::-webkit-scrollbar { display: none; }
+.ts-tab-item { flex-shrink: 0; padding: 0 12px; height: 40px; line-height: 40px; font-size: 13px; color: var(--van-gray-7, #646566); cursor: pointer; white-space: nowrap; position: relative; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+.ts-tab-item.active { color: var(--van-primary-color, #1989fa); font-weight: 600; }
+.ts-tab-item.active::after { content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: 20px; height: 3px; background: var(--van-primary-color, #1989fa); border-radius: 3px; }
+.ts-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 16px; -webkit-overflow-scrolling: touch; }
 .ts-panel { padding-top: 8px; }
 .ts-sec-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 0 6px; font-size: 13px; font-weight: 600; }
 .ts-sec-title .van-button { margin-left: auto; }
@@ -545,6 +556,5 @@ export default {
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }
 
-/* ===== 修复 Bug：van-tab 均为自闭合(仅作导航)，隐藏空内容面板避免占高 ===== */
-.ts-tabs :deep(.van-tabs__content) { display: none; }
+/* van-tabs 已替换为自定义 tab 栏，无需隐藏 __content */
 </style>
