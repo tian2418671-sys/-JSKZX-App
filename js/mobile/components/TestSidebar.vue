@@ -464,19 +464,18 @@ export default {
 .test-sidebar {
     position: fixed; inset: 0; z-index: 500;
     display: flex; justify-content: flex-end;
-    padding-top: env(safe-area-inset-top, 0px);
 }
 /* 半透明遮罩层：点击关闭 + 遮住底层内容 */
 .ts-overlay {
-    position: absolute; inset: 0;
+    position: absolute; inset: 0; z-index: 1;
     background: rgba(0, 0, 0, 0.35);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
 }
 /* 侧边栏面板：从右侧滑出 */
 .ts-panel-wrap {
-    position: relative;
+    position: relative; z-index: 2;
     width: 300px; max-width: 82vw; height: 100%;
+    padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box;
     background: var(--van-background, #fff);
     box-shadow: -2px 0 12px rgba(0,0,0,0.12);
     display: flex; flex-direction: column; overflow: hidden;
@@ -546,8 +545,6 @@ export default {
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }
 
-/* ===== 修复 Bug：Vant Tabs 内容面板撑满导致大片空白 ===== */
-.ts-body .van-tabs__content { flex: none !important; }
-.ts-body .van-tab__panel { min-height: auto !important; }
-.ts-body .van-tabs { display: flex; flex-direction: column; height: 100%; }
+/* ===== 修复 Bug：van-tab 均为自闭合(仅作导航)，隐藏空内容面板避免占高 ===== */
+.ts-tabs :deep(.van-tabs__content) { display: none; }
 </style>

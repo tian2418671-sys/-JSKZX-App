@@ -2593,7 +2593,7 @@ export default {
 .push-ops { padding: 6px 16px 16px; }
 
 /* 测卡 Tab 聊天 */
-.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 260px; position: relative; overflow: hidden; }
+.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 114px - env(safe-area-inset-top, 0px)); min-height: 260px; position: relative; overflow: hidden; }
 .chat-toolbar {
     display: flex; align-items: center;
     padding: 10px 14px;
