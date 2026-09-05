@@ -1,5 +1,6 @@
 /**
- * 鍗＄墖 Token 浼扮畻缂撳瓨銆備娇鐢?WeakMap 鎸夊崱鐗囧璞＄紦瀛橈紝鍗＄墖閲婃斁鍚庣紦瀛樺彲鑷姩鍥炴敹銆? */
+ * 卡片 Token 估算缓存。使用 WeakMap 按卡片对象缓存，卡片释放后缓存可自动回收。
+ */
 import { estimateTokens } from './tokenEstimate.js';
 
 class TokenCache {
@@ -28,7 +29,9 @@ class TokenCache {
     warmup(cards) { for (const card of cards || []) this.get(card); }
 
     /**
-     * 寮傛鍒嗙墖棰勭儹锛氬皢澶ф壒閲忓崱鐗囨媶鍒嗕负灏忓潡锛屾瘡鍧椾箣闂?yield 缁欎富绾跨▼锛?     * 閬垮厤闃诲 UI 娓叉煋鍜岀敤鎴蜂氦浜掋€?     */
+     * 异步分片预热：将大批量卡片拆分为小块，每块之间 yield 给主线程，
+     * 避免阻塞 UI 渲染和用户交互。
+     */
     async warmupAsync(cards, chunkSize = 50) {
         const list = cards || [];
         for (let i = 0; i < list.length; i += chunkSize) {

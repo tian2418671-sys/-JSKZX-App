@@ -6,7 +6,7 @@
  *  - 移动分组 / 删除 / 重命名 :重建本地状态,不依赖桌面幽灵分组清理
  */
 import { reactive } from 'vue';
-import { normalizeCardData, isCharacterCardData } from '../utils/cardLoader.js';
+import { normalizeCardData, isCharacterCardData, getCardRejectReason } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 // Worker 内联（?worker&inline）：Android WebView 加载外部 Worker 文件不可靠，内联为 data URL 后由 Vite 生成降级兜底
 import cardParseWorker from './cardParseWorker.js?worker&inline';
@@ -241,6 +241,9 @@ async function parseCard(file, prefetchedText, cache) {
                         wb,
                         wrapped: !!(parsed.extensions && parsed.extensions.world_book)
                     });
+                } else {
+                    // 🕵️ 对齐桌面:记录拒绝原因,便于排查"为什么这张没加载"
+                    console.warn(`[库] 跳过非角色卡 JSON [${getCardRejectReason(parsed)}]: ${file.name}`);
                 }
                 return null;
             }

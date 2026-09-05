@@ -1,5 +1,7 @@
 /**
- * 楂樻€ц兘鎼滅储绱㈠紩寮曟搸锛氬€掓帓绱㈠紩 + 澧為噺鏇存柊銆? * 鍗＄墖瀵硅薄浣滀负缁撴灉寮曠敤淇濆瓨锛涙枃鏈笌鏍囩缂撳瓨浣跨敤 WeakMap锛岄伩鍏嶅欢闀垮崱鐗囩敓鍛藉懆鏈熴€? */
+ * 高性能搜索索引引擎：倒排索引 + 增量更新。
+ * 卡片对象作为结果引用保存；文本与标签缓存使用 WeakMap，避免延长卡片生命周期。
+ */
 
 class SearchIndex {
     constructor() {
@@ -19,14 +21,16 @@ class SearchIndex {
     }
 
     /**
-     * 寮傛鍒嗙墖鏋勫缓绱㈠紩锛氬皢澶ф壒閲忓崱鐗囨媶鍒嗕负灏忓潡锛屾瘡鍧椾箣闂?yield 缁欎富绾跨▼锛?     * 閬垮厤闃诲 UI 娓叉煋鍜岀敤鎴蜂氦浜掋€備娇鐢?requestIdleCallback 鎴?setTimeout 鍥為€€銆?     */
+     * 异步分片构建索引：将大批量卡片拆分为小块，每块之间 yield 给主线程，
+     * 避免阻塞 UI 渲染和用户交互。使用 requestIdleCallback 或 setTimeout 回退。
+     */
     async buildAsync(library, extractText, extractTags, chunkSize = 50) {
         this.clear();
         const cards = library || [];
         for (let i = 0; i < cards.length; i += chunkSize) {
             const chunk = cards.slice(i, i + chunkSize);
             for (const card of chunk) this._indexCard(card, extractText, extractTags);
-            // 姣忓鐞嗕竴涓?chunk 鍚?yield 缁欎富绾跨▼
+            // 每处理一个 chunk 后 yield 给主线程
             if (i + chunkSize < cards.length) {
                 await new Promise(resolve => {
                     if (typeof requestIdleCallback === 'function') {
@@ -70,7 +74,7 @@ class SearchIndex {
         if (normalized.length === 0) {
             results = [...this.cards];
         } else {
-            // 浠庢渶绋€鏈夌殑璇嶅紑濮嬶紝鍑忓皯闆嗗悎鐩镐氦鎴愭湰銆?
+            // 从最稀有的词开始，减少集合相交成本。
             const candidates = normalized.map(keyword => ({ keyword, cards: this._getMatches(keyword) }));
             candidates.sort((a, b) => a.cards.length - b.cards.length);
             results = candidates[0].cards;

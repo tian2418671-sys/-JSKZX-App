@@ -427,7 +427,11 @@ export default {
         // keep-alive 缓存下 onMounted 只跑一次；pull-refresh 内部 track DOM 会随路由重建，
         // 必须用 onActivated 每次进入重新绑定监听，否则 pullDisabled 永不更新 → 滚动中误触刷新
         onMounted(() => { nextTick(bindScroll); });
-        onActivated(() => { nextTick(bindScroll); });
+        onActivated(() => {
+            nextTick(bindScroll);
+            // 回库时同步「忽略卡自带标签」开关(可能在设置页被切换)→ 标签搜索语义即时生效
+            sanitizeImportedTags.value = localStorage.getItem('jsmobile-ignore-import-tags') === '1';
+        });
         onDeactivated(unbindScroll);
         onBeforeUnmount(unbindScroll);
         // 修复 TDZ：quickFilter 在下方才初始化，watch 不能在此处先行执行
@@ -537,6 +541,9 @@ export default {
         const currentPage = ref(1);
         const itemsPerPage = ref(999999); // 移动端无分页,增量渲染接管
         const lastSelectedIndex = ref(-1);
+        // 对齐桌面 v2.2.1:开关开启时,标签搜索不再匹配卡片原生 data.tags(仅索引自定义标签)
+        // 开关本体在设置页(localStorage jsmobile-ignore-import-tags);keep-alive 回库时在 onActivated 重读同步
+        const sanitizeImportedTags = ref(localStorage.getItem('jsmobile-ignore-import-tags') === '1');
         const searchEngine = useSearch({
             library: computed(() => mobileLibrary.library),
             currentCategoryKey,
@@ -545,6 +552,7 @@ export default {
             currentPage,
             itemsPerPage,
             lastSelectedIndex,
+            sanitizeImportedTags,
             estimateCardTokens: null // 桌面版 v2.1.0 已改用 tokenCache,此参数仅旧版引用
         });
 
