@@ -146,7 +146,7 @@ export function extractRegexFromPreset(presetData) {
             findRegex: s.findRegex || s.find_regex || '',
             replaceString: s.replaceString || s.replace_string || '',
             disabled: s.disabled === true || s.enabled === false,
-            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : [2, 1]),
             fromPreset: true
         };
     }).filter((s) => s && s.findRegex);

@@ -541,7 +541,7 @@ import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../c
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
 import { buildMacroContext, applyMacros } from '../useChatMacros';
-import { applyRegexScripts, extractRegexFromCard } from '../useChatRegex';
+import { applyRegexScripts, extractRegexFromCard, coercePlacement } from '../useChatRegex';
 import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
 import { loadSessions, createSession, upsertSession, persistMessages, deleteSession as deleteSessionById, renameSession as renameSessionById, getLastSessionId, setLastSessionId } from '../useChatSessions';
 import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
@@ -868,16 +868,21 @@ export default {
             d.value.extensions.regex_scripts.forEach((r) => {
                 if (r && typeof r === 'object') {
                     if (r.enabled !== undefined && r.disabled === undefined) r.disabled = !r.enabled;
-                    if (!Array.isArray(r.placement)) r.placement = [];
+                    // placement 归一为数字数组（对齐酒馆枚举；兼容旧卡字符串 'AI'/'USER'）
+                    const raw = Array.isArray(r.placement) ? r.placement : (r.placement !== undefined && r.placement !== null ? [r.placement] : []);
+                    r.placement = raw.map(coercePlacement).filter((v) => v !== null);
                 }
             });
             return d.value.extensions.regex_scripts;
         });
+        // placement 数字枚举对齐酒馆：0全局 1用户输入 2AI输出 3斜杠(兼容旧"全文本") 5世界书 6思维链
         const REGEX_PLACEMENTS = [
-            { value: 0, label: '全局 / 未定义' },
+            { value: 0, label: '全局' },
             { value: 1, label: '用户输入' },
             { value: 2, label: 'AI 回复' },
-            { value: 3, label: '全文本' }
+            { value: 3, label: '全文本' },
+            { value: 5, label: '世界书注入' },
+            { value: 6, label: '思维链' }
         ];
         const regexExpanded = reactive({});
         function toggleRegexExpand(i) { regexExpanded[i] = !regexExpanded[i]; }
@@ -1590,7 +1595,7 @@ export default {
                             findRegex: s.findRegex || s.find_regex,
                             replaceString: s.replaceString || s.replace_string || '',
                             disabled: s.disabled === true || s.enabled === false,
-                            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+                            placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : [2, 1]),
                         });
                         added++;
                     }
@@ -1643,7 +1648,7 @@ export default {
                         findRegex: s.findRegex || s.find_regex,
                         replaceString: s.replaceString || s.replace_string || '',
                         disabled: s.disabled === true || s.enabled === false,
-                        placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : ['AI', 'USER']),
+                        placement: Array.isArray(s.placement) ? s.placement : (s.placement ? [s.placement] : [2, 1]),
                     });
                     added++;
                 }

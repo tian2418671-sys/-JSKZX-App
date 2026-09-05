@@ -83,7 +83,7 @@
                         <van-button size="small" plain icon="description" @click="importRegexFromFile" :loading="fileImporting">文件导入</van-button>
                     </div>
                     <van-field v-model="regexPasteText" type="textarea" rows="3" autosize
-                        placeholder='粘贴正则 JSON，如 [{"findRegex":"old","replaceString":"new","placement":["AI"]}]'
+                        placeholder='粘贴正则 JSON，如 [{"findRegex":"old","replaceString":"new","placement":[2]}]（2=AI回复 1=用户输入）'
                         spellcheck="false" class="ts-paste-field" style="margin-top: 6px" />
                     <van-button block type="primary" size="small" @click="importPastedRegex" style="margin-top: 6px">导入正则</van-button>
 
@@ -435,8 +435,9 @@ export default {
         }
 
         function formatPlacement(placement) {
-            if (!placement || !Array.isArray(placement) || !placement.length) return '';
-            return placement.join('/');
+            if (!placement || !Array.isArray(placement) || !placement.length) return '全部';
+            const LABELS = { 0: '全局', 1: '用户', 2: 'AI', 3: '斜杠', 5: '世界书', 6: '思维' };
+            return placement.map((p) => LABELS[p] !== undefined ? LABELS[p] : String(p)).join('/');
         }
         function regexSourceLabel(r) {
             if (r.fromPreset) return '预设';
