@@ -44,6 +44,15 @@
                         :class="{ active: quickFilter === f.value }"
                         @click="onQuickFilter(f.value)"
                     >{{ f.label }}</div>
+                    <div class="cat-chip" :class="{ active: showTagPanel }" @click="showTagPanel = true">🏷️ 标签分类</div>
+                </div>
+
+                <!-- 标签大分类面板（第二波：对齐桌面 v2.2.0 五级分类体系） -->
+                <TagCategoryPanel v-model:show="showTagPanel" :library="mobileLibrary.library" @pick="onTagPick" />
+
+                <!-- 激活的标签过滤指示（点 ✕ 清除） -->
+                <div v-if="tagFilter" class="tag-active-bar">
+                    <span class="tag-active-chip">🏷️ {{ tagFilter }}<van-icon name="cross" size="12" class="tag-clear" @click="clearTagFilter" /></span>
                 </div>
 
                 <!-- 分组横向滚动 -->
@@ -312,6 +321,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey } from '../useChatApiConfig';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import DedupeModal from '../components/DedupeModal.vue';
+import TagCategoryPanel from '../components/TagCategoryPanel.vue';
 // 🚀 加载提速：GraphModal 携带 ECharts(约 1MB)，改异步组件 + 模板 v-if 门控，
 // 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
@@ -320,7 +330,7 @@ import {
 
 export default {
     name: 'CardLibraryView',
-    components: { MobileCardCover, DedupeModal, GraphModal: defineAsyncComponent(() => import('../components/GraphModal.vue')) },
+    components: { MobileCardCover, DedupeModal, TagCategoryPanel, GraphModal: defineAsyncComponent(() => import('../components/GraphModal.vue')) },
     directives: {
         // (已移除) 原 IntersectionObserver 触底哨兵在 pull-refresh 回弹时会被误判为上滑触发,
         // 改为基于滚动方向的 scroll 监听,见 setup 内触底加载逻辑。
@@ -458,6 +468,17 @@ export default {
 
         // ---------- 快捷过滤 ----------
         const quickFilter = ref('all');
+        // ---------- 标签大分类面板（第二波：对齐桌面 v2.2.0） ----------
+        const showTagPanel = ref(false);
+        const tagFilter = ref(''); // 当前激活的标签过滤（精确匹配卡片任一标签）
+        function onTagPick(t) {
+            tagFilter.value = t;
+            lastScrollTop = 0; renderCount.value = 24;
+        }
+        function clearTagFilter() {
+            tagFilter.value = '';
+            lastScrollTop = 0; renderCount.value = 24;
+        }
         // 修复 TDZ：原来 watch 在 quickFilter 定义之前注册(初始化求值)，抛 Cannot access 'quickFilter' before
         // initialization → 移动端首屏渲染即崩溃。移到定义后注册，语义不变。
         watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });
@@ -560,7 +581,18 @@ export default {
         watch(queryInput, (v) => { searchEngine.searchQueryInput.value = v; });
 
         // 分组匹配桌面版语义：'cat:xxx' 前缀转分组过滤；useSearch passCategory 已处理分类/子目录过滤
-        const filtered = computed(() => searchEngine.filteredLibrary.value);
+        const filtered = computed(() => {
+            const list = searchEngine.filteredLibrary.value;
+            if (!tagFilter.value) return list;
+            // 精确标签过滤：卡片任一标签(尊重「忽略自带标签」开关)命中即保留
+            const ignoreNative = sanitizeImportedTags.value;
+            const target = tagFilter.value.toLowerCase();
+            return list.filter((c) => {
+                try {
+                    return extractCardTags(c, { ignoreNative }).some((t) => String(t).toLowerCase() === target);
+                } catch (e) { return false; }
+            });
+        });
 
         // 翻页视图：一页一张大卡片，左右翻页 + 页码指示
         const pageIndex = ref(0);
@@ -1105,6 +1137,7 @@ export default {
 
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
+            showTagPanel, tagFilter, onTagPick, clearTagFilter,
             query, selected, viewMode, refreshing, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
             filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
@@ -1159,6 +1192,19 @@ export default {
     border: 1px dashed var(--van-gray-5, #c8c9cc);
     color: var(--van-gray-6, #969799);
 }
+.tag-active-bar { padding: 0 12px 6px; }
+.tag-active-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: rgba(6, 182, 212, 0.15);
+    color: #06b6d4;
+    border: 1px solid rgba(6, 182, 212, 0.4);
+}
+.tag-clear { cursor: pointer; opacity: 0.7; }
 .view-bar {
     display: flex;
     align-items: center;
