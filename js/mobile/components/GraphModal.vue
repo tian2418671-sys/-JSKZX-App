@@ -47,7 +47,8 @@
 
 <script>
 import { ref, reactive, watch, nextTick } from 'vue';
-import * as echarts from 'echarts';
+// 🚀 加载提速：ECharts 全量约 1MB，改为首次初始化图表时动态加载，
+// 异步组件加载后本文件解析阶段不再背负该依赖
 import { showToast } from 'vant';
 
 const MAX_GROUP_SIZE = 300;   // 超大群体跳过(防连线爆炸)
@@ -237,10 +238,20 @@ export default {
             render();
         }
 
-        function initChart() {
+        // ECharts 动态加载（模块级缓存，重复打开不重复解析）
+        let echartsPromise = null;
+        function loadEcharts() {
+            if (!echartsPromise) echartsPromise = import('echarts');
+            return echartsPromise;
+        }
+
+        async function initChart() {
             const el = document.getElementById('mobile-graph-container');
             if (!el) return;
-            if (!chart) chart = echarts.init(el);
+            if (!chart) {
+                const echarts = await loadEcharts();
+                chart = echarts.init(el);
+            }
             chart.off('dblclick');
             chart.on('dblclick', (p) => {
                 if (p.dataType === 'node' && p.data && p.data.id) {
@@ -257,7 +268,10 @@ export default {
                 building.value = true;
                 nextTick(() => {
                     setTimeout(() => {
-                        try { initChart(); } catch (e) { console.error('图谱构建失败:', e); showToast('图谱构建失败，请稍后重试', 'fail'); } finally { building.value = false; }
+                        // initChart 为异步(动态加载 ECharts),用 .catch 捕获
+                        initChart()
+                            .catch((e) => { console.error('图谱构建失败:', e); showToast('图谱构建失败，请稍后重试', 'fail'); })
+                            .finally(() => { building.value = false; });
                     }, 50);
                 });
             } else {

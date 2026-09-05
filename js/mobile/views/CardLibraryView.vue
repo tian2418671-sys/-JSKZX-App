@@ -279,8 +279,9 @@
             />
         </van-dialog>
 
-        <!-- 角色宇宙图谱 -->
+        <!-- 角色宇宙图谱(懒加载：首次打开才拉取 GraphModal+ECharts chunk) -->
         <GraphModal
+            v-if="showGraph"
             :show="showGraph"
             :library="mobileLibrary.library"
             @close="showGraph = false"
@@ -301,7 +302,7 @@
 </template>
 
 <script>
-import { computed, ref, reactive, onMounted, watch, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
+import { computed, ref, reactive, onMounted, watch, onBeforeUnmount, onActivated, onDeactivated, nextTick, defineAsyncComponent } from 'vue';
 import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
@@ -311,14 +312,15 @@ import { api } from '../../bridge/api';
 import { loadApiKey } from '../useChatApiConfig';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import DedupeModal from '../components/DedupeModal.vue';
-import GraphModal from '../components/GraphModal.vue';
+// 🚀 加载提速：GraphModal 携带 ECharts(约 1MB)，改异步组件 + 模板 v-if 门控，
+// 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
     mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, LIBRARY_ROOT, setLastOpenedPath
 } from '../useMobileLibrary';
 
 export default {
     name: 'CardLibraryView',
-    components: { MobileCardCover, DedupeModal, GraphModal },
+    components: { MobileCardCover, DedupeModal, GraphModal: defineAsyncComponent(() => import('../components/GraphModal.vue')) },
     directives: {
         // (已移除) 原 IntersectionObserver 触底哨兵在 pull-refresh 回弹时会被误判为上滑触发,
         // 改为基于滚动方向的 scroll 监听,见 setup 内触底加载逻辑。
