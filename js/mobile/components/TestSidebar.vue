@@ -13,6 +13,7 @@
                     <div class="ts-tab-item" :class="{ active: activeTab === 'config' }" @click="switchTab('config')">配置</div>
                     <div class="ts-tab-item" :class="{ active: activeTab === 'regex' }" @click="switchTab('regex')">正则插件</div>
                     <div class="ts-tab-item" :class="{ active: activeTab === 'wb' }" @click="switchTab('wb')">世界书</div>
+                    <div class="ts-tab-item" :class="{ active: activeTab === 'vars' }" @click="switchTab('vars')">变量</div>
                     <div class="ts-tab-item" :class="{ active: activeTab === 'chat' }" @click="switchTab('chat')">聊天</div>
                     <div class="ts-tab-item" :class="{ active: activeTab === 'settings' }" @click="switchTab('settings')">设置</div>
                 </div>
@@ -145,6 +146,52 @@
                     <van-empty v-else description="当前卡片无内嵌世界书" image-size="40" />
                 </div>
 
+                <!-- ========== 变量 Tab（MVU 变量系统 + EJS 引擎，对齐方案文档） ========== -->
+                <div v-show="activeTab === 'vars'" class="ts-panel">
+                    <!-- 引擎开关 -->
+                    <div class="ts-sec-title"><span>🧬 引擎开关</span></div>
+                    <van-cell title="MVU 变量系统" label="解析 AI 回复中的 &lt;UpdateVariable&gt; 指令">
+                        <template #right-icon><van-switch :model-value="mvuEnabled" size="20px" @update:model-value="$emit('update-mvu-enabled', $event)" /></template>
+                    </van-cell>
+                    <van-cell title="EJS 模板引擎" label="世界书/预设/开场白中的 <% %> 模板执行">
+                        <template #right-icon><van-switch :model-value="ejsEnabled" size="20px" @update:model-value="$emit('update-ejs-enabled', $event)" /></template>
+                    </van-cell>
+                    <van-cell title="分段渲染" label="AI 回复按 ```html 围栏分段渲染面板">
+                        <template #right-icon><van-switch :model-value="segRenderEnabled" size="20px" @update:model-value="$emit('update-seg-render', $event)" /></template>
+                    </van-cell>
+
+                    <!-- 变量树 -->
+                    <div class="ts-sec-title" style="margin-top: 10px"><span>🌳 变量树</span>
+                        <van-tag size="mini" round>{{ varsStats.leaves }} 值 · {{ varsStats.ops }} 楼</van-tag>
+                    </div>
+                    <div class="ts-vars-actions">
+                        <van-button size="mini" plain icon="revoke" :disabled="!varsStats.ops" @click="$emit('undo-vars')">撤销</van-button>
+                        <van-button size="mini" plain type="danger" icon="delete-o" :disabled="!varsStats.leaves" @click="confirmResetVars">重置</van-button>
+                    </div>
+                    <van-field
+                        v-model="varsJsonDraft"
+                        type="textarea"
+                        rows="6"
+                        autosize
+                        spellcheck="false"
+                        placeholder="变量树 JSON（可编辑后应用合并）"
+                        class="ts-paste-field"
+                    />
+                    <van-button block size="small" type="primary" plain style="margin-top: 6px" @click="applyVarsJsonEdit">应用变量树修改</van-button>
+
+                    <!-- OpLog 最近记录 -->
+                    <div class="ts-sec-title" style="margin-top: 10px"><span>📜 更新日志</span>
+                        <van-tag size="mini" round>最近 {{ varsOpLog.length }}</van-tag>
+                    </div>
+                    <div v-if="varsOpLog.length" class="ts-oplog-list">
+                        <div v-for="(entry, i) in varsOpLog" :key="i" class="ts-oplog-item">
+                            <span class="ts-oplog-ai">#{{ entry.ai }}</span>
+                            <span class="ts-oplog-ops">{{ formatOps(entry.ops) }}</span>
+                        </div>
+                    </div>
+                    <van-empty v-else description="暂无变量更新（AI 回复含 UpdateVariable 指令后显示）" image-size="40" />
+                </div>
+
                 <!-- ========== 聊天记录 Tab ========== -->
                 <div v-show="activeTab === 'chat'" class="ts-panel">
                     <div class="ts-sec-title">
@@ -239,6 +286,13 @@ export default {
         userPersona: { type: String, default: '' },
         memoryEnabled: { type: Boolean, default: true },
         memoryLimit: { type: Number, default: 20 },
+        // MVU 变量 + EJS + 分段渲染（变量 Tab）
+        mvuEnabled: { type: Boolean, default: true },
+        ejsEnabled: { type: Boolean, default: true },
+        segRenderEnabled: { type: Boolean, default: true },
+        varsStats: { type: Object, default: () => ({ leaves: 0, ops: 0, aiCount: 0 }) },
+        varsTreeJson: { type: String, default: '{}' },
+        varsOpLog: { type: Array, default: () => [] },
     },
     emits: [
         'update:visible', 'scan-presets', 'apply-preset', 'clear-preset',
@@ -246,7 +300,9 @@ export default {
         'update-params', 'toggle-wb-entry', 'update-wb-entry', 'sync-wb-keys',
         'new-session', 'switch-session', 'delete-session', 'rename-session',
         'update-api-config', 'update-reply-count', 'update-user-name', 'update-user-persona',
-        'update-memory-enabled', 'update-memory-limit'
+        'update-memory-enabled', 'update-memory-limit',
+        'update-mvu-enabled', 'update-ejs-enabled', 'update-seg-render',
+        'apply-vars-json', 'undo-vars', 'reset-vars'
     ],
     setup(props, { emit }) {
         const activeTab = ref('config');
@@ -419,6 +475,33 @@ export default {
         // 世界书展开
         function toggleWbExpand(key) { wbExpanded[key] = !wbExpanded[key]; }
 
+        // ---------- 变量 Tab（MVU/EJS） ----------
+        const varsJsonDraft = ref(props.varsTreeJson || '{}');
+        // 宿主变量树变化 → 同步草稿（用户在编辑中且内容未变时不打断）
+        watch(() => props.varsTreeJson, (v) => { varsJsonDraft.value = v || '{}'; });
+        function applyVarsJsonEdit() {
+            emit('apply-vars-json', varsJsonDraft.value);
+        }
+        async function confirmResetVars() {
+            try {
+                await showConfirmDialog({
+                    title: '重置变量树', message: '将清空当前会话的全部变量与更新日志，确定？',
+                    confirmButtonText: '重置', confirmButtonColor: '#ee0a24',
+                });
+                emit('reset-vars');
+            } catch (e) { /* 用户取消 */ }
+        }
+        function formatOps(ops) {
+            if (!Array.isArray(ops)) return '';
+            return ops.map((o) => {
+                if (!o || !o.type) return '';
+                if (o.type === 'init') return 'init(' + Object.keys(o.data || {}).length + '键)';
+                if (o.type === 'patch') return 'patch(' + (o.ops || []).length + '条)';
+                const v = o.value === undefined ? '' : '=' + (typeof o.value === 'object' ? JSON.stringify(o.value) : o.value);
+                return o.type + ' ' + (o.path || '') + v;
+            }).filter(Boolean).join(' · ');
+        }
+
         // 聊天记录操作
         async function promptRename(session) {
             const name = window.prompt('会话名称', session.name);
@@ -458,6 +541,7 @@ export default {
             emitParams, resetParams, applyPastedPreset, importPastedRegex, importPastedPlugin,
             importPresetFromFile, importRegexFromFile, importPluginFromFile,
             emitApiConfig, toggleWbExpand, promptRename, confirmDelete,
+            varsJsonDraft, applyVarsJsonEdit, confirmResetVars, formatOps,
             formatPlacement, regexSourceLabel, formatTime,
         };
     }
@@ -553,6 +637,13 @@ export default {
 .ts-import-row { display: flex; gap: 8px; margin-top: 6px; }
 .ts-paste-field { border: 1px solid var(--van-gray-3, #dcdee0); border-radius: 6px; margin-top: 4px; }
 .ts-paste-field :deep(textarea) { font-size: 11px; }
+
+/* 变量 Tab */
+.ts-vars-actions { display: flex; gap: 8px; padding: 4px 0 6px; }
+.ts-oplog-list { max-height: 200px; overflow-y: auto; }
+.ts-oplog-item { display: flex; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--van-gray-1, #f7f8fa); font-size: 11px; }
+.ts-oplog-ai { flex-shrink: 0; color: #06b6d4; font-weight: 600; }
+.ts-oplog-ops { color: var(--van-gray-7, #646566); word-break: break-all; }
 
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }

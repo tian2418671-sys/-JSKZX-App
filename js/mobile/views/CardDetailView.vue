@@ -305,7 +305,13 @@
                                 >
                                     <div class="b-name">{{ bubbleName(m) }}</div>
                                     <pre v-if="chatRenderMode === 'source'" class="b-content">{{ messageText(m) }}</pre>
-                                    <div v-else class="b-content b-render" v-html="renderChatHtml(messageText(m))"></div>
+                                    <ChatPanelSeg
+                                        v-else
+                                        class="b-content b-render"
+                                        :segments="messageSegments(m)"
+                                        :vars-json="varsTreeJson"
+                                        :render-text="renderChatHtml"
+                                    />
                                 </div>
                                 <div v-if="m.role === 'assistant' && m.swipes && m.swipes.length" class="swipe-bar">
                                     <div v-if="m.swipes.length > 1" class="swipe-nav">
@@ -349,6 +355,12 @@
                             :user-persona="userPersona"
                             :memory-enabled="memoryEnabled"
                             :memory-limit="memoryLimit"
+                            :mvu-enabled="mvuEnabled"
+                            :ejs-enabled="ejsEnabled"
+                            :seg-render-enabled="segRenderEnabled"
+                            :vars-stats="varsStats"
+                            :vars-tree-json="varsTreeJson"
+                            :vars-op-log="varsOpLog"
                             @scan-presets="scanExternalPresetDir"
                             @apply-preset="applyPreset"
                             @clear-preset="clearPreset"
@@ -370,6 +382,12 @@
                             @update-user-persona="handleUpdateUserPersona"
                             @update-memory-enabled="handleUpdateMemoryEnabled"
                             @update-memory-limit="handleUpdateMemoryLimit"
+                            @update-mvu-enabled="handleUpdateMvu"
+                            @update-ejs-enabled="handleUpdateEjs"
+                            @update-seg-render="handleUpdateSegRender"
+                            @apply-vars-json="applyVarsJson"
+                            @undo-vars="undoVars"
+                            @reset-vars="resetVars"
                         />
                     </div>
                 </van-tab>
@@ -530,6 +548,7 @@ import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
 import TestSidebar from '../components/TestSidebar.vue';
+import ChatPanelSeg from '../components/ChatPanelSeg.vue';
 import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
@@ -542,6 +561,9 @@ import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
 import { buildMacroContext, applyMacros } from '../useChatMacros';
 import { applyRegexScripts, extractRegexFromCard, coercePlacement } from '../useChatRegex';
+import { createVariableEngine, countVars, extractMvu } from '../useChatVariables';
+import { renderEjs, looksLikeEjs, buildTemplateContext } from '../useChatEjs';
+import { segmentMessage } from '../useChatRender';
 import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
 import { loadSessions, createSession, upsertSession, persistMessages, deleteSession as deleteSessionById, renameSession as renameSessionById, getLastSessionId, setLastSessionId } from '../useChatSessions';
 import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
@@ -552,7 +574,7 @@ const LS_TAVERN_KEY = 'jsmobile-tavern-key';
 
 export default {
     name: 'CardDetailView',
-    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal, TestSidebar },
+    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal, TestSidebar, ChatPanelSeg },
     setup() {
         const route = useRoute();
         const router = useRouter();
@@ -1492,6 +1514,105 @@ export default {
         const memoryEnabled = ref(isMemoryEnabled());
         const memoryLimit = ref(getMemoryLimit());
 
+        // ---------- MVU 变量系统 + EJS 模板（对齐「变量+ejs.MD」方案） ----------
+        const LS_MVU_ENABLED = 'jsmobile-chat-mvu-enabled';
+        const LS_EJS_ENABLED = 'jsmobile-chat-ejs-enabled';
+        const LS_SEG_RENDER = 'jsmobile-chat-seg-render';
+        const mvuEnabled = ref(localStorage.getItem(LS_MVU_ENABLED) !== '0');   // 默认开
+        const ejsEnabled = ref(localStorage.getItem(LS_EJS_ENABLED) !== '0');   // 默认开
+        const segRenderEnabled = ref(localStorage.getItem(LS_SEG_RENDER) !== '0'); // 分段渲染默认开
+        // 变量树版本号：引擎变更时 bump，驱动 computed（ctx/预览/侧边栏展示）重算
+        const varsVersion = ref(0);
+        let varEngine = null;
+        function makeVarsKey(sessionId) {
+            return 'jsmobile-chat-vars:' + String(id.value || 'unknown') + ':' + String(sessionId || 'default');
+        }
+        function ensureVarEngine(sessionId) {
+            // 会话切换 → 重建引擎实例（storageKey 是闭包常量，换键即换实例）
+            varEngine = createVariableEngine({
+                storageKey: makeVarsKey(sessionId),
+                onChange: () => { varsVersion.value++; }
+            });
+            varsVersion.value++;
+        }
+        // EJS 模板上下文（方案第六节 TemplateApiBridge：变量树+消息回溯+宿主API白名单）
+        const templateCtx = computed(() => {
+            void varsVersion.value; // 依赖追踪：变量变更 → ctx 重建
+            return buildTemplateContext({
+                engine: varEngine,
+                messages: chatMessages.value,
+                macros: fullMacros.value,
+                messageTextOf: messageTextOf,
+                cardName: (card.value && card.value.name) || '',
+                userName: userName.value
+            });
+        });
+        /** 对文本执行 EJS（开关关闭或非模板 → 原样返回） */
+        function renderTpl(text, label) {
+            if (!ejsEnabled.value || !text || !looksLikeEjs(text)) return text;
+            return renderEjs(text, templateCtx.value, { fallback: 'raw', label: label || 'EJS' });
+        }
+        /** AI 回复入口：MVU 提取应用 + 剔除 <UpdateVariable> 块（方案 VariableEngine.onAiMessage） */
+        function processAiReplyVars(replyText) {
+            if (!mvuEnabled.value || !varEngine) return replyText;
+            return varEngine.onAiMessage(replyText);
+        }
+        const varsStats = computed(() => {
+            void varsVersion.value;
+            if (!varEngine) return { leaves: 0, ops: 0, aiCount: 0 };
+            return { leaves: countVars(varEngine.root), ops: varEngine.log.length, aiCount: varEngine.aiCount };
+        });
+        const varsTreeJson = computed(() => {
+            void varsVersion.value;
+            try { return JSON.stringify(varEngine ? varEngine.root : {}, null, 2); } catch (e) { return '{}'; }
+        });
+        const varsOpLog = computed(() => {
+            void varsVersion.value;
+            return varEngine ? varEngine.log.slice(-30).reverse() : [];
+        });
+        function resetVars() {
+            if (varEngine) { varEngine.reset(); varsVersion.value++; }
+        }
+        function undoVars() {
+            if (varEngine && varEngine.undoLast()) showSuccessToast('已撤销最近一次变量更新');
+            else showToast('无可撤销的变量记录');
+        }
+        // 引擎开关 handler（侧边栏变量 Tab；持久化到 localStorage，全局生效）
+        function handleUpdateMvu(v) {
+            mvuEnabled.value = !!v;
+            try { localStorage.setItem(LS_MVU_ENABLED, v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+            showToast(v ? 'MVU 变量系统已开启' : 'MVU 变量系统已关闭');
+        }
+        function handleUpdateEjs(v) {
+            ejsEnabled.value = !!v;
+            try { localStorage.setItem(LS_EJS_ENABLED, v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+            showToast(v ? 'EJS 模板引擎已开启' : 'EJS 模板引擎已关闭（模板按原文注入）');
+        }
+        function handleUpdateSegRender(v) {
+            segRenderEnabled.value = !!v;
+            try { localStorage.setItem(LS_SEG_RENDER, v ? '1' : '0'); } catch (e) { /* 忽略 */ }
+            showToast(v ? '分段渲染已开启' : '分段渲染已关闭（HTML 围栏按文本显示）');
+        }
+        function applyVarsJson(jsonText) {
+            try {
+                const obj = JSON.parse(jsonText);
+                if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('需为 JSON 对象');
+                if (!varEngine) ensureVarEngine(activeSessionId.value);
+                varEngine.applyOps([{ type: 'init', data: obj }]);
+                showSuccessToast('变量树已合并更新');
+                return true;
+            } catch (e) {
+                showToast('JSON 解析失败: ' + e.message);
+                return false;
+            }
+        }
+        // ---------- 分段渲染（对齐「渲染方案.MD」：文本段 + HTML 面板段） ----------
+        function messageSegments(m) {
+            const text = messageText(m);
+            if (!segRenderEnabled.value) return [{ type: 'text', content: text }];
+            return segmentMessage(text);
+        }
+
         // 持久化当前对话到会话
         function saveCurrentChat() {
             if (!activeSessionId.value || !id.value) return;
@@ -1676,35 +1797,48 @@ export default {
             chatSessions.value = upsertSession(id.value, s);
             activeSessionId.value = s.id;
             setLastSessionId(id.value, s.id);
+            ensureVarEngine(s.id); // MVU：新会话 → 新变量引擎实例（空树）
             // 新会话从开场白开始
             chatMessages.value = [];
             chatDraft.value = '';
-            const dd = card.value && card.value.data && card.value.data.data;
-            if (dd && dd.first_mes) {
-                const macros = fullMacros.value;
-                let first = applyMacros(String(dd.first_mes), macros);
-                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
-                chatMessages.value.push({ role: 'assistant', swipes: [first], index: 0 });
-            }
+            pushFirstMessage();
             showSuccessToast('已新建聊天');
+        }
+        /** 开场白入库（宏 + EJS + MVU 初始化 + AI 正则；initChat/handleNewSession/handleSwitchSession 共用） */
+        function pushFirstMessage(withAlt = false) {
+            const dd = card.value && card.value.data && card.value.data.data;
+            if (!dd || !dd.first_mes) return;
+            const macros = fullMacros.value;
+            let first = applyMacros(String(dd.first_mes), macros);
+            first = renderTpl(first, '开场白');
+            first = processAiReplyVars(first);
+            first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
+            const swipes = [first];
+            if (withAlt) {
+                const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
+                alt.forEach((a) => {
+                    if (a) {
+                        let processed = applyMacros(a, macros);
+                        processed = renderTpl(processed, '备选开场白');
+                        processed = applyRegexScripts(processed, allRegexScripts.value, 'AI', macros);
+                        if (processed !== swipes[0]) swipes.push(processed);
+                    }
+                });
+            }
+            chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
         }
         function handleSwitchSession(sid) {
             if (!id.value || sid === activeSessionId.value) return;
             saveCurrentChat();
             activeSessionId.value = sid;
             setLastSessionId(id.value, sid);
+            ensureVarEngine(sid); // MVU：切会话 → 重绑变量引擎（自动恢复该会话持久化状态）
             const s = chatSessions.value.find((x) => x.id === sid);
             if (s && s.messages && s.messages.length) {
                 chatMessages.value = s.messages.map((m) => ({ ...m }));
             } else {
                 chatMessages.value = [];
-                const dd = card.value && card.value.data && card.value.data.data;
-                if (dd && dd.first_mes) {
-                    const macros = fullMacros.value;
-                    let first = applyMacros(String(dd.first_mes), macros);
-                    first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
-                    chatMessages.value.push({ role: 'assistant', swipes: [first], index: 0 });
-                }
+                pushFirstMessage();
             }
             chatDraft.value = '';
             scrollChat();
@@ -1794,23 +1928,8 @@ export default {
             }
             chatMessages.value = [];
             chatDraft.value = '';
-            const dd = card.value && card.value.data && card.value.data.data;
-            if (dd && dd.first_mes) {
-                const macros = fullMacros.value;
-                // 对开场白和备选开场白应用宏替换 + AI 方向正则
-                let first = applyMacros(String(dd.first_mes), macros);
-                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
-                const swipes = [first];
-                const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
-                alt.forEach((a) => {
-                    if (a) {
-                        let processed = applyMacros(a, macros);
-                        processed = applyRegexScripts(processed, allRegexScripts.value, 'AI', macros);
-                        if (processed !== swipes[0]) swipes.push(processed);
-                    }
-                });
-                chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
-            }
+            // 开场白（宏 + EJS + MVU 初始化 + AI 正则 + 备选 swipes）统一走 pushFirstMessage
+            pushFirstMessage(true);
         }
 
         function clearChat() {
@@ -1819,29 +1938,45 @@ export default {
             if (s) { s.messages = []; s.updatedAt = Date.now(); persistMessages(id.value, s.id, []); }
             chatMessages.value = [];
             chatDraft.value = '';
-            // 重新加载卡片开场白
-            const dd = card.value && card.value.data && card.value.data.data;
-            if (dd && dd.first_mes) {
-                const macros = fullMacros.value;
-                let first = applyMacros(String(dd.first_mes), macros);
-                first = applyRegexScripts(first, allRegexScripts.value, 'AI', macros);
-                const swipes = [first];
-                const alt = Array.isArray(dd.alternate_greetings) ? dd.alternate_greetings.map(String).filter(Boolean) : [];
-                alt.forEach((a) => {
-                    if (a) {
-                        let processed = applyMacros(a, macros);
-                        processed = applyRegexScripts(processed, allRegexScripts.value, 'AI', macros);
-                        if (processed !== swipes[0]) swipes.push(processed);
-                    }
-                });
-                chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
-            }
+            // MVU：清空对话 → 重置变量树（开场白的 init 指令会随 pushFirstMessage 重新应用）
+            resetVars();
+            // 重新加载卡片开场白（宏 + EJS + MVU + 正则 + 备选 swipes 统一走 pushFirstMessage）
+            pushFirstMessage(true);
             showToast('已清空对话');
         }
 
         async function scrollChat() {
             await nextTick();
             if (chatListEl.value) chatListEl.value.scrollTop = chatListEl.value.scrollHeight;
+        }
+
+        /**
+         * 世界书激活条目 → 提示词文本（方案第七节 PromptBuilder）
+         * 激活规则：常驻(constant) 或 触发词(keys)命中用户消息（大小写不敏感子串）
+         * EJS 条目先渲染（开关开启且 looksLikeEjs），再过宏替换；按 position 排序注入
+         */
+        function collectActivatedWbText(userMsg) {
+            const entries = wbEntries.value;
+            if (!entries) return '';
+            const um = String(userMsg || '').toLowerCase();
+            const hits = [];
+            for (const key of Object.keys(entries)) {
+                const e = entries[key];
+                if (!e || e.enabled === false) continue;
+                const content = String(e.content || '').trim();
+                if (!content) continue;
+                const keys = Array.isArray(e.keys) ? e.keys : String(e._keysText || '').split(',').map((s) => s.trim());
+                const isConstant = e.constant === true;
+                const keyHit = !!(um && keys.some((k) => k && um.includes(String(k).toLowerCase())));
+                if (!isConstant && !keyHit) continue;
+                // EJS 渲染 → 宏替换（顺序对齐方案：EJS条目先执行，宏层收尾）
+                let text = renderTpl(content, '世界书条目' + (e.comment ? '(' + e.comment + ')' : ''));
+                text = applyMacros(text, fullMacros.value);
+                hits.push({ position: Number(e.position) || 1, order: Number(e.insertion_order) || Number(e.order) || 100, text });
+            }
+            if (!hits.length) return '';
+            hits.sort((a, b) => (a.position - b.position) || (a.order - b.order));
+            return '### 世界书设定\n' + hits.map((h) => h.text).join('\n\n');
         }
 
         async function buildPayload(type) {
@@ -1851,6 +1986,10 @@ export default {
                 .slice(0, -1)
                 .filter((m) => m.role === 'user' || m.role === 'assistant')
                 .map((m) => ({ role: m.role, content: messageText(m) }));
+
+            // 世界书激活条目（方案 PromptBuilder：常驻 + 关键词触发，EJS 条目先渲染）
+            const lastUserMsg = [...chatMessages.value].reverse().find((m) => m.role === 'user');
+            const wbText = collectActivatedWbText(lastUserMsg ? messageText(lastUserMsg) : '');
 
             // ===== 预设模式：用预设 prompts 构建 system + messages =====
             const presetData = activePreset.value && activePreset.value.data;
@@ -1865,8 +2004,9 @@ export default {
                     const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
                     memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
                 }
-                // 合并 system 文本（预设 system 消息 + 插件 + 记忆 + 用户人设）
+                // 合并 system 文本（预设 system 消息 + 世界书 + 插件 + 记忆 + 用户人设）
                 const sysTexts = presetMsgs.filter((m) => m.role === 'system').map((m) => m.content);
+                if (wbText) sysTexts.push(wbText);
                 if (userPersona.value) sysTexts.push(applyMacros('### 用户(你)的角色设定\n{{persona}}', macros));
                 sysTexts.push(...pluginSys);
                 if (memCtx) sysTexts.push(memCtx);
@@ -1897,10 +2037,11 @@ export default {
                 };
             }
 
-            // ===== 无预设模式：经典拼接（增强宏替换 + 插件 + 正则） =====
+            // ===== 无预设模式：经典拼接（增强宏替换 + 世界书 + 插件 + 正则） =====
             const sysParts = [];
             const system = buildSystem(card.value);
             if (system) sysParts.push(applyMacros(system, macros));
+            if (wbText) sysParts.push(wbText);
             if (userPersona.value) sysParts.push(applyMacros('### 用户(你)的角色设定\n{{persona}}', macros));
             // 插件额外 system 提示词
             const pluginSys = collectPluginSystemPrompts(plugins.value);
@@ -1938,9 +2079,19 @@ export default {
             };
         }
 
-        async function requestReply(payload, type) {
+        /**
+         * 统一 AI 请求入口
+         * @param {boolean} applyVars true=应用 MVU 指令并剔除块（正向对话流：发送/续写）；
+         *   false=仅剔除 <UpdateVariable> 块不应用（候选重生成/追加：变量跟随对话时间线，
+         *   不随候选切换重复计数——防 add 类指令双重累加）
+         */
+        async function requestReply(payload, type, applyVars = true) {
             const res = await api.sendChatMessage(chatApiEndpoint.value.trim(), payload, chatApiKey.value.trim(), type);
-            return replyToSwipe(res, type);
+            const reply = replyToSwipe(res, type);
+            // 错误占位文本（⚠ 开头）不进变量层
+            if (!reply || reply.startsWith('⚠')) return reply;
+            if (applyVars) return processAiReplyVars(reply);
+            return extractMvu(reply).display;
         }
 
         async function sendChat() {
@@ -1964,7 +2115,8 @@ export default {
                 const swipes = [];
                 const macros = fullMacros.value;
                 for (let n = 0; n < count; n++) {
-                    let reply = await requestReply(payload, type);
+                    // MVU 只对首条候选应用（变量跟随对话时间线；多候选重复应用会导致 add 双重计数）
+                    let reply = await requestReply(payload, type, n === 0);
                     // 对 AI 回复应用 AI 方向正则脚本
                     reply = applyRegexScripts(reply, allRegexScripts.value, 'AI', macros);
                     swipes.push(reply);
@@ -2032,7 +2184,7 @@ export default {
             msg.swipes = Array.isArray(msg.swipes) ? msg.swipes.slice() : [messageText(msg)];
             chatSending.value = true;
             try {
-                const reply = await requestReply(payload, type);
+                const reply = await requestReply(payload, type, false); // 候选追加：变量不重复应用
                 msg.swipes.push(reply);
                 msg.index = msg.swipes.length - 1;
                 scrollChat();
@@ -2054,7 +2206,7 @@ export default {
             try {
                 const swipes = [];
                 for (let n = 0; n < count; n++) {
-                    swipes.push(await requestReply(payload, type));
+                    swipes.push(await requestReply(payload, type, false)); // 候选替换：变量不重复应用
                 }
                 msg.swipes = swipes;
                 msg.index = 0;
@@ -2386,6 +2538,8 @@ export default {
                     activeSessionId.value = s.id;
                     setLastSessionId(id.value, s.id);
                 }
+                // MVU 变量引擎按「卡×会话」隔离持久化：先绑定会话，再初始化聊天（开场白可能携带 MVU init）
+                ensureVarEngine(activeSessionId.value);
                 initChat();
             } catch (e) {
                 console.error('[CardDetail] 挂载异常', e && e.message, e);
@@ -2420,6 +2574,10 @@ export default {
             showPush, pushing, tavernUrl, tavernKey, savePushConfig, pickTavernDir, doPush,
             pushTargetMode, pushTargets, currentPushTargetId, switchPushMode, addPushTarget, removePushTarget,
             chatMessages, chatDraft, chatSending, chatListEl, chatRenderMode, toggleChatRender, renderChatHtml,
+            // MVU 变量 + EJS + 分段渲染（第三波方案落地）
+            mvuEnabled, ejsEnabled, segRenderEnabled, varsStats, varsTreeJson, varsOpLog,
+            resetVars, undoVars, applyVarsJson, messageSegments,
+            handleUpdateMvu, handleUpdateEjs, handleUpdateSegRender,
             chatApiEndpoint, chatApiKey, chatApiModel, chatApiType,
             replyCount, userName, userPersona, bubbleName, messageText, goApiSettings, showUserRole, openUserRole, saveInlineUser,
             sendChat, clearChat,
