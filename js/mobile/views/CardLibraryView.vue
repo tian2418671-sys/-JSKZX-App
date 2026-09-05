@@ -317,6 +317,7 @@ import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
 import { useSearch, extractCardSearchableText, extractCardTags } from '../../composables/useSearch';
 import searchIndex from '../../utils/searchIndex.js';
+import { defaultAutoTagRules, compileAutoTagRules } from '../../utils/cardLoader.js';
 import { api } from '../../bridge/api';
 import { loadApiKey } from '../useChatApiConfig';
 import MobileCardCover from '../components/MobileCardCover.vue';
@@ -325,7 +326,7 @@ import TagCategoryPanel from '../components/TagCategoryPanel.vue';
 // 🚀 加载提速：GraphModal 携带 ECharts(约 1MB)，改异步组件 + 模板 v-if 门控，
 // 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
-    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, LIBRARY_ROOT, setLastOpenedPath
+    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, saveCardData, LIBRARY_ROOT, setLastOpenedPath
 } from '../useMobileLibrary';
 
 export default {
@@ -632,7 +633,10 @@ export default {
                 if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
                 if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
                 showSuccessToast(m.join(' · '));
-                load();
+                // 导入后必须强制重扫：loadLibrary(false) 在库就绪时会跳过扫描，新卡进不了内存
+                await load(true);
+                // 第三波：导入自动打标（开关开启时后台低并发执行，库重载完成后启动）
+                autoTagImportedCards(res.copied || []);
             } else {
                 showToast((res && res.error) || '已取消导入');
             }
@@ -704,7 +708,9 @@ export default {
                 if (res && res.success) {
                     showSuccessToast(`已导入「${res.fileName || '卡片'}」`);
                     urlInput.value = '';
-                    load();
+                    await load(true); // 强制重扫：新卡进内存
+                    // 第三波：导入自动打标（开关开启时后台低并发执行，不阻塞）
+                    if (res.filePath) autoTagImportedCards([res.filePath]);
                     return true;
                 }
                 showToast((res && res.error) || '导入失败');
@@ -857,6 +863,58 @@ export default {
             aiTagProgress.status = '';
             if (okCount) showSuccessToast(`AI 打标完成 ${okCount}/${cards.length} 张`);
             else showToast('AI 打标未命中任何标签（请检查 API 配置或网络）');
+        }
+
+        // ---------- 导入自动打标（第三波：对齐桌面 useCardCrud.processAutoTagsAndCategory） ----------
+        // 规则表：系统预设(未禁用) + 用户自定义（与详情页 AI 打标面板同一套 localStorage 配置）
+        function buildImportAutoTagRules() {
+            let disabled = [];
+            let custom = [];
+            try { disabled = JSON.parse(localStorage.getItem('jsmobile-autotag-disabled') || '[]'); } catch (e) { /* ignore */ }
+            try { custom = JSON.parse(localStorage.getItem('jsmobile-autotag-custom') || '[]'); } catch (e) { /* ignore */ }
+            const sys = defaultAutoTagRules.filter((r) => !disabled.includes(r.name)).map((r) => ({ name: r.name, regex: r.regex }));
+            return compileAutoTagRules([...sys, ...custom]);
+        }
+
+        /**
+         * 对导入后的新卡应用自动打标规则：匹配卡文本 → 追加命中标签到 data.tags → 写盘。
+         * 低并发(2)后台执行，不阻塞列表渲染；单卡失败静默跳过。
+         * @param {string[]} paths 新卡路径列表（导入成功返回的 copied / filePath）
+         */
+        async function autoTagImportedCards(paths) {
+            if (!paths || !paths.length) return;
+            if (localStorage.getItem('jsmobile-import-autotag') !== '1') return; // 开关默认关
+            const rules = buildImportAutoTagRules();
+            if (!Object.keys(rules).length) return;
+            // 调用方已保证库重载完成（load(true)），此处直接定位内存中的卡片对象
+            const targets = mobileLibrary.library.filter((c) => paths.includes(c.path));
+            if (!targets.length) return;
+            const CONCURRENCY = 2; // 低并发：避免与用户交互争抢磁盘/桥接
+            let okCount = 0;
+            for (let i = 0; i < targets.length; i += CONCURRENCY) {
+                const batch = targets.slice(i, i + CONCURRENCY);
+                await Promise.all(batch.map(async (c) => {
+                    try {
+                        const dd = (c.data && (c.data.data || c.data)) || {};
+                        const fullText = [dd.description, dd.personality, dd.scenario, dd.first_mes]
+                            .filter(Boolean).join('\n');
+                        if (!fullText.trim()) return;
+                        const cur = Array.isArray(dd.tags) ? dd.tags : [];
+                        const added = [];
+                        for (const [tag, re] of Object.entries(rules)) {
+                            try {
+                                if (re.test(fullText) && !cur.includes(tag)) added.push(tag);
+                            } catch (e) { /* 单条正则非法跳过 */ }
+                        }
+                        if (!added.length) return;
+                        dd.tags = [...cur, ...added];
+                        const res = await saveCardData(c);
+                        if (res && res.success) okCount++;
+                    } catch (e) { /* 单卡失败跳过 */ }
+                }));
+                await new Promise((r) => setTimeout(r, 0)); // 批间让出主线程
+            }
+            if (okCount) showSuccessToast(`自动打标完成 ${okCount}/${targets.length} 张`);
         }
 
         /** 批量推送:复制选中卡片到共享推送目标(卡库目录模式);酒馆模式引导去详情页配地址 */
@@ -1079,7 +1137,12 @@ export default {
                 const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
                     ? LIBRARY_ROOT + '/' + selected.value : LIBRARY_ROOT;
                 const res = await window.electronAPI.downloadCardFromUrl({ url: url.trim(), destFolder: dest });
-                if (res && res.success) { showSuccessToast('已导入'); load(); }
+                if (res && res.success) {
+                    showSuccessToast('已导入');
+                    await load(true); // 强制重扫：新卡进内存
+                    // 第三波：导入自动打标（开关开启时后台低并发执行，不阻塞）
+                    if (res.filePath) autoTagImportedCards([res.filePath]);
+                }
                 else showToast((res && res.error) || '下载失败');
                 return;
             }

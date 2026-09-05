@@ -130,6 +130,11 @@
                         <van-switch v-model="ignoreImportTags" @change="onIgnoreTagsChange" />
                     </template>
                 </van-cell>
+                <van-cell title="导入自动打标" label="导入卡片后按规则自动追加标签并保存">
+                    <template #value>
+                        <van-switch v-model="importAutoTag" @change="onImportAutoTagChange" />
+                    </template>
+                </van-cell>
             </van-cell-group>
 
             <!-- 关于 -->
@@ -678,6 +683,14 @@ export default {
             showSuccessToast(v ? '导入时将忽略自带标签' : '导入时保留自带标签');
         }
 
+        // ---------- 导入自动打标开关（第三波，对齐桌面 processAutoTagsAndCategory 的启用语义） ----------
+        const LS_IMPORT_AUTOTAG = 'jsmobile-import-autotag';
+        const importAutoTag = ref(localStorage.getItem(LS_IMPORT_AUTOTAG) === '1');
+        function onImportAutoTagChange(v) {
+            localStorage.setItem(LS_IMPORT_AUTOTAG, v ? '1' : '0');
+            showSuccessToast(v ? '导入后将自动打标' : '导入自动打标已关闭');
+        }
+
         return {
             granted, authLost, rootUri, scanInfo, darkTheme, theme, uiFs, onThemePick, onFsPick,
             showThemePicker, themeOptions, themeColor, THEME_LABELS,
@@ -692,7 +705,8 @@ export default {
             fmtSize, checkUpdate, doDownload,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
             snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
-            ignoreImportTags, onIgnoreTagsChange
+            ignoreImportTags, onIgnoreTagsChange,
+            importAutoTag, onImportAutoTagChange
         };
     }
 };
