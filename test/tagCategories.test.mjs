@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getTagCategory, groupTagsByCategory, TAG_CATEGORIES, setCustomTagState, buildTagClassificationSystemPrompt, buildTagClassificationUserPrompt, resolveTagCategoryTarget, normalizeTagName } from '../js/utils/tagCategories.js';
+import { getTagCategory, groupTagsByCategory, TAG_CATEGORIES, setCustomTagState, setBuiltinCatCustom, getBuiltinCategories, buildTagClassificationSystemPrompt, buildTagClassificationUserPrompt, resolveTagCategoryTarget, normalizeTagName } from '../js/utils/tagCategories.js';
 
 test('默认标签池映射正确（英文+中文注释格式）', () => {
     const cases = [
@@ -242,4 +242,50 @@ test('resolve：模型输出带隐藏空白的重复新名 → 归一为同一 i
     const b = resolveTagCategoryTarget('虚构组织', []);
     assert.equal(a.isNew, true);
     assert.deepEqual(a, b, '两种输入归一为同 key');
+});
+
+// ---------- 🧩 内置大分类定制（改名 / 删除=隐藏 / 恢复） ----------
+
+test('内置定制：隐藏分类剔除出列表，自动命中其 key 回落 other，改名应用', () => {
+    setBuiltinCatCustom({ occupation: '职业大组' }, { occupation: true });
+    try {
+        assert.ok(!getBuiltinCategories().some(c => c.key === 'occupation'), '被删除(隐藏)的内置分类不再出现在列表');
+        assert.equal(getTagCategory('jk'), 'other', '自动特例命中已隐藏内置 → other');
+        assert.equal(getTagCategory('ai'), 'cardtype', '未隐藏内置正常命中');
+    } finally {
+        setBuiltinCatCustom({}, {});
+    }
+    // 仅改名（不隐藏）→ 显示名覆盖、归属 key 不变
+    setBuiltinCatCustom({ occupation: '职业大组' }, {});
+    try {
+        const occ = getBuiltinCategories().find(c => c.key === 'occupation');
+        assert.ok(occ && occ.name === '职业大组', '改名后的显示名');
+        assert.equal(getTagCategory('jk'), 'occupation', '改名不影响归属 key');
+        const g = groupTagsByCategory(['jk']);
+        assert.equal(g.find(x => x.key === 'occupation').name, '职业大组', '分组展示用改名');
+    } finally {
+        setBuiltinCatCustom({}, {});
+    }
+});
+
+test('内置定制：手动归属到已删除内置 → other；恢复后回到原 key', () => {
+    setBuiltinCatCustom({}, { occupation: true });
+    setCustomTagState([], { '某标签': 'occupation' });
+    try {
+        assert.equal(getTagCategory('某标签'), 'other', '手动归属命中已隐藏内置 → other（不悬空到不存在的组）');
+    } finally {
+        setBuiltinCatCustom({}, {}); // 恢复显示
+    }
+    assert.equal(getTagCategory('某标签'), 'occupation', '恢复隐藏后手动归属重新生效');
+    setCustomTagState([], {});
+});
+
+test('resolve：AI 输出命中已删除的内置 key/中文名 → other 而非新建同名', () => {
+    setBuiltinCatCustom({}, { occupation: true });
+    try {
+        assert.deepEqual(resolveTagCategoryTarget('occupation', []), { key: 'other', isNew: false });
+        assert.deepEqual(resolveTagCategoryTarget('身份职业', []), { key: 'other', isNew: false }, '中文名命中已删内置同样 other');
+    } finally {
+        setBuiltinCatCustom({}, {});
+    }
 });

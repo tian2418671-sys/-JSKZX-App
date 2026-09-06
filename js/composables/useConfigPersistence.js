@@ -19,6 +19,7 @@ export function useConfigPersistence({
     // —— 收集源：全局状态 ——
     tagLangMode, customCategories, removedDefaultKeys, systemCommonTags,
     customTagCategories, customTagAssignments,
+    builtinCatRenames, builtinCatHidden,
     // —— 收集源：自动打标规则表（可配置，v2.1） ——
     autoTagRules, customKeywords,
     // —— 收集源：API 配置 ——
@@ -82,7 +83,9 @@ export function useConfigPersistence({
                 lastPresetDirPath: lastPresetDirPath.value || '',
                 wbCategoryMap: JSON.parse(JSON.stringify(wbCategoryMap.value || {})),
                 customTagCategories: JSON.parse(JSON.stringify(Array.isArray(customTagCategories.value) ? customTagCategories.value : [])),
-                customTagAssignments: JSON.parse(JSON.stringify(customTagAssignments.value || {}))
+                customTagAssignments: JSON.parse(JSON.stringify(customTagAssignments.value || {})),
+                builtinCatHidden: JSON.parse(JSON.stringify(builtinCatHidden.value || {})),
+                builtinCatRenames: JSON.parse(JSON.stringify(builtinCatRenames.value || {}))
             },
             // 📥 卡片导入时间映射 { [path]: timestampMs }（「导入时间」排序持久化）
             cardImportTimes: JSON.parse(JSON.stringify(cardImportTimes.value || {}))

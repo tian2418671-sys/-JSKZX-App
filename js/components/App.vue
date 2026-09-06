@@ -517,7 +517,7 @@ import { useAITools } from '../composables/useAITools.js'; // ✨ AI 打标/翻�
 import { useTags } from '../composables/useTags.js'; // 🏷️ 标签系统（批量标签/预设标签/系统标签池/中英切换/全局标签库）组合式函数
 import { useChat } from '../composables/useChat.js'; // 💬 聊天测卡（聊天历史/发送/API 设置/模型拉取）组合式函数
 import { useSearch, extractCardSearchableText, extractCardTags } from '../composables/useSearch.js'; // 🔎 超级搜索引擎（搜索防抖/全字段过滤/分页）组合式函数
-import { classifyTagsByVector, setCustomTagState } from '../utils/tagCategories.js'; // 🏷️ 标签大分类：向量模型辅助归类 + 自定义大分类装载
+import { TAG_CATEGORIES, classifyTagsByVector, setCustomTagState, setBuiltinCatCustom, getBuiltinCategories, normalizeTagName } from '../utils/tagCategories.js'; // 🏷️ 标签大分类：向量模型辅助归类 + 自定义大分类装载 + 内置分类定制
 import { useGraph } from '../composables/useGraph.js'; // 🕸️ 关系图谱（角色宇宙关系图谱生成/渲染）组合式函数
 import { useDiskScan } from '../composables/useDiskScan.js'; // 💽 磁盘卡片扫描（全盘扫描/收编/刷新目录）组合式函数
 import { useBatch } from '../composables/useBatch.js'; // ✅ 批量操作（多选/批量导出/批量删除/批量打标）组合式函数
@@ -2040,6 +2040,19 @@ export default {
                                     }
                                     customTagAssignments.value = clean;
                                 }
+                                // 🧩 内置大分类定制（改名 / 隐藏）
+                                if (cfg.ui.builtinCatHidden && typeof cfg.ui.builtinCatHidden === 'object') {
+                                    const cleanH = {};
+                                    for (const k of Object.keys(cfg.ui.builtinCatHidden)) if (k) cleanH[k] = true;
+                                    builtinCatHidden.value = cleanH;
+                                }
+                                if (cfg.ui.builtinCatRenames && typeof cfg.ui.builtinCatRenames === 'object') {
+                                    const cleanR = {};
+                                    for (const [k, v] of Object.entries(cfg.ui.builtinCatRenames)) {
+                                        if (k && typeof v === 'string' && v.trim()) cleanR[k] = String(v).trim();
+                                    }
+                                    builtinCatRenames.value = cleanR;
+                                }
                             }
                         } finally {
                             isRestoringConfig.value = false;
@@ -2553,6 +2566,61 @@ export default {
         watch([customTagCategories, customTagAssignments], () => {
             setCustomTagState(customTagCategories.value, customTagAssignments.value);
         }, { deep: true });
+
+        // ================= 🧩 内置大分类定制（改名 / 删除=隐藏） =================
+        // 持久化于 app_config.json → ui.builtinCatRenames / ui.builtinCatHidden。
+        // key 不变仅改显示名（保持归属稳定）；删除=隐藏（可从管理区恢复），其下自动/手动归属回落 other。
+        const builtinCatRenames = ref({});   // { 内置key: 新显示名 }
+        const builtinCatHidden = ref({});    // { 内置key: true }
+        watch([builtinCatRenames, builtinCatHidden], () => {
+            setBuiltinCatCustom(builtinCatRenames.value, builtinCatHidden.value);
+        }, { deep: true });
+
+        // ✏️ 内置分类改名（key 不变）：与其他内置显示名/自定义分类名查重
+        const renameBuiltinCategory = (key, name) => {
+            const trimmed = normalizeTagName(name);
+            const tagCat = TAG_CATEGORIES.find(c => c.key === key);
+            if (!tagCat || key === 'other') { nativeAlert('无效的内置分类', 'warning'); return false; }
+            if (!trimmed) { nativeAlert('分类名称不能为空', 'warning'); return false; }
+            const clash = getBuiltinCategories().some(c => c.key !== key && c.name === trimmed);
+            const customClash = (customTagCategories.value || []).some(c => normalizeTagName(c.name) === trimmed);
+            if (clash || customClash) { nativeAlert(`已存在同名分类「${trimmed}」`, 'warning'); return false; }
+            builtinCatRenames.value = { ...builtinCatRenames.value, [key]: trimmed };
+            syncConfigToDisk();
+            return true;
+        };
+        // 🗑️ 内置分类删除(=隐藏)：确认后解除其下手动归属（回 other），并隐藏分组（可恢复）
+        const hideBuiltinCategory = async (key) => {
+            const tagCat = TAG_CATEGORIES.find(c => c.key === key);
+            if (!tagCat || key === 'other') return false;
+            const n = Object.values(customTagAssignments.value || {}).filter(v => v === key).length;
+            const ok = await confirmDialog(
+                `确认删除(隐藏)内置分类「${builtinCategoryDisplayName(key)}」？\n\n` +
+                `· 该组将从标签云/下拉中隐藏（可在本管理区恢复）\n` +
+                (n > 0 ? `· 其下手动归类的 ${n} 个标签将回归「其他」\n` : '') +
+                `· 仍可能被关键词规则/向量再次归入，命中时显示在「其他」`
+            );
+            if (!ok) return false;
+            if (n > 0) {
+                const as = { ...customTagAssignments.value };
+                for (const [t, k] of Object.entries(as)) if (k === key) delete as[t];
+                customTagAssignments.value = as;
+            }
+            builtinCatHidden.value = { ...builtinCatHidden.value, [key]: true };
+            syncConfigToDisk();
+            return true;
+        };
+        // ♻️ 恢复被删除(隐藏)的内置分类
+        const restoreBuiltinCategory = (key) => {
+            const h = { ...builtinCatHidden.value };
+            if (!h[key]) return false;
+            delete h[key];
+            builtinCatHidden.value = h;
+            syncConfigToDisk();
+            return true;
+        };
+        // 🔎 内置分类当前显示名（含改名；无改名返回原名；TAG_CATEGORIES 为模块全量常量）
+        const builtinCategoryDisplayName = (key) => builtinCatRenames.value[key] || ((TAG_CATEGORIES.find(c => c.key === key) || {}).name) || key;
 
 
         // ================= 🏷️ 自动打标规则表（v2.1 可扩展 + 用户可配置） =================
@@ -3989,6 +4057,7 @@ export default {
             appConfig,
             tagLangMode, customCategories, removedDefaultKeys, systemCommonTags,
             customTagCategories, customTagAssignments,
+            builtinCatRenames, builtinCatHidden,
             autoTagRules, customKeywords,
             apiEndpoint, apiKey, apiModel, apiType,
             theme, appSettings, sanitizeImportedTags, snapshotConfig, localCategoryMap,
@@ -4401,6 +4470,9 @@ export default {
             // 🛠️ 自定义大分类（标签云自定义分组 + 手动标签归属）
             customTagCategories, customTagAssignments,
             addCustomTagCategory, renameCustomTagCategory, removeCustomTagCategory, mergeDuplicateTagCategories, ensureUniqueCustomCategoryKeys, assignTagToCategory, assignTagsToCategory,
+            // 🧩 内置大分类定制（改名 / 删除隐藏 / 恢复）
+            builtinCatRenames, builtinCatHidden, builtinCategoryDisplayName,
+            renameBuiltinCategory, hideBuiltinCategory, restoreBuiltinCategory,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             rebindTavernPath,
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,

@@ -41,6 +41,33 @@
               </template>
             </div>
 
+            <!-- 🧩 内置大分类（可改名 / 删除=隐藏 / 恢复） -->
+            <div class="pt-2 mt-2 border-t border-zinc-800">
+              <div class="text-xs font-bold text-zinc-300 mb-1">🧩 内置大分类 <span class="text-zinc-500 font-normal">({{ builtInCats.length }}) · 可改名 / 删除</span></div>
+              <div v-for="cat in builtInCats" :key="'bi-' + cat.key"
+                   class="flex items-center gap-1.5 bg-zinc-800/40 border border-zinc-700/60 rounded px-2 py-1 mb-1 group">
+                <span class="text-sm shrink-0">{{ cat.icon }}</span>
+                <template v-if="editingBuiltinKey === cat.key">
+                  <input v-model="editingBuiltinName" @keyup.enter="confirmRenameBuiltin" @keyup.esc="editingBuiltinKey = ''" type="text"
+                         class="flex-1 min-w-0 bg-zinc-900 border border-blue-500 text-[11px] px-1.5 py-0.5 rounded outline-none text-zinc-200">
+                  <button @click="confirmRenameBuiltin" class="text-[11px] text-blue-400 hover:text-blue-300 font-bold shrink-0" title="确认">✔</button>
+                  <button @click="editingBuiltinKey = ''" class="text-[11px] text-zinc-500 hover:text-zinc-300 shrink-0" title="取消">✕</button>
+                </template>
+                <template v-else>
+                  <span class="flex-1 min-w-0 truncate text-[12px] text-zinc-300 font-medium" :title="'key: ' + cat.key">{{ cat.name }}</span>
+                  <button @click="startRenameBuiltin(cat)" class="opacity-0 group-hover:opacity-100 text-[11px] text-zinc-500 hover:text-blue-400 transition-all shrink-0" title="重命名内置分类">✏️</button>
+                  <button @click="removeBuiltin(cat)" class="opacity-0 group-hover:opacity-100 text-[11px] text-zinc-500 hover:text-red-400 transition-all shrink-0" title="删除(隐藏)内置分类，可从下方恢复">🗑️</button>
+                </template>
+              </div>
+              <div v-if="hiddenBuiltinKeys.length" class="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
+                🗑️ 已删除：
+                <span v-for="k in hiddenBuiltinKeys" :key="'hb-' + k" class="inline-flex items-center gap-1 mr-2">
+                  <span class="line-through text-zinc-500">{{ builtinNameOf(k) }}</span>
+                  <button @click="restoreBuiltin(k)" class="text-emerald-400 hover:text-emerald-300" title="恢复该内置分类">↩ 恢复</button>
+                </span>
+              </div>
+            </div>
+
             <div class="mt-auto pt-3 border-t border-zinc-800 text-[10px] text-zinc-600 leading-relaxed space-y-1">
               <div>🚀 高效批量归类流程：</div>
               <div>1️⃣ 右侧先选<b class="text-blue-400">目标分类</b>（内置/自定义皆可）</div>
@@ -149,7 +176,7 @@
 </template>
 
 <script>
-import { TAG_CATEGORIES, getTagCategory, buildTagClassificationSystemPrompt, buildTagClassificationUserPrompt, resolveTagCategoryTarget } from '../utils/tagCategories.js';
+import { getTagCategory, getBuiltinCategories, buildTagClassificationSystemPrompt, buildTagClassificationUserPrompt, resolveTagCategoryTarget } from '../utils/tagCategories.js';
 
 export default {
     name: 'TagCategoryModal',
@@ -164,6 +191,8 @@ export default {
             newCategoryName: '',
             editingKey: '',
             editingName: '',
+            editingBuiltinKey: '',   // 🧩 内置分类改名编辑态
+            editingBuiltinName: '',
             otherSearch: '',
             targetKey: '',          // 🎯 当前目标分类（批量归入对象）
             selectedTags: new Set(), // ✅ 已勾选待批量归入的「其他」标签
@@ -177,7 +206,12 @@ export default {
         ctx() { return this.appCtx; },
         customCats() { return this.ctx.customTagCategories?.value || []; },
         builtInCats() {
-            return TAG_CATEGORIES.filter(c => c.key !== 'other');
+            return getBuiltinCategories(); // 剔除用户已删除(隐藏)项 + 应用改名
+        },
+        // 🗑️ 已被删除(隐藏)的内置分类 key 列表（供恢复区展示）
+        hiddenBuiltinKeys() {
+            const h = (this.ctx && this.ctx.builtinCatHidden && this.ctx.builtinCatHidden.value) || {};
+            return Object.keys(h);
         },
         targetName() {
             if (!this.targetKey) return '';
@@ -233,6 +267,36 @@ export default {
                 `确认删除自定义分类「${cat.name}」？` + (n > 0 ? `其下 ${n} 个手动归类的标签将回归自动分类。` : '')
             );
             if (ok) this.ctx.removeCustomTagCategory(cat.key);
+        },
+
+        // === 🧩 内置大分类：改名 / 删除(隐藏) / 恢复 ===
+        startRenameBuiltin(cat) {
+            this.editingBuiltinKey = cat.key;
+            this.editingBuiltinName = cat.name;
+        },
+        confirmRenameBuiltin() {
+            if (this.ctx.renameBuiltinCategory(this.editingBuiltinKey, this.editingBuiltinName)) {
+                this.editingBuiltinKey = '';
+                this.editingBuiltinName = '';
+            }
+        },
+        async removeBuiltin(cat) {
+            if (await this.ctx.hideBuiltinCategory(cat.key)) {
+                if (this.ctx.showToast) this.ctx.showToast(`已删除内置分类「${cat.name}」（可随时恢复）`, 'success');
+            }
+        },
+        async restoreBuiltin(key) {
+            const ok = this.ctx.restoreBuiltinCategory(key);
+            if (ok && this.ctx.showToast) {
+                const name = this.ctx.builtinCategoryDisplayName ? this.ctx.builtinCategoryDisplayName(key) : key;
+                this.ctx.showToast(`已恢复内置分类「${name}」`, 'success');
+            }
+        },
+        // 内置分类显示名（含改名；已删除项用于恢复区展示原名/改名）
+        builtinNameOf(key) {
+            return (this.ctx && typeof this.ctx.builtinCategoryDisplayName === 'function')
+                ? this.ctx.builtinCategoryDisplayName(key)
+                : key;
         },
         countOf(key) {
             const assignments = this.ctx.customTagAssignments?.value || {};
