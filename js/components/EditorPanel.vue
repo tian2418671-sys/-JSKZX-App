@@ -4,7 +4,7 @@
       ref="chatContainer" 写回父级 ref（sendMessage 滚动依赖）
 -->
 <template>
-    <main class="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
+    <main v-show="appMode !== 'plugins'" class="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
 
         <!-- 🎴 引擎 A：角色卡编辑工作区 -->
         <div v-show="appMode === 'characters'" class="flex-1 flex flex-col overflow-hidden min-h-0">

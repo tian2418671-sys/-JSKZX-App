@@ -26,6 +26,9 @@
 
             <!-- 【右侧】编辑器面板（子组件 EditorPanel） -->
             <editor-panel />
+
+            <!-- 【右侧】插件工作区（子组件 PluginWorkspace，appMode === 'plugins' 时显示） -->
+            <plugin-workspace />
         </div>
 
         <!-- ================= [ 弹窗：单卡添加标签（子组件 SingleTagModal） ] ================= -->
@@ -495,6 +498,7 @@ import AutoTagRulesModal from './AutoTagRulesModal.vue'; // 📝 自动打标规
 import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
+import PluginWorkspace from './PluginWorkspace.vue'; // 🧩 插件工作区（代码/效果双卡 + 沙箱效果预览）
 import SnapshotModal from './SnapshotModal.vue'; // 📸 历史快照列表与一键恢复弹窗
 import PushModal from './PushModal.vue'; // 🚀 推送目标选择与执行对话框
 import { processFile, extractBookEntries, compileAutoTagRules, defaultAutoTagRules } from '../utils/cardLoader.js';
@@ -510,6 +514,7 @@ import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色�
 import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
 import { usePresets } from '../composables/usePresets.js'; // ⚙️ 酒馆预设管理功能
+import { usePlugins } from '../composables/usePlugins.js'; // 🧩 酒馆插件管理功能
 import { useWorldbookEntries } from '../composables/useWorldbookEntries.js'; // 📚 世界书词条深度编辑（Entry IDE）组合式函数
 import { useGlobalEntrySearch } from '../composables/useGlobalEntrySearch.js'; // 🔎 全库词条搜索与反向引用组合式函数
 import { useWorldbookExtras } from '../composables/useWorldbookExtras.js'; // 📤 世界书扩展：提取/JSONL导入/批量导出/快照/统计
@@ -546,7 +551,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, OptionSelectModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, PresetDedupeModal, ContentDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, AutoTagRulesModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal, PushModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, OptionSelectModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, PresetDedupeModal, ContentDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, AutoTagRulesModal, HeaderBar, SidebarPanel, EditorPanel, PluginWorkspace, SnapshotModal, PushModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -2201,6 +2206,17 @@ export default {
                     }
                 })());
             }
+            if (lastPluginDirPath.value) {
+                _secondaryLoads.push((async () => {
+                    try {
+                        await scanPluginDir(lastPluginDirPath.value);
+                        _stage('插件扫描');
+                        addLog(`📂 自动记忆载入插件目录: ${lastPluginDirPath.value}`);
+                    } catch (err) {
+                        console.warn('自动加载插件目录失败', err);
+                    }
+                })());
+            }
             if (_secondaryLoads.length > 0) {
                 await Promise.all(_secondaryLoads);
             }
@@ -3007,7 +3023,7 @@ export default {
         // 🌍 世界书管理器状态与逻辑（独立于角色卡库，主视图双引擎模式）
         // =========================================================
 
-        // 视图切换模式：'characters' (角色卡) | 'worldbooks' (世界书) | 'presets' (预设)
+        // 视图切换模式：'characters' (角色卡) | 'worldbooks' (世界书) | 'presets' (预设) | 'plugins' (插件)
         const appMode = ref('characters');
 
         const worldbooks = shallowRef([]);   // 🚀 shallowRef：世界书 entries 深层 Proxy 化导致崩溃
@@ -3024,6 +3040,17 @@ export default {
         const lastPresetDirPath = ref((() => {
             try { return localStorage.getItem('jsTavern_lastPresetDir') || ''; } catch (e) { return ''; }
         })());
+
+        // 🧩 插件管理状态
+        const plugins = ref([]);             // 插件列表（统一归一化模型）
+        const activePlugin = ref(null);      // 当前正在查看的插件
+        const lastPluginDirPath = ref((() => {
+            try { return localStorage.getItem('jsTavern_lastPluginDir') || ''; } catch (e) { return ''; }
+        })());
+        // 🧩 插件工作区共享状态（供侧边栏树状子条目联动 → 代码页选中文件）
+        const pluginTab = ref('code');           // 插件工作区当前选项卡（code / effect）
+        const pluginSelectedFile = ref(null);    // 代码页当前选中文件 { abs, rel, icon }
+        const pluginSelectedSource = ref('');    // 代码页当前选中文件源码文本
 
         // =========================================================
         // 📟 全局终端控制台与日志状态（角色卡/世界书双模式共用）
@@ -4306,6 +4333,18 @@ export default {
             contextMenu, closeContextMenu, appMode
         });
 
+        // 🧩 插件管理：组合式函数注入
+        const {
+            pluginSearchQuery,
+            loadPlugins, scanPluginDir, filteredPlugins,
+            deletePlugin,
+            openPluginContextMenu, openPluginInFolder, readPluginSource
+        } = usePlugins({
+            plugins, activePlugin, lastPluginDirPath,
+            nativeAlert, confirmDialog, addLog, appPrompt,
+            contextMenu, closeContextMenu, appMode
+        });
+
         // ✨ AI 打标 / 翻译 / 格式升维：组合式函数注入（共享状态与 API 配置保留在 App.vue）
         const {
             showAITagModal, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
@@ -4504,6 +4543,13 @@ export default {
             saveActivePreset, renamePreset, deletePreset, duplicatePreset,
             openPresetContextMenu, openPresetInFolder, importPresetFromUrl, exportPresetsBatch,
             listPresetSnapshots, restorePresetSnapshot, deletePresetSnapshot,
+            // 🧩 插件管理
+            plugins, activePlugin, lastPluginDirPath,
+            pluginSearchQuery,
+            loadPlugins, scanPluginDir, filteredPlugins,
+            deletePlugin,
+            openPluginContextMenu, openPluginInFolder, readPluginSource,
+            pluginTab, pluginSelectedFile, pluginSelectedSource,
             // 🌍 世界书网址导入与重命名
             importUrl, isImportingWb, importWorldbookFromUrl, renameWorldbook,
             // 🌍 世界书文件夹导入 + 删除/克隆 + 专属右键菜单

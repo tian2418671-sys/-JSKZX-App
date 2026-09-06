@@ -847,12 +847,24 @@ function createWindow() {
   // Electron 43 起 console-message 改为事件对象传参，兼容新旧两种签名
   win.webContents.on('console-message', (e, levelOrEvent, message) => {
     let level = levelOrEvent, msg = message;
+    let lineNumber = '', sourceId = '', frameInfo = '';
     if (levelOrEvent && typeof levelOrEvent === 'object') {
       level = levelOrEvent.level;
       msg = levelOrEvent.message;
+      lineNumber = levelOrEvent.lineNumber || '';
+      sourceId = levelOrEvent.sourceId || '';
+      // frame 标识消息来自哪个 frame（主 frame vs iframe srcdoc 子 frame）
+      try {
+        if (levelOrEvent.frame) {
+          const f = levelOrEvent.frame;
+          const src = (f.url || f.getURL ? (f.url || '') : '');
+          frameInfo = `[frame:${src ? src.slice(-80) : 'main'}]`;
+        }
+      } catch (err) { frameInfo = '[frame:?]'; }
     }
     const tag = ['VERBOSE', 'INFO', 'WARN', 'ERROR'][level] || 'LOG';
-    console.log(`[renderer:${tag}] ${msg}`);
+    const loc = lineNumber !== '' ? ` (${sourceId}:${lineNumber})` : '';
+    console.log(`[renderer:${tag}]${frameInfo}${loc} ${msg}`);
   });
   win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
     console.error(`[renderer] 页面加载失败: ${errorCode} ${errorDescription} ${validatedURL}`);
@@ -887,6 +899,7 @@ const MIN_CARD_FILE_SIZE = 40960;
 // 🔢 魔法数字常量化（代码审查修复 9）：集中定义散落的大小上限 / 批次 / 进度 / 缺省值
 const MAX_URL_DOWNLOAD_BYTES = 20 * 1024 * 1024; // 角色卡 URL 下载上限
 const MAX_WB_FETCH_BYTES     = 50 * 1024 * 1024; // 世界书 URL 拉取上限
+const MAX_PLUGIN_SCRIPT_BYTES   = 2 * 1024 * 1024;  // 🧩 单个插件脚本读取上限（超大文件跳过）
 const SCAN_FILE_BATCH        = 64;               // 扫描文件批并发
 const SCAN_PROGRESS_STEP     = 100;              // 每 N 个文件上报一次进度
 const CHAT_DEFAULT_MAX_TOKENS = 4096;            // OpenAI/Anthropic 缺省 max_tokens
@@ -2969,6 +2982,179 @@ app.whenReady().then(() => {
         count++;
       }
       return { success: true, count, outDir };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==========================================
+  // 🧩 插件 (Plugin) 专属物理文件接口
+  // ==========================================
+
+  // 智能校验：是否为「酒馆助手 JSON 脚本」（content 为注入 JS 字符串 + 可选 buttons）
+  function isValidPluginJson(pData) {
+    if (!pData || typeof pData !== 'object') return false;
+    if (typeof pData.content !== 'string') return false;
+    // 排除角色卡 / 世界书 / 预设
+    if (pData.spec === 'chara_card_v2' || pData.spec === 'chara_card_v3') return false;
+    if (pData.entries) return false;
+    if (['prompts', 'prompt_order', 'temperature', 'max_tokens'].some(k => k in pData)) return false;
+    // 至少要有 name / id / buttons 之一，才算插件脚本
+    return !!(pData.name || pData.id || Array.isArray(pData.buttons));
+  }
+
+  // 校验扩展工程 manifest.json。兼容三种 SillyTavern 扩展格式：
+  //   ① 原生扩展：manifest_version 字段
+  //   ② 原生扩展：extensions[] 数组
+  //   ③ 独立扩展（st-yuzi-phone 等）：display_name + js/css 入口（js 或 css 至少其一）
+  function isValidExtensionManifest(mData) {
+    if (!mData || typeof mData !== 'object') return false;
+    if (mData.manifest_version !== undefined) return true;
+    if (Array.isArray(mData.extensions) && mData.extensions.length > 0) return true;
+    if (typeof mData.display_name === 'string' && mData.display_name.trim()) {
+      if (typeof mData.js === 'string' && mData.js.trim()) return true;
+      if (typeof mData.css === 'string' && mData.css.trim()) return true;
+    }
+    return false;
+  }
+
+  // 递归收集某扩展工程根目录下的文件树（js/css/json/html 等文本资源；跳过黑名单目录）
+  function collectExtensionFiles(rootDir) {
+    const files = [];
+    const walk = (dir) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (skipFolders.includes(entry.name.toLowerCase())) continue;
+          walk(full);
+        } else if (entry.isFile()) {
+          files.push(full);
+        }
+      }
+    };
+    walk(rootDir);
+    return files;
+  }
+
+  // 扫描插件目录：识别三类形态 —— 酒馆助手 JSON 脚本 / 散落 JS 脚本 / 扩展工程（含 manifest.json 的目录）
+  ipcMain.handle('plugin:scan', async (event, dirPath) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) {
+        return { success: false, error: '目录不存在: ' + dirPath };
+      }
+      if (!isPathAllowed(dirPath)) {
+        let hasFingerprint = false;
+        try {
+          const names = fs.readdirSync(dirPath).slice(0, 200);
+          for (const n of names) {
+            const full = path.join(dirPath, n);
+            try {
+              const st = fs.statSync(full);
+              if (st.isFile() && n.toLowerCase().endsWith('.json')) {
+                try { if (isValidPluginJson(JSON.parse(fs.readFileSync(full, 'utf-8')))) { hasFingerprint = true; break; } } catch (e) { /* 继续 */ }
+              }
+            } catch (e) { /* 继续 */ }
+          }
+        } catch (e) { /* 目录不可读按无指纹处理 */ }
+        if (!hasFingerprint) {
+          return { success: false, error: '该目录不含有效插件文件，或目录来源未经验证，已拒绝授权。请通过「打开插件目录」按钮重新选择。' };
+        }
+        addAllowedRoot(dirPath);
+      }
+
+      const results = [];
+      const visitedDirs = new Set();
+      const walk = async (dir, depth = 0) => {
+        let realDir;
+        try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+        if (visitedDirs.has(realDir)) return;
+        visitedDirs.add(realDir);
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+        // ③ 扩展工程优先：含 manifest.json 的目录整目录作为一个插件，
+        //    直接收录后 return（不再递归内部子目录），否则 dist/index.js、
+        //    eslint.config.mjs、lib/*.js、tsconfig*.json 等工程文件会被误识别成
+        //    独立散落脚本，导致「一个扩展裂变成五六个插件条目」。
+        const hasManifest = entries.some(e => e.isFile() && e.name.toLowerCase() === 'manifest.json');
+        if (hasManifest) {
+          try {
+            const mPath = path.join(dir, 'manifest.json');
+            const mData = JSON.parse(await fs.promises.readFile(mPath, 'utf-8'));
+            if (isValidExtensionManifest(mData)) {
+              const files = collectExtensionFiles(dir).filter(f => {
+                const fext = path.extname(f).toLowerCase();
+                return ['.js', '.mjs', '.css', '.json', '.html', '.svg'].includes(fext);
+              });
+              results.push({ type: 'extension', root: dir, name: path.basename(dir), manifest: mData, files });
+              return; // 扩展工程整目录收录完毕，不再递归内部
+            }
+          } catch (e) { /* 跳过损坏 manifest，按普通目录继续扫描 */ }
+        }
+
+        const dirs = [];
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue;
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (skipFolders.includes(entry.name.toLowerCase())) continue;
+            dirs.push(fullPath);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          const ext = path.extname(entry.name).toLowerCase();
+
+          // ① 酒馆助手 JSON 脚本：目录下任意 .json，含 content JS 字符串
+          if (ext === '.json') {
+            try {
+              const st = await fs.promises.stat(fullPath);
+              if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return;
+              const pData = JSON.parse(await fs.promises.readFile(fullPath, 'utf-8'));
+              if (isValidPluginJson(pData)) {
+                results.push({ type: 'json', path: fullPath, name: path.basename(fullPath), data: pData });
+              }
+            } catch (e) { /* 静默跳过非插件 JSON */ }
+            continue;
+          }
+
+          // ② 散落 JS 脚本：顶层/次层 .js/.mjs（含 userscript / SlashRunner 命令）
+          if (ext === '.js' || ext === '.mjs') {
+            // 跳过扩展工程内部文件（其 manifest 已整体收录），仅散落脚本走单文件识别
+            if (depth <= 1) {
+              try {
+                const st = await fs.promises.stat(fullPath);
+                if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return;
+                const content = await fs.promises.readFile(fullPath, 'utf-8');
+                results.push({ type: 'script', path: fullPath, name: path.basename(fullPath), content });
+              } catch (e) { /* 跳过不可读文件 */ }
+            }
+            continue;
+          }
+        }
+        if (depth >= 4) return; // 深度剪枝：插件工程多在 1~3 层内
+        for (const d of dirs) await walk(d, depth + 1);
+      };
+      await walk(dirPath);
+      return { success: true, data: results };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 读取扩展工程某个文本资源内容（供工作区「代码」页展示源码；白名单校验 + 文本类型限制）
+  ipcMain.handle('plugin:readFile', async (event, filePath) => {
+    try {
+      if (!filePath || !isPathAllowed(filePath)) return forbidden();
+      const ext = path.extname(filePath).toLowerCase();
+      if (!['.js', '.mjs', '.css', '.json', '.html', '.svg'].includes(ext)) {
+        return { success: false, error: '仅支持读取文本类资源（js/mjs/css/json/html/svg）。' };
+      }
+      const st = await fs.promises.stat(filePath);
+      if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return { success: false, error: '文件过大，已跳过读取。' };
+      const content = await fs.promises.readFile(filePath, 'utf-8');
+      return { success: true, data: content };
     } catch (err) {
       return { success: false, error: err.message };
     }

@@ -130,6 +130,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deletePresetSnapshot: (snapshotPath) => ipcRenderer.invoke('preset:deleteSnapshot', snapshotPath),
     // ⚙️ 预设专属通道：批量导出已落盘预设
     exportPresetsBatch: (filePaths) => ipcRenderer.invoke('preset:exportBatch', filePaths),
+    // 🧩 插件专属通道：扫描目录下的插件（酒馆助手 JSON 脚本 / 散落脚本 / 扩展工程）
+    scanPlugins: (dirPath) => ipcRenderer.invoke('plugin:scan', dirPath),
+    // 🧩 插件专属通道：读取扩展工程文本资源源码
+    readPluginFile: (filePath) => ipcRenderer.invoke('plugin:readFile', filePath),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
     trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
     // 🗑️ 打开全局回收站（世界书删除/查重清洗的 userData/jsTavern_Trash）

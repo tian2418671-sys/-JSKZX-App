@@ -1,7 +1,52 @@
-# SillyTavern 角色卡管理器 · v1.6.2 → v2.2.0 更新汇总
+# SillyTavern 角色卡管理器 · v1.6.2 → v2.2.3 更新汇总
 
-> 更新周期：2026-08-15 ~ 2026-09-04
+> 更新周期：2026-08-15 ~ 2026-09-07
 > 技术栈：Electron + Vue3 + Tailwind + ECharts
+
+---
+
+## 🧩 v2.2.3 —— 插件工作区 + 内置大分类定制 + 效果页渲染修复
+
+> 背景：新增「插件」Tab，支持把 SillyTavern 插件（酒馆助手 JSON 脚本 / 用户脚本 / SlashRunner 命令 / 扩展工程）纳入工具统一管理，并在工具内模拟酒馆运行、预览插件效果，无需导入真实酒馆。同时开放内置 18 大分类的自定义（改名/删除/恢复），并修复「效果」页沙箱预览的渲染失败问题。
+
+### 🧩 侧边栏新增「插件」Tab
+- 预设 Tab 后新增「🧩 插件」Tab（violet 配色），计数徽标实时显示插件数
+- 接入方式：`📂 打开插件目录`（本地扫描）；原「Git 仓库链接导入」已剥离封存（详见 `docs/history/git-import-archive.md`）
+- 插件列表：类型徽标（酒馆助手/用户脚本/命令/扩展）、来源标注、简介摘要、右键菜单（定位/删除）
+
+### 🧬 插件形态归一（`js/utils/pluginScanner.js` 纯逻辑，可单测）
+- 识别四类来源：酒馆助手 JSON 脚本（`{id,name,info,content,buttons[]}`）、带 `==UserScript==` 头的注入脚本、`SlashRunner.registerCommand` 命令脚本、扩展工程（`manifest.json` + `dist/*.bundle.js`）
+- 内容形态判别 `detectScriptKind`：A=jQuery 注入 / B=userscript 头 / C=SlashRunner 命令
+- `manifest.json` 入口解析 `resolveManifestEntries`：兼容 `entry/main/js/index/css` 与原生 `extensions[]` 多字段命名
+- 预览资源挑选 `resolvePreviewAssets`：从文件树去重挑出 js/css
+- 新增 9 组单测（detectScriptKind / isPluginJson / isExtensionManifest / normalize* / resolve* 等），全量 90 用例绿
+
+### 📄 / ✨ 工作区双选项卡（`js/components/PluginWorkspace.vue`）
+- `📄 代码`：散落脚本/酒馆助手直出源码；扩展工程展示文件树 + 源码只读查看器
+- `✨ 效果`：沙箱 iframe（`sandbox="allow-scripts"`，无 `allow-same-origin`）内模拟酒馆运行，渲染插件注入的悬浮球/按钮/面板
+
+### 🧪 酒馆宿主桩（`js/plugins/hostStub.js`）
+- 迷你 jQuery 兼容层（`$`/`jQuery` 的 DOM 增删查改、事件、ajax stub）
+- `eventSource` / `SlashRunner` / `extension_settings` / `saveSettingsDebounced` 等常用全局 stub
+- `GM_*` userscript 空实现 + 内存 localStorage（data: URL 沙箱下原生 localStorage 不可用）
+- 宿主 DOM 骨架（`#chat` / `#options` / `#right-nav-panel`），达基线「悬浮球出现 → 点击弹面板」
+
+### 🔒 安全与 IPC（`main.js` / `preload.js`）
+- 新增 `plugin:scan` / `plugin:readFile` 两个 IPC
+- 路径白名单校验（`isPathAllowed`）、文本类型限制、脚本 2MB 体积上限
+
+### 🔄 启停与记忆
+- `localStorage` 记忆上次插件目录，启动自动静默恢复扫描
+
+### 🛠️ 内置 18 大分类自定义（改名 / 删除(隐藏) / 恢复）
+- `tagCategories.js` / `TagCategoryModal.vue`：内置大分类开放改名、删除（=隐藏，非物理删）、一键恢复默认
+- `useConfigPersistence.js`：内置分类定制持久化（`app_config.json`），重启不丢
+- 新增独立 Electron CDP 端到端脚本 `scripts/builtin-cat-test.mjs`（改名/删除/恢复/清理全链路）
+
+### 🔧 效果页沙箱预览渲染修复（`Unexpected token ':'` 根因消除）
+- **路径分隔符匹配 bug**（`pluginScanner.js`）：`manifest.js` 声明正斜杠 `dist/index.js`，而 `collectExtensionFiles` 生成反斜杠路径，`endsWith` 失配 → bundle 读不到、回退相对路径。统一 `/` 归一后再比较
+- **宿主桩补齐全局 API**（`hostStub.js`）：`getPresetManager` / `reloadMarkdownProcessor` / `characters`（数组） / `#send_form` 节点——消除扩展 bundle 顶层立即执行时的运行时崩溃
+- 三种插件形态（真实扩展 bundle / 样例 bundle / SlashRunner 散落脚本）经独立 Electron 复现全部 0 错误、正常渲染
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **本文件是 JSK管理 项目给新接手 AI 的唯一入口。**
 > 只需按顺序读完本文件 + 合并指导文件，即可无缝续写本项目。
-> 最后更新：2026-09-04
+> 最后更新：2026-09-07
 
 ---
 
@@ -26,7 +26,7 @@
 |---|---|
 | 项目 | SillyTavern（酒馆）角色卡本地管理桌面工具（Electron + Vue 3） |
 | 仓库 | `https://github.com/tian2418671-sys/JSKZX.git`（远端 `origin`） |
-| 当前版本 | **v2.2.1**（已发布：GitHub Release + OTA） |
+| 当前版本 | **v2.2.3**（已发布：GitHub Release + OTA） |
 | 当前分支 | 本地 `master`（2026-08-29 已与 origin 同步） |
 | 构建产物 | `dist/sillytavern-card-manager-<版本>.exe` + `latest.yml` + `.blockmap` + zip 绿色版 |
 

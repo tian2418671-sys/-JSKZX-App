@@ -27,6 +27,11 @@
                     class="flex-1 py-1.5 text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 overflow-hidden">
                 ⚙️ 预设 <span class="opacity-70 font-normal shrink-0">({{ presets.length }})</span>
             </button>
+            <button @click="appMode = 'plugins'"
+                    :class="appMode === 'plugins' ? 'bg-violet-600 text-white shadow-md shadow-violet-900/30' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'"
+                    class="flex-1 py-1.5 text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 overflow-hidden">
+                🧩 插件 <span class="opacity-70 font-normal shrink-0">({{ plugins.length }})</span>
+            </button>
         </div>
 
         <!-- ============ 角色卡模式 ============ -->
@@ -539,6 +544,64 @@
             </div>
         </template>
 
+        <!-- ============ 🧩 插件模式 ============ -->
+        <template v-if="appMode === 'plugins'">
+            <div class="px-3 pt-2.5 pb-2 border-b border-zinc-800 bg-zinc-900 flex flex-col gap-2 shrink-0 z-10">
+                <div class="relative">
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">🔍</span>
+                    <input v-model="pluginSearchQuery" type="text" placeholder="搜索插件名称/简介/类型..."
+                           class="w-full h-8 bg-zinc-800/80 border border-zinc-700/60 rounded-lg pl-8 pr-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-violet-500/80 transition">
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <button @click="loadPlugins" class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 bg-zinc-800 hover:bg-violet-600 text-zinc-200 text-xs rounded border border-zinc-700/60 transition">
+                        📂 打开插件目录
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
+                <!-- 🧩 插件树：总条目（插件）→ 子条目（内部文件，可展开/收起） -->
+                <div v-for="(plugin, index) in filteredPlugins" :key="plugin.id || index"
+                     class="rounded-lg border transition flex flex-col overflow-hidden"
+                     :class="activePlugin && activePlugin.id === plugin.id ? 'border-violet-500/50 bg-violet-600/10' : 'border-zinc-700/50 bg-zinc-800/50'">
+
+                    <!-- 总条目：插件本体 -->
+                    <div class="flex items-center gap-1.5 px-2.5 py-2 cursor-pointer hover:bg-zinc-700/60"
+                         @click="activatePluginNode(plugin)"
+                         @contextmenu.prevent="openPluginContextMenu($event, plugin)">
+                        <button @click.stop="togglePluginExpand(plugin)"
+                                :title="isPluginExpanded(plugin) ? '收起子条目' : '展开子条目'"
+                                class="w-4 h-4 shrink-0 flex items-center justify-center text-[9px] text-zinc-500 hover:text-zinc-200 rounded transition">
+                            <svg v-if="isPluginExpanded(plugin)" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                            <svg v-else class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <span class="flex-1 text-xs font-bold text-zinc-200 truncate">{{ plugin.name }}</span>
+                        <span class="px-1.5 py-0.5 text-[9px] font-bold rounded bg-violet-500/10 text-violet-300 border border-violet-500/30 whitespace-nowrap shrink-0">{{ pluginKindLabel(plugin) }}</span>
+                        <button @click.stop="deletePlugin(plugin)" title="移入回收站" class="px-1.5 py-0.5 text-[10px] bg-zinc-700/50 hover:bg-rose-600 text-zinc-300 hover:text-white rounded shrink-0">🗑️</button>
+                    </div>
+
+                    <!-- 子条目：插件内部文件（扩展工程=文件树；脚本=单条 content） -->
+                    <div v-if="isPluginExpanded(plugin)" class="border-t border-zinc-700/40 bg-zinc-900/40">
+                        <div v-for="(node, ni) in pluginChildNodes(plugin)" :key="ni"
+                             @click="activatePluginChild(plugin, node)"
+                             :class="isChildActive(plugin, node) ? 'bg-violet-600/25 text-violet-100 border-violet-500/40' : 'text-zinc-400 hover:bg-zinc-800 border-transparent'"
+                             class="flex items-center gap-1.5 pl-8 pr-2 py-1.5 text-[11px] font-mono cursor-pointer border-l-2 transition truncate"
+                             :title="node.title || node.rel || node.label">
+                            <span class="shrink-0">{{ node.icon || '📄' }}</span>
+                            <span class="truncate">{{ node.label || node.rel }}</span>
+                        </div>
+                        <div v-if="pluginChildNodes(plugin).length === 0" class="px-3 py-2 text-[10px] text-zinc-600">（无可展开文件）</div>
+                    </div>
+                </div>
+
+                <div v-if="plugins.length === 0" class="flex flex-col items-center justify-center h-full text-zinc-500 text-xs text-center p-4 gap-3">
+                    <span>尚未加载任何插件。<br>请选择酒馆的插件/扩展目录。</span>
+                    <button @click="loadPlugins" class="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded shadow transition">📂 打开插件文件夹</button>
+                </div>
+                <div v-else-if="filteredPlugins.length === 0" class="text-center py-8 text-zinc-500 text-xs">🔍 没有匹配的插件</div>
+            </div>
+        </template>
+
     </aside>
 
     <!-- 📏 侧边栏拖拽调节把手 -->
@@ -603,6 +666,81 @@ export default {
             }, 0);
         };
 
+        // 🧩 插件类型徽标文案
+        const pluginKindLabel = (plugin) => {
+            if (!plugin) return '';
+            if (plugin.kind === 'extension') return '扩展';
+            if (plugin.kind === 'slash') return '命令';
+            if (plugin.kind === 'userscript') return '用户脚本';
+            return '酒馆助手';
+        };
+
+        // 🧩 插件树状结构：展开状态（默认全部收起，点击总条目展开）
+        const pluginExpanded = ref({});
+        const isPluginExpanded = (plugin) => !!pluginExpanded.value[plugin.id];
+        const togglePluginExpand = (plugin) => {
+            pluginExpanded.value = { ...pluginExpanded.value, [plugin.id]: !pluginExpanded.value[plugin.id] };
+        };
+
+        // 生成子条目：扩展工程 = 文件树（相对路径 + 图标）；脚本 = 单条 content
+        const pluginChildNodes = (plugin) => {
+            if (!plugin) return [];
+            if (plugin.kind === 'extension') {
+                const root = (plugin.source && plugin.source.origin) || '';
+                return (plugin.files || []).map(abs => {
+                    let rel = abs;
+                    if (root && abs.startsWith(root)) rel = abs.slice(root.length).replace(/^[/\\]+/, '');
+                    const ext = rel.slice(rel.lastIndexOf('.') + 1).toLowerCase();
+                    const icon = ext === 'js' || ext === 'mjs' ? '🟨' : ext === 'css' ? '🎨' : ext === 'json' ? '📄' : ext === 'html' ? '🌐' : '📃';
+                    return { abs, rel, icon, label: rel, title: abs };
+                }).sort((a, b) => a.rel.localeCompare(b.rel));
+            }
+            return (plugin.scripts || []).map(s => ({
+                abs: s.file,
+                rel: s.file,
+                icon: '📜',
+                label: s.file,
+                title: s.file
+            }));
+        };
+
+        // 子条目是否激活：扩展工程比较文件绝对路径；脚本比较文件路径
+        const isChildActive = (plugin, node) => {
+            const sel = ctx.pluginSelectedFile?.value;
+            if (!sel) return false;
+            return sel.abs === node.abs || sel.rel === node.rel;
+        };
+
+        // 点击总条目：激活插件；若切换到不同插件则清空选中文件（避免残留上一插件源码）
+        const activatePluginNode = (plugin) => {
+            const prev = ctx.activePlugin.value;
+            ctx.activePlugin.value = plugin;
+            if (!prev || prev.id !== plugin.id) {
+                if (ctx.pluginSelectedFile) ctx.pluginSelectedFile.value = null;
+                if (ctx.pluginSelectedSource) ctx.pluginSelectedSource.value = '';
+            }
+        };
+
+        // 点击子条目：激活插件 + 切到代码页 + 选中对应文件（扩展工程读源码；脚本直出 content）
+        const activatePluginChild = async (plugin, node) => {
+            ctx.activePlugin.value = plugin;
+            if (plugin.kind === 'extension') {
+                if (ctx.pluginTab) ctx.pluginTab.value = 'code';
+                if (ctx.pluginSelectedFile) ctx.pluginSelectedFile.value = node;
+                if (ctx.pluginSelectedSource) ctx.pluginSelectedSource.value = '读取中…';
+                try {
+                    const res = await window.electronAPI.readPluginFile(node.abs);
+                    ctx.pluginSelectedSource.value = res && res.success ? res.data : ((res && res.error) || '读取失败');
+                } catch (e) {
+                    ctx.pluginSelectedSource.value = '读取失败: ' + e.message;
+                }
+            } else {
+                // 脚本插件：子条目为单条 content，无独立文件可读，直接切到代码页即可
+                if (ctx.pluginTab) ctx.pluginTab.value = 'code';
+                if (ctx.pluginSelectedFile) ctx.pluginSelectedFile.value = node;
+            }
+        };
+
         return {
             showAdvancedFilters,
             hasActiveFilters,
@@ -632,6 +770,22 @@ export default {
             deletePreset: ctx.deletePreset,
             openPresetContextMenu: ctx.openPresetContextMenu,
             openPresetInFolder: ctx.openPresetInFolder,
+            plugins: ctx.plugins,
+            activePlugin: ctx.activePlugin,
+            pluginSearchQuery: ctx.pluginSearchQuery,
+            filteredPlugins: ctx.filteredPlugins,
+            loadPlugins: ctx.loadPlugins,
+            deletePlugin: ctx.deletePlugin,
+            openPluginContextMenu: ctx.openPluginContextMenu,
+            openPluginInFolder: ctx.openPluginInFolder,
+            pluginKindLabel,
+            pluginExpanded,
+            isPluginExpanded,
+            togglePluginExpand,
+            pluginChildNodes,
+            isChildActive,
+            activatePluginNode,
+            activatePluginChild,
             currentCategoryKey: ctx.currentCategoryKey,
             allCategories: ctx.allCategories,
             customCategories: ctx.customCategories,
