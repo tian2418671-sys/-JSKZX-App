@@ -167,13 +167,16 @@ test('自动规则：未知分组名不设分类（保持未分类）', () => {
     assert.equal(card.category, '未分类', '未知分组不设分类');
 });
 
-test('自动规则：sanitizeImportedTags 开启时不带入原生 tags', () => {
+test('自动规则：sanitizeImportedTags 开启时不带入原生 tags，规则只定分类不贴标签', () => {
     const m = makeMock();
     m.sanitizeImportedTags.value = true;
     const card = makeCard({ data: { data: { name: '测试卡', description: '魔法', tags: ['他人杂标签'] } } });
     m.crud.processAutoTagsAndCategory(card);
     assert.ok(!card.customTags.includes('他人杂标签'), '开启净化时不带入原生 tags');
-    assert.ok(card.customTags.includes('Fantasy (奇幻)'), '自动规则标签照常生成');
+    // 开关契约：开启后仅保留自动分类结果（见 App.vue 导入数据清洗开关注释），
+    // 自动规则只承担分类，不再把规则标签贴到新导入的卡片上。
+    assert.deepEqual(card.customTags, [], '开启净化时自动规则不再贴标签');
+    assert.equal(card.category, 'Fantasy', '自动规则仍承担分类');
     // v2.1.4：物理清洗——原生 data.tags 必须被清空（防保存写回 PNG / 关闭开关复活）
     assert.deepEqual(card.data.data.tags, [], '开启净化时原生 data.tags 应被物理清空');
 });

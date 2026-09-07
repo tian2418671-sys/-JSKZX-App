@@ -178,6 +178,14 @@ export function useCardCrud({
 
     // 自动分类与贴标签的核心逻辑
     const processAutoTagsAndCategory = (cardInfo) => {
+        // 🧹 导入数据清洗开关：先于所有分支【物理清除】卡片原生 data.tags ——
+        //    旧实现只在自动规则兜底分支清空，subFolder/覆盖层/历史配置/localCategoryMap
+        //    四条提前 return 会把外来标签带过去，残留内存与磁盘文件（开关形同虚设）。
+        if (sanitizeImportedTags.value) {
+            const nativeLayer = cardInfo.data?.data || cardInfo.data || {};
+            if (Array.isArray(nativeLayer.tags)) nativeLayer.tags = [];
+            else if (typeof nativeLayer.tags === 'string') nativeLayer.tags = '';
+        }
         // 📁 物理文件夹分组优先：卡片位于库目录的子文件夹时，其一级文件夹名即为分组
         // （文件系统位置是事实依据，重扫/重命名/移动后保持一致）
         if (cardInfo.subFolder) {
@@ -236,31 +244,27 @@ export function useCardCrud({
 
         // 提取所有文本用于分析
         const fullText = [data.description, data.personality, data.scenario, data.first_mes].join('\n');
-        // 🧹 导入数据清洗开关：开启时忽略卡片自带的原生 tags（防止他人卡片的杂乱标签混入全局标签池）
+        // 🧹 导入数据清洗开关：开启时忽略卡片自带的原生 tags（防止他人卡片的杂乱标签混入全局标签池）。
+        //    原生 data.tags 的物理清除已上移到函数入口统一执行，此处不再重复。
         let generatedTags = sanitizeImportedTags.value ? [] : [...(data.tags || [])];
-        // 🔧 修复 v2.1.4：开关开启时【物理清除】卡片原生 data.tags——
-        //    旧实现只过滤显示/搜索层，data.tags 仍保留并随保存写回 PNG，
-        //    导致外来卡标签在关闭开关后复活 / 保存后仍留在卡片文件里，
-        //    用户看到开关“形同虚设”。现在导入即彻底丢弃。
-        if (sanitizeImportedTags.value) {
-            if (Array.isArray(data.tags)) data.tags = [];
-            else if (typeof data.tags === 'string') data.tags = '';
-        }
         let assignedCategory = '未分类';
 
-        // 匹配自动标签
+        // 匹配自动规则：开关开启时只承担【自动分类】，不再把规则标签贴到卡片上
+        // （开关契约：开启后仅保留自动分类结果，见 App.vue「导入数据清洗开关」注释）。
         for (const [tag, regex] of Object.entries(autoTagRules.value)) {
-            if (regex.test(fullText) && !generatedTags.includes(tag)) {
+            if (!regex.test(fullText)) continue;
+            const alreadyHas = generatedTags.includes(tag);
+            if (!sanitizeImportedTags.value && !alreadyHas) {
                 generatedTags.push(tag);
-                // 【修复】自动分类仅落到已知预设分组：
-                //   tag.split(' ')[0] 可能产生预设外的英文组名（如 'Monster (魔物娘)' → 'Monster'），
-                //   导致导入卡片被分到莫名/英文名的分组（用户眼中"没有名字的分组"）。
-                //   未知组名不设分类（保持"未分类"），也不自动创建新分组。
-                if (assignedCategory === '未分类') {
-                    const cand = tag.split(' ')[0];
-                    if (allCategories.value.some(c => c.key === cand || c.cn === cand || c.en === cand)) {
-                        assignedCategory = cand;
-                    }
+            }
+            // 【修复】自动分类仅落到已知预设分组：
+            //   tag.split(' ')[0] 可能产生预设外的英文组名（如 'Monster (魔物娘)' → 'Monster'），
+            //   导致导入卡片被分到莫名/英文名的分组（用户眼中"没有名字的分组"）。
+            //   未知组名不设分类（保持"未分类"），也不自动创建新分组。
+            if (!alreadyHas && assignedCategory === '未分类') {
+                const cand = tag.split(' ')[0];
+                if (allCategories.value.some(c => c.key === cand || c.cn === cand || c.en === cand)) {
+                    assignedCategory = cand;
                 }
             }
         }
