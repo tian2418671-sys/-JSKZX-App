@@ -26,7 +26,7 @@
 |---|---|
 | 项目 | SillyTavern（酒馆）角色卡本地管理桌面工具（Electron + Vue 3） |
 | 仓库 | `https://github.com/tian2418671-sys/JSKZX.git`（远端 `origin`） |
-| 当前版本 | **v2.2.3**（已发布：GitHub Release + OTA） |
+| 当前版本 | **v2.2.4**（已发布：GitHub Release + OTA） |
 | 当前分支 | 本地 `master`（2026-08-29 已与 origin 同步） |
 | 构建产物 | `dist/sillytavern-card-manager-<版本>.exe` + `latest.yml` + `.blockmap` + zip 绿色版 |
 

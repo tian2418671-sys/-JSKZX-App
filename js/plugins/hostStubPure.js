@@ -94,11 +94,65 @@ export function parseSlashCommand(text, registry = {}) {
     return { command: registry[name] || null, name, args, namedArguments, raw };
 }
 
-/** HTML 转义（插件名等注入到标签间时防破坏结构） */
+/** HTML 转义（插件名等注入到标签间时防破坏结构）。对齐官方 utils.js 五字符：& < > " ' */
 export function escapeHtml(s) {
-    return String(s || '')
+    return String(s ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * 编码消息文本中的 <style> 块，使其绕过 DOMPurify 对 <style> 标签的拦截。
+ * 对齐官方 chats.js encodeStyleTags：/<style>(.+?)<\/style>/gims → <custom-style>encodeURIComponent(内容)</custom-style>。
+ * @param {string} text
+ * @returns {string}
+ */
+export function encodeStyleTags(text) {
+    const styleRegex = /<style>(.+?)<\/style>/gims;
+    return String(text == null ? '' : text).replace(styleRegex, (_, m) => {
+        return `<custom-style>${encodeURIComponent(m)}</custom-style>`;
+    });
+}
+
+/**
+ * 解码 <custom-style> 还原为安全 <style>。
+ * 官方 chats.js decodeStyleTags 依赖 cssom 做 AST 级净化；本地未引入 cssom，用字符串级等价实现：
+ *   · 移除 @import 规则、过滤含 :// 的声明（防外部资源加载）
+ *   · 类名 .foo → .custom-foo（已是 custom- 前缀则保留）
+ *   · 普通选择器前加 .mes_text 前缀（@ 规则 / 伪类开头除外）
+ * @param {string} text
+ * @param {{prefix?: string}} [opts]
+ * @returns {string}
+ */
+export function decodeStyleTags(text, opts) {
+    const prefix = (opts && opts.prefix) || '.mes_text ';
+    const styleDecodeRegex = /<custom-style>(.+?)<\/custom-style>/gms;
+    return String(text == null ? '' : text).replace(styleDecodeRegex, (_, style) => {
+        try {
+            let cssText = decodeURIComponent(style).replace(/<br\/>/g, '');
+            // 1) 移除 @import 规则（防外部样式表注入）
+            cssText = cssText.replace(/@import[^;]*;?/gi, '');
+            // 2) 过滤含 :// 的声明（防 url(http...) 等外部资源加载）
+            cssText = cssText.replace(/([\w-]+)\s*:\s*[^;}]*:\/\/[^;}]*;?/g, '');
+            // 3) 选择器处理：类名加 custom- 前缀；普通选择器前加 .mes_text 前缀
+            cssText = cssText.replace(/([^{}]+)\{/g, function (_, selector) {
+                const sel = selector.split(',').map(function (part) {
+                    let p = part.trim();
+                    if (!p) return p;
+                    p = p.replace(/\.([\w-]+)/g, function (m, cls) {
+                        return (cls.indexOf('custom-') === 0) ? m : ('.custom-' + cls);
+                    });
+                    if (/^@/.test(p) || /^:/.test(p)) return p;
+                    return prefix + p;
+                }).join(', ');
+                return sel + '{';
+            });
+            return '<style>' + cssText + '</style>';
+        } catch (e) {
+            return 'CSS ERROR: ' + e;
+        }
+    });
 }

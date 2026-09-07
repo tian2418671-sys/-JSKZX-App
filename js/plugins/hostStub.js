@@ -21,9 +21,12 @@ import lodashSource from 'lodash/lodash.min.js?raw';
 import handlebarsSource from 'handlebars/dist/handlebars.min.js?raw';
 // 真实 Showdown（showdown.min.js）——酒馆消息正文 Markdown 引擎（messageFormatting 第 6 步 converter.makeHtml）。
 import showdownSource from 'showdown/dist/showdown.min.js?raw';
+// 真实 DOMPurify（purify.min.js）——酒馆消息 / 扩展模板的 HTML 净化器（对齐官方 chats.js / templates.js 的
+// DOMPurify.sanitize 管线，防 `<script>` / `<style>` / 事件属性等污染穿透沙箱 iframe）。
+import dompurifySource from 'dompurify/dist/purify.min.js?raw';
 // 纯逻辑函数（rewriteEsmModule / stripEsmSyntax / parseSlashCommand / escapeHtml）——
 // 抽离到 hostStubPure.js 供 node --test 单测 import，此处复用避免重复维护。
-import { rewriteEsmModule as rewriteEsmModulePure, stripEsmSyntax as stripEsmSyntaxPure, parseSlashCommand as parseSlashCommandPure, escapeHtml as escapeHtmlPure } from './hostStubPure.js';
+import { rewriteEsmModule as rewriteEsmModulePure, stripEsmSyntax as stripEsmSyntaxPure, parseSlashCommand as parseSlashCommandPure, escapeHtml as escapeHtmlPure, encodeStyleTags as encodeStyleTagsPure, decodeStyleTags as decodeStyleTagsPure } from './hostStubPure.js';
 
 /** 生成内存版 localStorage（data: URL 下原生 localStorage 会抛 SecurityError） */
 function buildMemoryStorage() {
@@ -214,7 +217,7 @@ function __jskVarScope(){
 }
 // —— 扩展模板渲染：读 __jskTemplates（主进程预注入的扩展 html 模板映射），Handlebars 编译渲染 ——
 //    真实酒馆路径约定 scripts/extensions/<扩展名>/<模板id>.html；宿主键兼容多种写法，找不到回退空串不崩。
-window.renderExtensionTemplate = function(extensionName, templateId, data){
+window.renderExtensionTemplate = function(extensionName, templateId, data, sanitize){
   var map = window.__jskTemplates || {};
   var keys = [
     extensionName + '/' + templateId + '.html',
@@ -226,11 +229,15 @@ window.renderExtensionTemplate = function(extensionName, templateId, data){
   for (var i = 0; i < keys.length; i++) { if (typeof map[keys[i]] === 'string') { content = map[keys[i]]; break; } }
   if (content == null) return '';
   try {
-    if (window.Handlebars) return window.Handlebars.compile(content)(data || {});
+    var result = (window.Handlebars) ? window.Handlebars.compile(content)(data || {}) : content;
+    // —— 对齐官方 templates.js：渲染后 DOMPurify.sanitize（防模板内 <script>/事件属性污染）——
+    //    默认 sanitize=true；调用方可显式传 false 关闭。localize 本地无 i18n 层，原样返回。
+    if (sanitize !== false && window.DOMPurify) { try { result = window.DOMPurify.sanitize(result); } catch(e2) {} }
+    return result;
   } catch(e) { console.error('[renderExtensionTemplate]', extensionName, templateId, e); }
   return content;
 };
-window.renderExtensionTemplateAsync = function(extensionName, templateId, data){ return Promise.resolve(window.renderExtensionTemplate(extensionName, templateId, data)); };
+window.renderExtensionTemplateAsync = function(extensionName, templateId, data, sanitize){ return Promise.resolve(window.renderExtensionTemplate(extensionName, templateId, data, sanitize)); };
 // —— 完整 getContext（对齐 st-context.js 高频成员；函数体惰性求值，window 级 API 后续定义即可）——
 window.getContext = function(){
   var v = __jskVarScope;
@@ -1054,7 +1061,16 @@ window.__jskSubstituteParams = function(mes, chName){
   } catch(e) {}
   return s;
 };
-// —— 简化 messageFormatting：宏替换 → 引号样式化(<q>) → Showdown.makeHtml（对齐真实管线第 1/5/6 步）——
+// —— encodeStyleTags / decodeStyleTags：对齐官方 chats.js 的 <style> 块保护管线 ——
+//    官方实现依赖 cssom（css.parse / css.stringify）解析 AST 后再净化；
+//    本地未引入 cssom，用最小字符串级实现（见 hostStubPure.js，此处以函数源码注入复用，避免两处漂移）。
+window.__jskEncodeStyleTags = ${encodeStyleTagsPure.toString()};
+window.__jskDecodeStyleTags = ${decodeStyleTagsPure.toString()};
+// —— messageFormatting：对齐官方 chats.js formatCreatorNotes 的完整净化管线 ——
+//    substituteParams → converter.makeHtml → encodeStyleTags → DOMPurify.sanitize
+//    (MESSAGE_SANITIZE + ADD_TAGS:['custom-style']) → decodeStyleTags
+//    关键作用：Showdown 会把原始文本里的 HTML 标签（<script>/<style>/on* 事件等）原样透传，
+//    必须经 DOMPurify 净化后再写入 .mes_text，否则脚本输出的 HTML 会污染预览 iframe。
 window.messageFormatting = function(mes, chName){
   var s = (typeof window.__jskSubstituteParams === 'function')
     ? window.__jskSubstituteParams(mes, chName)
@@ -1065,6 +1081,22 @@ window.messageFormatting = function(mes, chName){
     s = s.replace(/《([^》\n]{1,40})》/g, '<q>$1</q>');
   } catch(e) {}
   var html = (window.__jskMarkdown && window.__jskMarkdown.makeHtml) ? window.__jskMarkdown.makeHtml(s) : s;
+  try {
+    // 1) 用 <custom-style> 编码保护 <style> 块，避免被 DOMPurify 当作可执行样式直接移除/污染
+    if (typeof window.__jskEncodeStyleTags === 'function') { html = window.__jskEncodeStyleTags(html); }
+    // 2) DOMPurify 净化（对齐官方 MESSAGE_SANITIZE + ADD_TAGS:['custom-style']）
+    if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+      html = window.DOMPurify.sanitize(html, {
+        RETURN_DOM: false,
+        RETURN_DOM_FRAGMENT: false,
+        RETURN_TRUSTED_TYPE: false,
+        MESSAGE_SANITIZE: true,
+        ADD_TAGS: ['custom-style'],
+      });
+    }
+    // 3) 还原 <custom-style> 为安全 <style>（选择器加 .mes_text 前缀、类名加 custom- 前缀、过滤 import/外部资源）
+    if (typeof window.__jskDecodeStyleTags === 'function') { html = window.__jskDecodeStyleTags(html); }
+  } catch(e) {}
   return html;
 };
 window.scrollChatToBottom = function(){};
@@ -1218,7 +1250,14 @@ function rewriteEsmModule(src) {
     return rewriteEsmModulePure(src);
 }
 
-/** 生成酒馆宿主 DOM 骨架（#chat / .options-content / #extensions_settings 等插件常用挂载点） */
+/** 生成酒馆宿主 DOM 骨架（#chat / .options-content / #extensions_settings 等插件常用挂载点）
+ * 结构对齐 SillyTavern 官方 public/index.html 与 templates/wandMenu.html：
+ * - #extensionsMenu 内含全部 *_wand_container（扩展菜单按钮区，token-counter/tts/translate/sd 等在此挂载按钮）
+ * - #extensions_settings 与 #extensions_settings2 内含全部 *_container（扩展设置面板，memory→#summarize_container、tts→#tts_container、translate→#translation_container）
+ * - #leftSendForm（官方 addExtensionsButtonAndMenu 把 wand 按钮挂到此处）
+ * - #zoomed_avatar_template（memory doPopout 复用此模板）
+ * 缺失这些挂载点时，插件 jQuery 空对象 .append() 会静默失败 → 表现为「空白」。
+ */
 function buildHostDom() {
     return `
 <div id="chat" style="position:relative; min-height:100%; padding:16px; box-sizing:border-box;">
@@ -1229,10 +1268,65 @@ function buildHostDom() {
   <hr>
 </div>
 <div id="right-nav-panel" style="position:relative;"></div>
-<div id="send_form" style="position:relative; min-height:40px; padding:8px;"></div>
-<div id="extensions_settings" style="position:relative; min-height:40px; padding:8px;"></div>
-<div id="extensionsMenu" style="position:fixed; top:44px; left:12px; z-index:90000; display:flex; flex-direction:column; gap:4px;"></div>
+<div id="send_form" style="position:relative; min-height:40px; padding:8px;">
+  <div id="leftSendForm" class="alignContentCenter" style="display:flex; gap:8px; align-items:center;"></div>
+</div>
+<div id="extensions_settings" class="flex1 wide50p" style="position:relative; min-height:40px; padding:8px;">
+  <div id="assets_container" class="extension_container"></div>
+  <div id="typing_indicator_container" class="extension_container"></div>
+  <div id="expressions_container" class="extension_container"></div>
+  <div id="sd_container" class="extension_container"></div>
+  <div id="tts_container" class="extension_container"></div>
+  <div id="rvc_container" class="extension_container"></div>
+  <div id="stt_container" class="extension_container"></div>
+  <div id="audio_container" class="extension_container"></div>
+  <div id="silence_container" class="extension_container"></div>
+  <div id="objective_container" class="extension_container"></div>
+  <div id="blip_container" class="extension_container"></div>
+  <div id="live2d_container" class="extension_container"></div>
+  <div id="vrm_container" class="extension_container"></div>
+  <div id="timelines_container" class="extension_container"></div>
+  <div id="webllm_container" class="extension_container"></div>
+  <div id="rss_container" class="extension_container"></div>
+</div>
+<div id="extensions_settings2" class="flex1 wide50p" style="position:relative; min-height:40px; padding:8px;">
+  <div id="websearch_container" class="extension_container"></div>
+  <div id="emulatorjs_container" class="extension_container"></div>
+  <div id="qr_container" class="extension_container"></div>
+  <div id="translation_container" class="extension_container"></div>
+  <div id="caption_container" class="extension_container"></div>
+  <div id="idle_container" class="extension_container"></div>
+  <div id="summarize_container" class="extension_container"></div>
+  <div id="hypebot_container" class="extension_container"></div>
+  <div id="regex_container" class="extension_container"></div>
+  <div id="vectors_container" class="extension_container"></div>
+  <div id="randomizer_container" class="extension_container"></div>
+  <div id="chromadb_container" class="extension_container"></div>
+  <div id="message_limit_container" class="extension_container"></div>
+  <div id="injects_container" class="extension_container"></div>
+  <div id="accuweather_container" class="extension_container"></div>
+  <div id="dice_container" class="extension_container"></div>
+</div>
+<div id="extensionsMenu" class="options-content" style="position:fixed; top:44px; left:12px; z-index:90000; display:flex; flex-direction:column; gap:4px;">
+  <div id="data_bank_wand_container" class="extension_container"></div>
+  <div id="attach_file_wand_container" class="extension_container"></div>
+  <div id="sd_wand_container" class="extension_container"></div>
+  <div id="caption_wand_container" class="extension_container"></div>
+  <div id="gallery_wand_container" class="extension_container"></div>
+  <div id="tts_wand_container" class="extension_container"></div>
+  <div id="screen_share_wand_container" class="extension_container"></div>
+  <div id="prompt_inspector_wand_container" class="extension_container"></div>
+  <div id="emulatorjs_wand_container" class="extension_container"></div>
+  <div id="notebook_wand_container" class="extension_container"></div>
+  <div id="chess_wand_container" class="extension_container"></div>
+  <div id="token_counter_wand_container" class="extension_container"></div>
+  <div id="dice_wand_container" class="extension_container"></div>
+  <div id="objective_wand_container" class="extension_container"></div>
+  <div id="translate_wand_container" class="extension_container"></div>
+</div>
 <button id="extensionsMenuButton" style="display:none;"></button>
+<!-- #zoomed_avatar_template：memory 插件 doPopout 复用的浮动弹窗模板 -->
+<div id="zoomed_avatar_template" class="template_element" style="display:none;"></div>
 <!-- #message_template：真实酒馆的消息克隆模板（script.js 用 $('#message_template .mes').clone() 生成每条消息）-->
 <div id="message_template" style="display:none;">
   <div class="mes" style="display:flex; gap:12px; margin:0 0 16px; padding:10px 12px; border-radius:12px; background:#202024; border:1px solid #3f3f46;">
@@ -1374,6 +1468,7 @@ window.__jskHost = true;
 <script>${lodashSource}</script>
 <script>${handlebarsSource}</script>
 <script>${showdownSource}</script>
+<script>${dompurifySource}</script>
 <script>window.__jskTemplates = ${templatesJson};</script>
 <script>${buildEventSourceStub()}</script>
 <script>${buildGlobalStubs(plugin)}</script>

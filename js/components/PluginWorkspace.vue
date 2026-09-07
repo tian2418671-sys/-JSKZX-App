@@ -1,8 +1,9 @@
 <!--
   PluginWorkspace 插件工作区（右侧面板，appMode === 'plugins' 时显示）
-  📄 代码 / ✨ 效果 双选项卡：
+  📄 代码 / ✨ 效果(实验) 双选项卡：
     - 「代码」：展示插件源码（散落脚本/酒馆助手直出 content；扩展工程展示文件树 + 源码查看器）
-    - 「效果」：在沙箱 iframe 内模拟酒馆运行环境，运行插件脚本，渲染悬浮球/按钮/面板
+    - 「效果(实验)」：在沙箱 iframe 内模拟酒馆运行环境，运行插件脚本，尝试渲染悬浮球/按钮/面板
+      实验性预览：沙箱只实现了部分酒馆接口与 DOM 挂载点，依赖完整酒馆 API/DOM 的插件可能空白/不完整，结果仅供参考。
   ⚠️ 所有共享状态/方法经 inject('appCtx') 从 App.vue 获取
 -->
 <template>
@@ -50,7 +51,7 @@
                 <button @click="switchTab('effect')"
                         :class="pluginTab === 'effect' ? 'bg-violet-600 text-white' : 'text-zinc-500 hover:text-zinc-200'"
                         class="px-3 py-1.5 rounded-t-md text-[11px] font-medium transition">
-                    ✨ 效果
+                    ✨ 效果<span class="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 align-middle">实验</span>
                 </button>
                 <span class="ml-auto text-[10px] text-zinc-600 pr-1">{{ pluginKindHint(activePlugin) }}</span>
             </div>
@@ -94,12 +95,12 @@
             <!-- ✨ 效果页 -->
             <div v-show="pluginTab === 'effect'" class="flex-1 flex flex-col overflow-hidden min-h-0 border-t border-zinc-800">
                 <div class="px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between shrink-0">
-                    <span class="text-[10px] text-zinc-500">酒馆运行模拟（沙箱隔离）· 脚本注入的悬浮球/按钮/面板将在此渲染</span>
+                    <span class="text-[10px] text-amber-500/90">⚠️ 实验性预览：沙箱仅模拟了部分酒馆接口，依赖完整酒馆 API/DOM 的插件可能显示空白或不完整，结果仅供参考。</span>
                     <button @click="buildPreview" class="px-2.5 py-1 bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold rounded transition">🔄 {{ previewState.loading ? '加载中…' : '重新渲染' }}</button>
                 </div>
                 <div class="flex-1 relative bg-[#18181b]">
                     <div v-if="previewState.loading" class="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">⏳ 正在读取插件资源…</div>
-                    <iframe v-else-if="previewState.html" :srcdoc="previewState.html" sandbox="allow-scripts" class="w-full h-full border-0" title="插件效果预览"></iframe>
+                    <iframe v-else-if="previewState.url" :src="previewState.url" sandbox="allow-scripts" class="w-full h-full border-0" title="插件效果预览"></iframe>
                     <div v-else class="absolute inset-0 flex items-center justify-center text-rose-400 text-xs px-6 text-center">{{ previewState.error || '无法预览：插件无可运行脚本。' }}</div>
                 </div>
             </div>
@@ -124,7 +125,7 @@ export default {
         const pluginTab = ctx.pluginTab;
         const selectedFile = ctx.pluginSelectedFile;
         const selectedSource = ctx.pluginSelectedSource;
-        const previewState = ref({ html: null, error: null, loading: false });
+        const previewState = ref({ url: null, error: null, loading: false });
 
         // 类型徽标文案（与侧边栏一致）
         const pluginKindLabel = (p) => {
@@ -172,14 +173,14 @@ export default {
         // 切换选项卡：切到「效果」时自动构建预览
         const switchTab = (tab) => {
             pluginTab.value = tab;
-            if (tab === 'effect' && !previewState.value.html) buildPreview();
+            if (tab === 'effect' && !previewState.value.url) buildPreview();
         };
 
         // 构建效果预览：非扩展内联 content；扩展读取 bundle js/css 后整包注入
         const buildPreview = async () => {
             const p = activePlugin.value;
             if (!p) return;
-            previewState.value = { html: null, error: null, loading: true };
+            previewState.value = { url: null, error: null, loading: true };
             try {
                 let html = '';
                 if (p.kind === 'extension') {
@@ -216,9 +217,12 @@ export default {
                     if (!hasContent) throw new Error('插件没有可运行的脚本内容。');
                     html = buildPluginPreviewHtml(p);
                 }
-                previewState.value = { html, error: null, loading: false };
+                // 🧩 预览 HTML 存主进程内存，取独立 app:// URL（内联脚本不再被父页 CSP 拦截）
+                const res = await window.electronAPI.setPluginPreview(html);
+                if (!res || !res.success) throw new Error((res && res.error) || '预览登记失败');
+                previewState.value = { url: res.url, error: null, loading: false };
             } catch (e) {
-                previewState.value = { html: null, error: e.message || '预览构建失败', loading: false };
+                previewState.value = { url: null, error: e.message || '预览构建失败', loading: false };
             }
         };
 
@@ -226,7 +230,7 @@ export default {
         // 不在此重置，避免覆盖「侧边栏子条目点击 → 定位到代码页对应文件」的选中状态）
         watch(activePlugin, () => {
             pluginTab.value = 'code';
-            previewState.value = { html: null, error: null, loading: false };
+            previewState.value = { url: null, error: null, loading: false };
         });
 
         return {

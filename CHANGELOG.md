@@ -1,7 +1,35 @@
-# SillyTavern 角色卡管理器 · v1.6.2 → v2.2.3 更新汇总
+# SillyTavern 角色卡管理器 · v1.6.2 → v2.2.4 更新汇总
 
 > 更新周期：2026-08-15 ~ 2026-09-07
 > 技术栈：Electron + Vue3 + Tailwind + ECharts
+
+---
+
+## 🧩 v2.2.4 —— 插件效果预览（实验标注）+ 预览渲染链路修复
+
+> 背景：收尾插件「效果」预览的三类问题——①预览内联脚本被生产 CSP 拦截全部静默不执行；②部分插件空白（宿主 DOM 缺官方挂载点，插件 jQuery 空对象 `.append()` 静默失败）；③预览内 HTML 净化不彻底（消息/模板中的 `<style>`/事件属性等污染）。同时按用户要求把「效果」预览标注为实验性（沙箱仅实现部分酒馆接口，复杂插件可能空白，对外如实说明）。
+
+### ✨ UI：效果预览标注实验性
+- 「效果」页签加琥珀色「实验」徽标；顶栏如实提示：沙箱仅模拟部分酒馆接口，依赖完整酒馆 API/DOM 的插件可能空白/不完整
+- 对外文案按双版规范：用户可看版（简、如实、不吹）见 `RELEASE_NOTES.md`；本文件为内部详细版
+
+### 🧱 CSP 拦截预览脚本（改用独立 `app://` 内存路由）
+- 根因：生产 CSP `script-src 'self' app:` 无 unsafe-inline，`srcdoc`/`data:`/`blob:` iframe 继承父页 CSP → 预览全部内联脚本被拦
+- `main.js`：新增 `previewStore`（Map，上限 32 份/5MB）+ `setPluginPreview`；`registerAppProtocol` 增加 `/__jsk_preview__/` 前缀内存路由（命中直接返回 HTML，不落盘）；`onHeadersReceived` 对预览路径跳过 CSP 注入
+- `preload.js`：暴露 `setPluginPreview(html)` IPC；`PluginWorkspace.vue`：`previewState` 由 `html`(srcdoc) 改为 `url`(src)，生成 HTML 后经 IPC 换独立 `app://` URL
+
+### 🧩 插件空白（补齐宿主 DOM 官方挂载点）
+- 根因：`buildHostDom()` 缺 SillyTavern 官方挂载容器，`$('#token_counter_wand_container')` 等 `append()` 落到空 jQuery 对象 → 静默失败 → 空白
+- 对齐官方 `public/index.html` + `templates/wandMenu.html` 补齐：`#extensionsMenu` 内 15 个 `*_wand_container`；`#extensions_settings`(16) + `#extensions_settings2`(16) 个 `*_container`（memory→`#summarize_container`、tts→`#tts_container`、translate→`#translation_container`）；新增 `#leftSendForm`、`#zoomed_avatar_template`（memory doPopout 复用）
+
+### 🔒 内容净化管线（对齐官方 chats.js / templates.js）
+- `escapeHtml` 补五字符 `& < > " '`（此前漏 `'`，对齐 utils.js）
+- `renderExtensionTemplate`：渲染后默认 `DOMPurify.sanitize`（可显式传 `false` 关闭）
+- `messageFormatting`：补全 `makeHtml → encodeStyleTags → DOMPurify.sanitize(MESSAGE_SANITIZE + ADD_TAGS:['custom-style']) → decodeStyleTags`；新增 `encodeStyleTags`/`decodeStyleTags`（`hostStubPure.js` 纯函数，字符串级等价实现：去 `@import`/含 `://` 声明、类名加 `custom-` 前缀、普通选择器加 `.mes_text` 前缀）
+- 内联真实 DOMPurify UMD（`purify.min.js?raw`）作为净化引擎
+
+### 🧪 测试
+- 新增 6 组纯逻辑单测（escapeHtml 五字符 / encodeStyleTags / decodeStyleTags 还原+前缀+去外部资源），全量 128 用例通过
 
 ---
 

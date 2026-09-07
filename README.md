@@ -9,11 +9,11 @@
 
 **🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限，支持 OTA 自动更新）：
 
-[⬇️ 下载安装包 `sillytavern-card-manager-2.2.3.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载安装包 `sillytavern-card-manager-2.2.4.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 **📦 绿色免安装版**（解压即用，无需安装）：
 
-[⬇️ 下载绿色版 `sillytavern-card-manager-2.2.3.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载绿色版 `sillytavern-card-manager-2.2.4.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 > 💡 两个版本功能完全相同，任选其一即可。支持 Windows 10/11（64 位）。
 > 安装版内置 OTA 自动更新（检测 → 下载 → 静默安装 → 自动重启）；绿色版需手动下载新版覆盖。
@@ -106,6 +106,7 @@
 - **v2.2.0** —— 标签大分类体系（18 大分类 + 关键词规则/向量语义辅助归类）+ 自定义大分类 + 手动批量归属 + 实验·AI 归类
 - **v2.2.1** —— ①设置菜单新增「历史外来标签一键清洗」；「导入时忽略卡片自带标签」开关仅对新导入生效，历史残留可一键清出并物理落盘；②AI 归类**转正**（移除「实验」标记）并支持**未命中现有分组时按语义自动创建大分类承接**（同类标签聚成「番剧动画/游戏角色」等，核对后一键应用）；③修复自定义大分类 key 碰撞、分类名规范化判重、历史重复数据自愈
 - **v2.2.3** —— ①新增「🧩 插件」Tab：本地扫描并统一管理酒馆插件（酒馆助手 JSON / 用户脚本 / SlashRunner 命令 / 扩展工程），沙箱 iframe 模拟酒馆运行、预览插件效果；②内置 18 大分类开放改名/删除(隐藏)/一键恢复；③修复效果页扩展工程 bundle 路径匹配 bug 与宿主桩全局 API 缺失导致的渲染失败
+- **v2.2.4** —— ①插件「效果」预览标注为**实验性**，并修复预览渲染链路（内联脚本被 CSP 拦截、插件空白缺挂载点、内容净化不全），对外如实提示依赖完整酒馆 API 的插件可能空白/不完整；②「导入时忽略卡片自带标签」开关覆盖全部标签来源（自动打标规则标签不再绕过）
 - 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
@@ -192,7 +193,7 @@ npm run build
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版（可压缩为 zip 分发）
-- `dist/sillytavern-card-manager-2.2.3.exe` —— NSIS 安装包
+- `dist/sillytavern-card-manager-2.2.4.exe` —— NSIS 安装包
 - `dist/latest.yml` —— **OTA 更新必需**（与 exe 一起上传 GitHub Release）
 
 ---

@@ -725,14 +725,42 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
+// 🧩 插件「效果」页预览内存存储：渲染进程生成完整预览 HTML（含内联宿主桩脚本），
+// 通过 IPC 存入主进程内存，再由 app:// 协议独立 URL 提供给 iframe 加载。
+// 原因：预览依赖大量内联 <script>（jquery/lodash/handlebars/showdown/dompurify + 用户脚本），
+// 而生产模式 CSP `script-src 'self' app:` 不含 unsafe-inline，srcdoc/data:/blob: iframe 会继承父页
+// CSP 导致内联脚本被全部拦截；独立 app:// 文档拥有自己的响应头（跳过 CSP 注入）即可正常运行。
+const previewStore = new Map(); // id -> { html, ts }
+let previewSeq = 0;
+const PREVIEW_PATH_PREFIX = '/__jsk_preview__/';
+
+/** 存入预览 HTML，返回唯一 id */
+function setPluginPreview(html) {
+  const id = String(++previewSeq) + '-' + crypto.randomBytes(4).toString('hex');
+  previewStore.set(id, { html, ts: Date.now() });
+  // 最多保留 32 份，超限清最旧（防内存泄漏）
+  if (previewStore.size > 32) {
+    const oldest = [...previewStore.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) previewStore.delete(oldest[0]);
+  }
+  return id;
+}
+
 /**
  * 注册自定义协议
- * - app://        -> 项目根目录下的文件（页面、JS、CSS）
+ * - app://        -> 项目根目录下的文件（页面、JS、CSS） + 内存中的插件预览页
  * - local-file:// -> 磁盘上的任意本地文件（仅用于展示本地立绘图片）
  */
 function registerAppProtocol() {
   protocol.handle('app', (request) => {
     const url = new URL(request.url);
+    // 🧩 插件预览页：命中内存路由直接返回，不落盘、不受路径越界校验限制
+    if (url.pathname.startsWith(PREVIEW_PATH_PREFIX)) {
+      const id = url.pathname.slice(PREVIEW_PATH_PREFIX.length).replace(/\.html$/, '');
+      const entry = previewStore.get(id);
+      if (!entry) return new Response('Not Found', { status: 404 });
+      return new Response(entry.html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
     // standard scheme 下页面 origin 为 app://index.html，其相对资源形如 app://index.html/css/style.css
     // （host 恒为 index.html，pathname 为项目根下的相对路径）；极少数跨 host 场景按 host 首段拼接
     const host = url.hostname;
@@ -983,6 +1011,14 @@ app.whenReady().then(() => {
   // 会挡掉 ws:// 导致热更新失效，故仅在 !isDev 下注册该拦截器。
   if (!isDev) {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      // 🧩 插件预览页跳过 CSP 注入：该页由渲染进程提供内容（含内联宿主桩脚本），
+      // 内联脚本是其渲染的必要手段；若套用主页面严格 CSP 会全被拦截。预览页仅在
+      // sandbox="allow-scripts" iframe 内加载、无同源访问、无 Node 能力，风险可控。
+      let url = details.url;
+      try { url = new URL(details.url).pathname; } catch (e) { /* 非标准 URL 忽略 */ }
+      if (typeof url === 'string' && url.startsWith(PREVIEW_PATH_PREFIX)) {
+        return callback({ responseHeaders: details.responseHeaders });
+      }
       callback({
         responseHeaders: {
           ...details.responseHeaders,
@@ -3155,6 +3191,18 @@ app.whenReady().then(() => {
       if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return { success: false, error: '文件过大，已跳过读取。' };
       const content = await fs.promises.readFile(filePath, 'utf-8');
       return { success: true, data: content };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 🧩 插件「效果」页预览：渲染进程生成预览 HTML 后存主进程内存，返回 app:// 预览 URL
+  ipcMain.handle('plugin:setPreview', async (event, html) => {
+    try {
+      if (typeof html !== 'string' || html.length === 0) return { success: false, error: '预览内容为空' };
+      if (html.length > 5 * 1024 * 1024) return { success: false, error: '预览内容过大' };
+      const id = setPluginPreview(html);
+      return { success: true, url: 'app://index.html' + PREVIEW_PATH_PREFIX + id + '.html' };
     } catch (err) {
       return { success: false, error: err.message };
     }

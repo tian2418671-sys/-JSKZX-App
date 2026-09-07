@@ -4,7 +4,9 @@ import {
     rewriteEsmModule,
     stripEsmSyntax,
     parseSlashCommand,
-    escapeHtml
+    escapeHtml,
+    encodeStyleTags,
+    decodeStyleTags
 } from '../js/plugins/hostStubPure.js';
 
 // 插件预览宿主桩纯逻辑单测（node --test 直接 import，无 DOM 依赖）
@@ -110,11 +112,44 @@ test('parseSlashCommand：registry 命中回填 command', () => {
 
 // —— escapeHtml ——
 
-test('escapeHtml：转义 & < > "', () => {
-    assert.equal(escapeHtml('<a b="c">&'), '&lt;a b=&quot;c&quot;&gt;&amp;');
+test('escapeHtml：转义 & < > " \'', () => {
+    assert.equal(escapeHtml('<a b="c" d=\'e\'>&'), '&lt;a b=&quot;c&quot; d=&#39;e&#39;&gt;&amp;');
 });
 
 test('escapeHtml：空值安全', () => {
     assert.equal(escapeHtml(null), '');
     assert.equal(escapeHtml(undefined), '');
+});
+
+// —— encodeStyleTags / decodeStyleTags ——
+
+test('encodeStyleTags：<style> 块编码为 <custom-style>', () => {
+    const out = encodeStyleTags('<style>p { color: red; }</style>');
+    assert.equal(out, `<custom-style>${encodeURIComponent('p { color: red; }')}</custom-style>`);
+});
+
+test('encodeStyleTags：无 style 原样返回', () => {
+    assert.equal(encodeStyleTags('<p>hi</p>'), '<p>hi</p>');
+});
+
+test('decodeStyleTags：还原 <style> 并给类名加 custom- 前缀、选择器加 .mes_text 前缀', () => {
+    const enc = encodeStyleTags('<style>.foo, bar { color: red; }</style>');
+    const out = decodeStyleTags(enc);
+    assert.ok(out.includes('<style>'), '应还原为 <style>');
+    assert.ok(out.includes('.custom-foo'), '类名应加 custom- 前缀');
+    assert.ok(out.includes('.mes_text bar'), '普通选择器应加 .mes_text 前缀');
+    assert.ok(!out.includes('@import'), '不应包含 @import');
+});
+
+test('decodeStyleTags：移除 @import 与含 :// 的声明', () => {
+    const enc = encodeStyleTags('<style>@import url("x.css"); .a { background: url(http://evil/x.png); } .b { color: blue; }</style>');
+    const out = decodeStyleTags(enc);
+    assert.ok(!out.includes('@import'), '@import 应被移除');
+    assert.ok(!out.includes('http://'), '含 :// 的声明应被过滤');
+    assert.ok(out.includes('color'), '合法声明应保留');
+});
+
+test('decodeStyleTags：空值安全', () => {
+    assert.equal(decodeStyleTags(null), '');
+    assert.equal(encodeStyleTags(undefined), '');
 });
