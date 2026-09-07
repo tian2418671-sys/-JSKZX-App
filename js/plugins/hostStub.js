@@ -16,6 +16,14 @@ import jquerySource from 'jquery/dist/jquery.min.js?raw';
 // 真实 lodash（lodash.min.js）。酒馆 iframe 脚本环境中 window._ 即 lodash（见 predefine.js），
 // 用真实库替代手写 _.escape，覆盖 _.get/_.set/_.merge/_.pick 等全部工具方法。
 import lodashSource from 'lodash/lodash.min.js?raw';
+// 真实 Handlebars（handlebars.min.js）——酒馆扩展模板引擎（renderExtensionTemplateAsync 底层），
+// 渲染扩展设置面板等 {{var}}/{{#each}}/{{{html}}} 模板。
+import handlebarsSource from 'handlebars/dist/handlebars.min.js?raw';
+// 真实 Showdown（showdown.min.js）——酒馆消息正文 Markdown 引擎（messageFormatting 第 6 步 converter.makeHtml）。
+import showdownSource from 'showdown/dist/showdown.min.js?raw';
+// 纯逻辑函数（rewriteEsmModule / stripEsmSyntax / parseSlashCommand / escapeHtml）——
+// 抽离到 hostStubPure.js 供 node --test 单测 import，此处复用避免重复维护。
+import { rewriteEsmModule as rewriteEsmModulePure, stripEsmSyntax as stripEsmSyntaxPure, parseSlashCommand as parseSlashCommandPure, escapeHtml as escapeHtmlPure } from './hostStubPure.js';
 
 /** 生成内存版 localStorage（data: URL 下原生 localStorage 会抛 SecurityError） */
 function buildMemoryStorage() {
@@ -194,7 +202,77 @@ var __jskChat = [
 ];
 window.getLastMessageId = function(){ return __jskChat.length - 1; };
 window.getChatMessages = function(range){ try{ var parts = String(range||'').split('-'); var a = parseInt(parts[0],10), b = parseInt(parts[1],10); if (isNaN(a)) return __jskChat.slice(); if (isNaN(b)) return __jskChat.slice(a); return __jskChat.slice(a, b+1); }catch(e){ return __jskChat.slice(); } };
-window.getContext = function(){ return { chat: __jskChat, chatMetadata: {}, characters: window.characters, groups: window.groups, name1: 'User', name2: '角色', characterId: '0', groupId: null, chatId: 'demo', members: [] }; };
+// —— variables 用迷你作用域（对齐酒馆 getContext().variables.local/global 的 get/set/del）——
+function __jskVarScope(){
+  var m = {};
+  return {
+    get: function(k){ return Object.prototype.hasOwnProperty.call(m, k) ? m[k] : undefined; },
+    set: function(k, v){ m[k] = v; return v; },
+    del: function(k){ delete m[k]; },
+    list: function(){ return Object.keys(m); }
+  };
+}
+// —— 扩展模板渲染：读 __jskTemplates（主进程预注入的扩展 html 模板映射），Handlebars 编译渲染 ——
+//    真实酒馆路径约定 scripts/extensions/<扩展名>/<模板id>.html；宿主键兼容多种写法，找不到回退空串不崩。
+window.renderExtensionTemplate = function(extensionName, templateId, data){
+  var map = window.__jskTemplates || {};
+  var keys = [
+    extensionName + '/' + templateId + '.html',
+    'scripts/extensions/' + extensionName + '/' + templateId + '.html',
+    templateId + '.html',
+    templateId
+  ];
+  var content = null;
+  for (var i = 0; i < keys.length; i++) { if (typeof map[keys[i]] === 'string') { content = map[keys[i]]; break; } }
+  if (content == null) return '';
+  try {
+    if (window.Handlebars) return window.Handlebars.compile(content)(data || {});
+  } catch(e) { console.error('[renderExtensionTemplate]', extensionName, templateId, e); }
+  return content;
+};
+window.renderExtensionTemplateAsync = function(extensionName, templateId, data){ return Promise.resolve(window.renderExtensionTemplate(extensionName, templateId, data)); };
+// —— 完整 getContext（对齐 st-context.js 高频成员；函数体惰性求值，window 级 API 后续定义即可）——
+window.getContext = function(){
+  var v = __jskVarScope;
+  var ctx = {
+    chat: __jskChat, chatMetadata: {}, characters: window.characters, groups: window.groups,
+    name1: 'User', name2: '角色', characterId: '0', groupId: null, chatId: 'demo', members: [],
+    getCurrentChatId: function(){ return 'demo'; },
+    getRequestHeaders: function(){ return { 'Content-Type': 'application/json' }; },
+    reloadCurrentChat: function(){ return Promise.resolve(); }, renameChat: function(){ return Promise.resolve(); },
+    saveSettingsDebounced: function(){ return Promise.resolve(); }, saveMetadataDebounced: function(){},
+    saveChat: function(){ return Promise.resolve(); }, saveMetadata: function(){ return Promise.resolve(); },
+    deleteMessage: function(){ return Promise.resolve(); }, deleteLastMessage: function(){ return Promise.resolve(); },
+    addOneMessage: function(m){ return (typeof window.addOneMessage === 'function') ? window.addOneMessage(m) : (window.jQuery ? window.jQuery('<div>') : document.createElement('div')); },
+    updateMessageBlock: function(){}, sendSystemMessage: function(){ return Promise.resolve(); },
+    generate: function(){ return Promise.resolve(); }, sendStreamingRequest: function(){ return Promise.resolve(); },
+    sendGenerationRequest: function(){ return Promise.resolve(); }, stopGeneration: function(){ return false; },
+    messageFormatting: function(m){ return (typeof window.messageFormatting === 'function') ? window.messageFormatting(m) : m; },
+    substituteParams: function(m){ return (typeof window.__jskSubstituteParams === 'function') ? window.__jskSubstituteParams(m) : String(m); },
+    getTokenCountAsync: function(){ return Promise.resolve(0); }, getTokenCount: function(){ return 0; },
+    extensionPrompts: {}, setExtensionPrompt: function(){ return Promise.resolve(); },
+    eventSource: window.eventSource, eventTypes: window.tavern_events,
+    registerMacro: function(n, cb){ if (window.MacrosParser) window.MacrosParser.register(n, cb); },
+    unregisterMacro: function(n){ if (window.MacrosParser) window.MacrosParser.unregisterMacro(n); },
+    macros: (window.MacrosParser && window.MacrosParser.macros) || {},
+    swipe: {
+      left: function(){ return Promise.resolve(); }, right: function(){ return Promise.resolve(); },
+      to: function(){ return Promise.resolve(); }, show: function(){}, hide: function(){},
+      refresh: function(){}, isAllowed: function(){ return false; }, state: {}
+    },
+    variables: { local: v(), global: v() },
+    loader: { show: function(){}, hide: function(){} },
+    SlashCommandParser: window.SlashCommandParser, SlashCommand: window.SlashCommand,
+    ARGUMENT_TYPE: window.ARGUMENT_TYPE,
+    onlineStatus: 'auto', mainApi: {},
+    uuidv4: function(){ return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){ var r = Math.random()*16|0; return ((c === 'x') ? r : (r & 0x3 | 0x8)).toString(16); }); },
+    t: function(s){ return Array.isArray(s) ? s.join('') : String(s == null ? '' : s); },
+    translate: function(t){ return t; },
+    getCharacters: function(){ return Promise.resolve([]); }, getThumbnailUrl: function(){ return ''; },
+    writeExtensionField: function(){ return Promise.resolve(); }, writeExtensionFieldBulk: function(){ return Promise.resolve(); }
+  };
+  return ctx;
+};
 window.saveChat = function(){ return Promise.resolve(); };
 window.getCurrentChatId = function(){ return 'demo'; };
 window.getCurrentChatName = function(){ return '沙箱演示会话'; };
@@ -295,7 +373,19 @@ window.tavern_events = {
   MAIN_API_CHANGED: 'main_api_changed',
   WORLDINFO_ENTRIES_LOADED: 'worldinfo_entries_loaded',
   WORLDINFO_SCAN_DONE: 'worldinfo_scan_done',
-  MEDIA_ATTACHMENT_DELETED: 'media_attachment_deleted'
+  MEDIA_ATTACHMENT_DELETED: 'media_attachment_deleted',
+  // —— 宿主桩曾缺失、被真实扩展监听的事件（按 events.js 补齐；宿主内部自洽即可）——
+  APP_INITIALIZED: 'app_initialized',
+  CHAT_LOADED: 'chatLoaded',
+  GROUP_UPDATED: 'group_updated',
+  CHAT_RENAMED: 'chat_renamed',
+  GROUP_CHAT_DELETED: 'group_chat_deleted',
+  GROUP_CHAT_CREATED: 'group_chat_created',
+  GROUP_MEMBER_DRAFTED: 'group_member_drafted',
+  GROUP_WRAPPER_STARTED: 'group_wrapper_started',
+  GROUP_WRAPPER_FINISHED: 'group_wrapper_finished',
+  CHARACTER_GROUP_OVERLAY_STATE_CHANGE_BEFORE: 'character_group_overlay_state_change_before',
+  CHARACTER_GROUP_OVERLAY_STATE_CHANGE_AFTER: 'character_group_overlay_state_change_after'
 };
 // 把酒馆事件常量合并到 eventSource（使其同时是「常量表 + 发射器」，兼容
 // 脚本里 SillyTavern.tavern_events.CHAT_CHANGED 与 .on() 两种访问方式）
@@ -387,7 +477,7 @@ window.SillyTavern = (window.SillyTavern || (function(){
     eventTypes: window.tavern_events,
     // 兼容脚本用 SillyTavern.tavern_events（EventEmitter + 常量）
     tavern_events: window.eventSource,
-    addOneMessage: function(){ return window.jQuery ? window.jQuery('<div>') : document.createElement('div'); },
+    addOneMessage: function(m, opts){ return (typeof window.addOneMessage === 'function') ? window.addOneMessage(m, opts) : (window.jQuery ? window.jQuery('<div>') : document.createElement('div')); },
     deleteLastMessage: function(){ return resolve(); },
     generate: function(){ console.log('[SillyTavern.generate]'); return resolve(); },
     sendStreamingRequest: function(){ return resolve(); },
@@ -424,7 +514,8 @@ window.SillyTavern = (window.SillyTavern || (function(){
     canPerformToolCalls: function(){ return false; },
     ToolManager: {},
     registerDebugFunction: noop,
-    renderExtensionTemplateAsync: function(){ return resolve(''); },
+    renderExtensionTemplate: function(){ return (typeof window.renderExtensionTemplate === 'function') ? window.renderExtensionTemplate.apply(window, arguments) : ''; },
+    renderExtensionTemplateAsync: function(){ return Promise.resolve((typeof window.renderExtensionTemplate === 'function') ? window.renderExtensionTemplate.apply(window, arguments) : ''); },
     registerDataBankScraper: function(){ return resolve(); },
     showLoader: noop,
     hideLoader: function(){ return resolve(); },
@@ -436,7 +527,7 @@ window.SillyTavern = (window.SillyTavern || (function(){
     writeExtensionField: function(){ return resolve(); },
     getThumbnailUrl: function(){ return ''; },
     selectCharacterById: function(){ return resolve(); },
-    messageFormatting: function(m){ return m; },
+    messageFormatting: function(m, n){ return (typeof window.messageFormatting === 'function') ? window.messageFormatting(m, n) : m; },
     shouldSendOnEnter: function(){ return false; },
     isMobile: function(){ return false; },
     t: function(s){ return Array.isArray(s) ? s.join('') : String(s); },
@@ -695,6 +786,8 @@ ${buildNativeSlashStubs()}
 
 // —— ESM 模块解析器：bundle 重写后的 import 绑定据此从全局取酒馆 API ——
 ${buildModuleResolver()}
+// —— 渲染演示会话消息（此时全部 window 级 API 均已定义；为插件提供 .mes 挂载点，已渲染则不重复）——
+try { if (window.__jskRenderDemoMessages) window.__jskRenderDemoMessages(); } catch(e) { console.error('[demo messages]', e); }
 `;
 }
 
@@ -764,8 +857,16 @@ window.translate = function(t){ return t; };
 // SlashCommand / SlashCommandArgument / SlashCommandNamedArgument / SlashCommandEnumValue 均支持
 // 静态 fromProps(...) 工厂（真实酒馆签名），解析器 SlashCommandParser 提供 .parse()。
 window.SlashCommand = (function(){
-  function C(props){ props = props || {}; this.name = props.name || ''; this.description = props.description || ''; this.callback = props.callback || props.handler || function(){}; this.helpString = props.helpString || ''; this.unnamedArgumentList = props.unnamedArgumentList || []; this.namedArgumentList = props.namedArgumentList || []; this.returns = props.returns; this.category = props.category; }
-  C.fromProps = function(p){ return new C(p); };
+  function C(props){ props = props || {}; this.name = props.name || ''; this.description = props.description || ''; this.callback = props.callback || props.handler || function(){}; this.helpString = props.helpString || ''; this.unnamedArgumentList = props.unnamedArgumentList || []; this.namedArgumentList = props.namedArgumentList || []; this.returns = props.returns; this.category = props.category;
+    // 补齐真实酒馆 SlashCommand 全字段（SlashCommand.js）：
+    this.splitUnnamedArgument = !!props.splitUnnamedArgument;                 // 是否把剩余未命名参数整串交给回调
+    this.splitUnnamedArgumentCount = props.splitUnnamedArgumentCount || 0;     // 前 N 个 token 单独解析，其余整串
+    this.rawQuotes = !!props.rawQuotes;                                        // 保留参数原始引号
+    this.aliases = (props.aliases && props.aliases.slice) ? props.aliases.slice() : (props.aliases || []); // 命令别名
+    this.helpCache = null;
+    this.helpDetailsCache = null;
+  }
+  C.fromProps = function(p){ return Object.assign(new C(p), p || {}); };
   return C;
 })();
 window.SlashCommandArgument = (function(){
@@ -803,7 +904,11 @@ window.SlashCommandParser = {
   commands: {},
   register: function(cmd){ if (cmd && cmd.name) this.commands[cmd.name] = cmd; },
   get commandHelp(){ return ''; },
-  parse: function(text){ return { command: null, args: [] }; },
+  // 最小真实解析器（对齐真实酒馆 SlashCommandParser.parse 的消费约定）：
+  // 首 token 为命令名（容忍前导 /），剩余按「空格分词 + 双/单引号包裹的带空值保留 + name=value 命名参数」解析。
+  parse: function(text){
+    return parseSlashCommandPure(text, this.commands);
+  },
   addCommandObject: function(cmd){
     if (cmd && cmd.name) { this.commands[cmd.name] = cmd; this.render(); }
     return cmd;
@@ -890,9 +995,27 @@ window.__jskPresetManager = {
 };
 window.reloadMarkdownProcessor = function(){ return window.__jskMarkdown; };
 window.__jskMarkdown = (function(){
-  function makeHtml(md){ return String(md == null ? '' : md); }
-  function render(md){ return String(md == null ? '' : md); }
-  return { makeHtml: makeHtml, render: render, inline: function(){ return ''; }, use: function(){ return window.__jskMarkdown; } };
+  // 真实 Showdown 转换器（showdown.min.js 已在宿主注入，window.showdown 可用）
+  var converter = null;
+  function getConverter(){
+    if (!converter && window.showdown && window.showdown.Converter) {
+      try {
+        converter = new window.showdown.Converter({
+          tables: true, strikethrough: true, tasklists: true, emoji: true,
+          openLinksInNewWindow: true, simplifiedAutoLink: true
+        });
+      } catch(e) { console.error('[showdown init]', e); }
+    }
+    return converter;
+  }
+  function makeHtml(md){
+    var c = getConverter();
+    var s = String(md == null ? '' : md);
+    if (!c) return s;
+    try { return c.makeHtml(s); } catch(e) { return s; }
+  }
+  function render(md){ return makeHtml(md); }
+  return { makeHtml: makeHtml, render: render, inline: function(md){ return makeHtml(md); }, use: function(){ return window.__jskMarkdown; } };
 })();
 window.saveCharacterDebounced = function(){};
 window.saveChatConditional = function(){ return Promise.resolve(); };
@@ -918,12 +1041,71 @@ window.activateSendButtons = function(){};
 window.deactivateSendButtons = function(){};
 window.deleteCharacter = function(){ return Promise.resolve(); };
 window.extension_settings = window.extension_settings || {};
-window.messageFormatting = function(m){ return m; };
+// —— 宏替换（同步 string→string，对齐真实酒馆 substituteParams 的同步语义；未知宏原样保留）——
+window.__jskSubstituteParams = function(mes, chName){
+  var s = String(mes == null ? '' : mes);
+  var n = String(chName || '角色');
+  try {
+    s = s.split('{{user}}').join('User').split('{{char}}').join(n)
+      .split('{{name1}}').join('User').split('{{name2}}').join(n)
+      .split('{{original}}').join('')
+      .split('{{newline}}').join('\n').split('{{lf}}').join('\n')
+      .split('{{time}}').join(new Date().toLocaleTimeString());
+  } catch(e) {}
+  return s;
+};
+// —— 简化 messageFormatting：宏替换 → 引号样式化(<q>) → Showdown.makeHtml（对齐真实管线第 1/5/6 步）——
+window.messageFormatting = function(mes, chName){
+  var s = (typeof window.__jskSubstituteParams === 'function')
+    ? window.__jskSubstituteParams(mes, chName)
+    : String(mes == null ? '' : mes);
+  // 引号样式化：中文双引号/书名号内容包 <q>（跳过已含 HTML 标签的行，避免破坏结构）
+  try {
+    s = s.replace(/“([^”\n]{1,80})”/g, '<q>$1</q>');
+    s = s.replace(/《([^》\n]{1,40})》/g, '<q>$1</q>');
+  } catch(e) {}
+  var html = (window.__jskMarkdown && window.__jskMarkdown.makeHtml) ? window.__jskMarkdown.makeHtml(s) : s;
+  return html;
+};
 window.scrollChatToBottom = function(){};
 window.SelectCharacterById = window.selectCharacterById = function(){ return Promise.resolve(); };
 window.saveSettings = function(){ return Promise.resolve(); };
 window.saveMetadata = function(){ return Promise.resolve(); };
-window.addOneMessage = function(){ return window.jQuery ? window.jQuery('<div>') : document.createElement('div'); };
+window.addOneMessage = function(mes, opts){
+  var template = document.getElementById('message_template');
+  var chat = document.getElementById('chat');
+  if (!template || !chat) return window.jQuery ? window.jQuery('<div>') : document.createElement('div');
+  var node = template.querySelector('.mes').cloneNode(true);
+  var isUser = !!(mes && mes.is_user);
+  var isSys = !!(mes && mes.is_system);
+  var name = (mes && mes.name) || (isUser ? 'User' : '角色');
+  var text = (mes && (mes.mes || mes.text)) || '';
+  var img = node.querySelector('.avatar img');
+  if (img) { img.alt = name; img.src = (isUser ? 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44"><rect width="44" height="44" fill="%234f46e5" rx="22"/><text x="22" y="29" font-size="18" fill="white" text-anchor="middle">U</text></svg>' : 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44"><rect width="44" height="44" fill="%238b5cf6" rx="22"/><text x="22" y="29" font-size="18" fill="white" text-anchor="middle">C</text></svg>'); }
+  var nameEl = node.querySelector('.name_text'); if (nameEl) nameEl.textContent = name;
+  var ts = node.querySelector('.timestamp'); if (ts) ts.textContent = (mes && mes.send_date) ? new Date(mes.send_date).toLocaleString() : '';
+  var mid = node.querySelector('.mesIDDisplay'); if (mid && mes && mes.id != null) mid.textContent = '#' + mes.id;
+  var body = node.querySelector('.mes_text');
+  if (body) body.innerHTML = (typeof window.messageFormatting === 'function') ? window.messageFormatting(text, name) : text;
+  node.setAttribute('mesid', (mes && mes.id != null) ? String(mes.id) : String((window.__jskChat ? window.__jskChat.length : 0)));
+  node.setAttribute('is_user', isUser ? 'true' : 'false');
+  node.setAttribute('is_system', isSys ? 'true' : 'false');
+  if (isSys) node.style.borderStyle = 'dashed';
+  else if (isUser) node.style.background = '#27272a';
+  if (opts && opts.insertAfter && opts.insertAfter.parentNode) opts.insertAfter.parentNode.insertBefore(node, opts.insertAfter.nextSibling);
+  else if (opts && opts.insertBefore && chat) chat.insertBefore(node, opts.insertBefore);
+  else if (chat) chat.appendChild(node);
+  return window.jQuery ? window.jQuery(node) : node;
+};
+// —— 渲染演示会话到 .mes 消息块（已渲染则不重复；为插件提供真实挂载点）——
+window.__jskRenderDemoMessages = function(){
+  try {
+    var chat = document.getElementById('chat');
+    if (!chat || chat.querySelector('.mes')) return;
+    (window.__jskChat || []).forEach(function(m, i){ m.id = i; window.addOneMessage(m, {}); });
+    chat.setAttribute('data-demo-rendered', '1');
+  } catch(e) { console.error('[__jskRenderDemoMessages]', e); }
+};
 window.clearChat = function(){ return Promise.resolve(); };
 window.characters = (Array.isArray(window.characters) ? window.characters : [{ name: '角色', avatar: '', mes: '' }]);
 window.chat = window.__jskChat || [];
@@ -1033,44 +1215,7 @@ window.__jskResolveModule = function(specifier){
  * @returns {string} 重写后的 ESM 源码
  */
 function rewriteEsmModule(src) {
-    let out = String(src || '');
-    // 1) import.meta -> window.__jskMeta（模块内可用，resolve/url 均给空）
-    out = out.replace(/\bimport\.meta\b/g, 'window.__jskMeta');
-    // 2) 静态 named import（minified 可能是 import{...} 无空格）→ 内联解构 var 声明。
-    //    import{a as b, c}from"x"  ->  var{a:b,c}=window.__jskModuleExports;
-    //    解构从全局命名空间 Proxy 取导出名，赋给本地别名（语义等价于 named import）。
-    out = out.replace(
-        /\bimport\s*\{([\s\S]*?)\}\s*from\s*(['"])[^'"]*\2\s*;?/g,
-        function (m, inner) {
-            const parts = String(inner).split(',').map(p => p.trim()).filter(Boolean);
-            const mapped = parts.map(p => {
-                const mm = p.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
-                return mm ? (mm[1] + ':' + mm[2]) : p;
-            });
-            return 'var{' + mapped.join(',') + '}=window.__jskModuleExports;';
-        }
-    );
-    // 3) 静态 default import：import d from "x" -> var d=window.__jskModuleExports;
-    out = out.replace(
-        /\bimport\s+([A-Za-z_$][\w$]*)\s*from\s*(['"])[^'"]*\2\s*;?/g,
-        'var $1=window.__jskModuleExports;'
-    );
-    // 4) 静态 star import：import * as ns from "x" -> var ns=window.__jskModuleExports;
-    out = out.replace(
-        /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*(['"])[^'"]*\2\s*;?/g,
-        'var $1=window.__jskModuleExports;'
-    );
-    // 5) 副作用 import：import "x"（无绑定，仅执行）→ 移除（沙箱内建模块无需执行）
-    out = out.replace(/\bimport\s*(['"])[^'"]*\1\s*;?/g, '');
-    // 6) 动态 import('...') / import("...") → __jskResolveModule('...')
-    out = out.replace(/\bimport\s*\(\s*(['"`])([^'"`]*)\1\s*\)/g, "__jskResolveModule('$2')");
-    // 7) export { ... } / export { x as y } → 空（宿主只关心 install/hook，不消费导出）
-    out = out.replace(/\bexport\s*\{[\s\S]*?\}\s*;?/g, '');
-    // 8) export default <expr> → window.__jskPluginDefault = <expr>
-    out = out.replace(/\bexport\s+default\s+(?=[^\s;])/g, 'window.__jskPluginDefault = ');
-    // 9) export const/let/var/function/class/async function → 去掉 export 关键字
-    out = out.replace(/\bexport\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/g, '');
-    return out;
+    return rewriteEsmModulePure(src);
 }
 
 /** 生成酒馆宿主 DOM 骨架（#chat / .options-content / #extensions_settings 等插件常用挂载点） */
@@ -1087,7 +1232,23 @@ function buildHostDom() {
 <div id="send_form" style="position:relative; min-height:40px; padding:8px;"></div>
 <div id="extensions_settings" style="position:relative; min-height:40px; padding:8px;"></div>
 <div id="extensionsMenu" style="position:fixed; top:44px; left:12px; z-index:90000; display:flex; flex-direction:column; gap:4px;"></div>
-<button id="extensionsMenuButton" style="display:none;"></button>`;
+<button id="extensionsMenuButton" style="display:none;"></button>
+<!-- #message_template：真实酒馆的消息克隆模板（script.js 用 $('#message_template .mes').clone() 生成每条消息）-->
+<div id="message_template" style="display:none;">
+  <div class="mes" style="display:flex; gap:12px; margin:0 0 16px; padding:10px 12px; border-radius:12px; background:#202024; border:1px solid #3f3f46;">
+    <div class="avatar" style="flex-shrink:0; width:44px; height:44px; border-radius:50%; overflow:hidden; background:#3f3f46;">
+      <img alt="" style="width:100%; height:100%; object-fit:cover; display:block;">
+    </div>
+    <div style="flex:1; min-width:0;">
+      <div class="mes_header" style="display:flex; align-items:baseline; gap:8px; margin-bottom:4px;">
+        <span class="ch_name"><span class="name_text" style="font-weight:700; color:#e4e4e7;"></span></span>
+        <span class="timestamp" style="font-size:11px; color:#71717a;"></span>
+        <span class="mesIDDisplay" style="font-size:10px; color:#52525b;"></span>
+      </div>
+      <div class="mes_text" style="color:#d4d4d8; font-size:14px; line-height:1.6; overflow-wrap:break-word;"></div>
+    </div>
+  </div>
+</div>`;
 }
 
 /**
@@ -1101,6 +1262,9 @@ function buildHostDom() {
 export function buildPluginPreviewHtml(plugin, opts = {}) {
     const bundleJs = opts.bundleJs || [];
     const bundleCss = opts.bundleCss || [];
+    const templates = opts.templates || {}; // 扩展工程 html 模板映射 { 相对路径: 内容 }
+    // JSON 序列化时转义 '<'，防模板内容里的 </script> 提前终止注入块
+    const templatesJson = JSON.stringify(templates).replace(/</g, '\\u003c');
 
     const inlineScripts = []; // 需要注入的 JS 源码块
     const styles = [];        // 需要注入的 CSS 文本
@@ -1208,6 +1372,9 @@ window.__jskHost = true;
 </script>
 <script>${buildMiniJquery()}</script>
 <script>${lodashSource}</script>
+<script>${handlebarsSource}</script>
+<script>${showdownSource}</script>
+<script>window.__jskTemplates = ${templatesJson};</script>
 <script>${buildEventSourceStub()}</script>
 <script>${buildGlobalStubs(plugin)}</script>
 ${scriptBlocks}
@@ -1229,20 +1396,10 @@ try {
 
 /** 剥离 ESM 语法（import / export），供内联 <script> 注入使用 */
 function stripEsmSyntax(src) {
-    return String(src || '')
-        .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]*['"]\s*;?\s*$/gm, '')
-        .replace(/^\s*import\s+['"][^'"]*['"]\s*;?\s*$/gm, '')
-        .replace(/^\s*import\s*\([^)]*\)\s*;?\s*$/gm, '')
-        .replace(/^\s*export\s*\{[\s\S]*?\}\s*;?\s*$/gm, '')
-        .replace(/^\s*export\s+default\s+/gm, 'window.__jskPluginDefault = ')
-        .replace(/^\s*export\s+(?=(const|let|var|function|class|async\s+function)\b)/gm, '');
+    return stripEsmSyntaxPure(src);
 }
 
 /** HTML 转义（插件名等注入到标签间时防破坏结构） */
 function escapeHtml(s) {
-    return String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+    return escapeHtmlPure(s);
 }

@@ -186,6 +186,19 @@ export default {
                     const assets = resolvePreviewAssets(p);
                     const bundleJs = [];
                     const bundleCss = [];
+                    // 🧩 扩展模板收集：工程内所有 .html 按相对 manifest 根的 POSIX 路径注入 __jskTemplates，
+                    //    宿主 renderExtensionTemplate/Async 据此做 Handlebars 渲染（对齐酒馆 scripts/extensions/<ext>/<id>.html）。
+                    const templates = {};
+                    const root = (p.source && p.source.origin) || '';
+                    for (const abs of (p.files || [])) {
+                        const low = String(abs).toLowerCase();
+                        if (!low.endsWith('.html') && !low.endsWith('.htm')) continue;
+                        let rel = abs;
+                        if (root && abs.startsWith(root)) rel = abs.slice(root.length).replace(/^[/\\]+/, '');
+                        rel = String(rel).replace(/\\/g, '/');
+                        const res = await window.electronAPI.readPluginFile(abs);
+                        if (res && res.success && typeof res.data === 'string' && res.data) templates[rel] = res.data;
+                    }
                     for (const f of assets.js) {
                         const res = await window.electronAPI.readPluginFile(f);
                         if (res && res.success && res.data) bundleJs.push(res.data);
@@ -197,7 +210,7 @@ export default {
                     if (bundleJs.length === 0 && bundleCss.length === 0) {
                         throw new Error('未找到可运行的 bundle 资源（js/css）。');
                     }
-                    html = buildPluginPreviewHtml(p, { bundleJs, bundleCss });
+                    html = buildPluginPreviewHtml(p, { bundleJs, bundleCss, templates });
                 } else {
                     const hasContent = (p.scripts || []).some(s => s.content && s.content.trim());
                     if (!hasContent) throw new Error('插件没有可运行的脚本内容。');
