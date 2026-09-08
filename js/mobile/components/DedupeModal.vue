@@ -77,7 +77,7 @@
 <script>
 import { ref, watch } from 'vue';
 import { showToast } from 'vant';
-import { mobileLibrary } from '../useMobileLibrary';
+import { mobileLibrary, loadCardFullData } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import DiffModal from './DiffModal.vue';
 
@@ -178,13 +178,23 @@ export default {
             const items = [...mobileLibrary.library];
             if (!items.length) { emptyText.value = '卡片库为空，无法进行版本查重'; return; }
 
-            // 规范化文本，内容过短（<20 字符）无法可靠判定，跳过
+            // 🚀 轻量化:全量 data 已不在内存,有界并发(4)逐卡加载正文 → 提取后即弃,峰值内存有界
             const valid = [];
-            items.forEach((item, idx) => {
-                const text = normalizeText(extractContentText(item));
-                if (text.length < 20) return;
-                valid.push({ item, idx, text });
-            });
+            let idx = 0;
+            const WORKERS = 4;
+            await Promise.all(Array.from({ length: Math.min(WORKERS, items.length) }, async () => {
+                while (idx < items.length) {
+                    const cur = idx++;
+                    const item = items[cur];
+                    try {
+                        const full = await loadCardFullData(item);
+                        if (!full) continue;
+                        const text = normalizeText(extractContentText({ data: full }));
+                        if (text.length >= 20) valid.push({ item, idx: cur, text });
+                    } catch (e) { /* 单卡失败跳过 */ }
+                }
+            }));
+            valid.sort((a, b) => a.idx - b.idx);
             if (valid.length < 2) {
                 emptyText.value = '未发现可判定的内容重复项（内容过短的项已跳过）';
                 return;
@@ -255,8 +265,7 @@ export default {
                 const master = list[0];
                 list.forEach((v) => {
                     v._simPct = v === master ? 100 : Math.round(estimateSimilarity(v.sig, master.sig) * 100);
-                    const d = (v.item.data && (v.item.data.data || v.item.data)) || {};
-                    v._name = d.name || v.item.name || v.item.path.split(/[\/]/).pop();
+                    v._name = v.item.name || v.item.path.split(/[\/]/).pop();
                     v._diffInfo = v === master ? '👑 内容最完整（推荐保留）'
                         : (v._simPct >= 98 ? '🧬 内容几乎完全一致' : '⚠️ 高度相似，细节有差异');
                 });
@@ -305,15 +314,16 @@ export default {
                     arr.forEach((it) => {
                         const stat = stats[it.path] || {};
                         if (props.mode === 'card') {
-                            const d = (it.data && (it.data.data || it.data)) || {};
-                            it._tokens = estimateTokens(String(d.description || '') + String(d.personality || '') + String(d.first_mes || ''));
-                            it._desc = d.description || '';
+                            // 🚀 轻量化:Token/描述片段已在加载时预提取(_tokens/_desc),不再触碰全量 data
+                            it._tokens = it._tokens || 0;
+                            it._desc = it._desc || '';
                         } else {
                             const es = entriesArray(it.wb || {});
                             it._entryCount = es.length;
                             it._keys = new Set(es.flatMap(keysOf));
                         }
-                        const fallback = (it.data && it.data.create_date) ? new Date(it.data.create_date).getTime() : 0;
+                        // SAF 无 birthtime,_ctime 已回退 mtime(ms)
+                        const fallback = Number(it._ctime) || 0;
                         it._mtime = stat.mtimeMs || fallback || Date.now();
                         it._dateStr = new Date(it._mtime).toLocaleString('zh-CN', {
                             year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
@@ -395,7 +405,7 @@ export default {
             return { masterLines: res1, compareLines: res2 };
         };
 
-        function openDiff(gi, ii) {
+        async function openDiff(gi, ii) {
             const group = groups.value[gi];
             if (!group) return;
             const master = group.cards[0];
@@ -406,8 +416,14 @@ export default {
             diffCompareName.value = compare.name || compare.fileName || '未知';
             diffFieldResults.value = [];
 
-            const mData = (master.data && (master.data.data || master.data)) || {};
-            const cData = (compare.data && (compare.data.data || compare.data)) || {};
+            // 🚀 轻量化:比对需要全量数据 → 点击时按需加载(两张卡,用后即弃)
+            let mData = {};
+            let cData = {};
+            if (props.mode !== 'worldbook') {
+                const [md, cd] = await Promise.all([loadCardFullData(master), loadCardFullData(compare)]);
+                mData = (md && (md.data || md)) || {};
+                cData = (cd && (cd.data || cd)) || {};
+            }
 
             if (props.mode === 'worldbook') {
                 const e1 = (master.wb && master.wb.entries) ? (Array.isArray(master.wb.entries) ? master.wb.entries : Object.values(master.wb.entries)) : [];

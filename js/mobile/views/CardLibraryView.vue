@@ -326,7 +326,8 @@ import TagCategoryPanel from '../components/TagCategoryPanel.vue';
 // 🚀 加载提速：GraphModal 携带 ECharts(约 1MB)，改异步组件 + 模板 v-if 门控，
 // 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
-    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo, saveCardData, LIBRARY_ROOT, setLastOpenedPath
+    mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo,
+    loadCardFullData, syncCardLightFields, LIBRARY_ROOT, setLastOpenedPath
 } from '../useMobileLibrary';
 
 export default {
@@ -489,28 +490,13 @@ export default {
             { label: '🔧 有正则', value: 'has_regex' }
         ];
         // 对齐桌面:内嵌世界书在 data.character_book(V2/V3),兼容 V1 顶层
-        const wbOf = (c) => {
-            const data = c && c.data;
-            return (data && data.data && data.data.character_book) || (data && data.character_book);
-        };
+        // 🚀 轻量化:特征标记在加载时预提取(_lb/_rx),列表不再触碰全量 data
         const applyQuickFilter = (list) => {
             if (quickFilter.value === 'has_lorebook') {
-                return list.filter((c) => {
-                    const wb = wbOf(c);
-                    return wb && wb.entries && Object.keys(wb.entries).length;
-                });
+                return list.filter((c) => c._lb);
             }
             if (quickFilter.value === 'has_regex') {
-                // 全形态兼容:对齐 useChatRegex.extractRegexFromCard 的四个读取位置
-                return list.filter((c) => {
-                    const dd = c.data && c.data.data;
-                    const top = c.data;
-                    const ddScripts = dd && dd.extensions && Array.isArray(dd.extensions.regex_scripts) ? dd.extensions.regex_scripts
-                        : (dd && Array.isArray(dd.regex_scripts) ? dd.regex_scripts : null);
-                    const topScripts = top && top.extensions && Array.isArray(top.extensions.regex_scripts) ? top.extensions.regex_scripts
-                        : (top && Array.isArray(top.regex_scripts) ? top.regex_scripts : null);
-                    return !!(ddScripts && ddScripts.length) || !!(topScripts && topScripts.length);
-                });
+                return list.filter((c) => c._rx);
             }
             return list;
         };
@@ -605,7 +591,8 @@ export default {
         function nextPage() { if (pageIndex.value < filtered.value.length - 1) pageIndex.value++; }
 
         function snippet(card) {
-            const desc = (card.data && card.data.data && card.data.data.description) || '';
+            // 🚀 轻量化:描述片段在加载时预提取(_desc),不再触碰全量 data
+            const desc = card._desc || '';
             return (desc.length > 60 ? desc.slice(0, 60) + '…' : desc) || card.category;
         }
 
@@ -773,16 +760,18 @@ export default {
             let okCount = 0;
             for (const c of cards) {
                 try {
-                    const dd = c.data && (c.data.data || c.data);
-                    if (!dd) continue;
+                    // 🚀 轻量化:按需加载全量数据(批内逐卡加载,用后即弃,不常驻内存)
+                    const full = await loadCardFullData(c);
+                    if (!full) continue;
+                    const dd = full.data || full;
                     if (batchTagMode.value === 'overwrite') {
                         dd.tags = [...newTags];
                     } else {
                         const cur = Array.isArray(dd.tags) ? dd.tags : [];
                         dd.tags = [...cur, ...newTags.filter(t => !cur.includes(t))];
                     }
-                    const res = await window.electronAPI.saveCard(c.path, JSON.parse(JSON.stringify(c.data)));
-                    if (res && res.success) okCount++;
+                    const res = await window.electronAPI.saveCard(c.path, JSON.parse(JSON.stringify(full)));
+                    if (res && res.success) { okCount++; syncCardLightFields({ path: c.path, data: full }); }
                 } catch (e) { /* 单卡失败不中断 */ }
             }
             showBatchTag.value = false;
@@ -832,8 +821,10 @@ export default {
             for (const c of cards) {
                 aiTagProgress.current++;
                 aiTagProgress.status = `正在分析 ${c.name || '卡片'}…`;
-                const dd = c.data && (c.data.data || c.data);
-                if (!dd) continue;
+                // 🚀 轻量化:按需加载全量数据(用后即弃)
+                const full = await loadCardFullData(c);
+                if (!full) continue;
+                const dd = full.data || full;
                 const desc = String(dd.description || '').substring(0, 1500);
                 const mes = String(dd.first_mes || '').substring(0, 500);
                 const pers = String(dd.personality || '').substring(0, 300);
@@ -854,8 +845,8 @@ export default {
                     if (!newTags.length) continue;
                     const cur = Array.isArray(dd.tags) ? dd.tags : [];
                     dd.tags = [...cur, ...newTags.filter((t) => !cur.includes(t))];
-                    const saveRes = await api.saveCard(c.path, JSON.parse(JSON.stringify(c.data)));
-                    if (saveRes && saveRes.success) okCount++;
+                    const saveRes = await api.saveCard(c.path, JSON.parse(JSON.stringify(full)));
+                    if (saveRes && saveRes.success) { okCount++; syncCardLightFields({ path: c.path, data: full }); }
                 } catch (e) { /* 单卡失败不中断，继续下一张 */ }
             }
             aiTagRunning.value = false;
@@ -895,7 +886,10 @@ export default {
                 const batch = targets.slice(i, i + CONCURRENCY);
                 await Promise.all(batch.map(async (c) => {
                     try {
-                        const dd = (c.data && (c.data.data || c.data)) || {};
+                        // 🚀 轻量化:按需加载全量数据(用后即弃)
+                        const full = await loadCardFullData(c);
+                        if (!full) return;
+                        const dd = full.data || full;
                         const fullText = [dd.description, dd.personality, dd.scenario, dd.first_mes]
                             .filter(Boolean).join('\n');
                         if (!fullText.trim()) return;
@@ -908,8 +902,8 @@ export default {
                         }
                         if (!added.length) return;
                         dd.tags = [...cur, ...added];
-                        const res = await saveCardData(c);
-                        if (res && res.success) okCount++;
+                        const res = await api.saveCard(c.path, JSON.parse(JSON.stringify(full)));
+                        if (res && res.success) { okCount++; syncCardLightFields({ path: c.path, data: full }); }
                     } catch (e) { /* 单卡失败跳过 */ }
                 }));
                 await new Promise((r) => setTimeout(r, 0)); // 批间让出主线程
@@ -1168,6 +1162,13 @@ export default {
         }
 
         onMounted(load);
+
+        // 🚀 轻量化配套:详情页保存/批量编辑后 revision 递增 → 分块重建搜索索引(轻量 _searchText,代价极低)
+        watch(() => mobileLibrary.revision, () => {
+            if (mobileLibrary.library.length > 0) {
+                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags).catch(() => {});
+            }
+        });
 
         // ---------- 角色宇宙图谱 ----------
         const showGraph = ref(false);

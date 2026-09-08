@@ -394,20 +394,9 @@ public class LibraryFsPlugin extends Plugin {
                 o.put("size", child.length()); // 文件字节数(排序用,对齐桌面 _size)
                 o.put("subFolder", relDir.replaceAll("/+$", ""));
                 o.put("category", relDir.isEmpty() ? "未分类" : relDir.split("/")[0]);
-                if (ext.equals("png")) {
-                    String embedded = extractChara(child);
-                    if (embedded != null) {
-                        try {
-                            o.put("embeddedData", new org.json.JSONObject(embedded));
-                        } catch (org.json.JSONException e) {
-                            o.put("embeddedData", JSObject.NULL);
-                        }
-                    } else {
-                        o.put("embeddedData", JSObject.NULL);
-                    }
-                } else {
-                    o.put("embeddedData", JSObject.NULL);
-                }
+                // 🚀 v1.10.2 轻量化:scan 不再回填 embeddedData(300+ 卡时单次桥接响应可达数十 MB
+                //    → WebView OOM 闪退)。渲染层按批调用 readCharaBatch 提取文本块,载荷有界。
+                o.put("embeddedData", JSObject.NULL);
                 files.add(o);
             }
         }
@@ -769,6 +758,52 @@ public class LibraryFsPlugin extends Plugin {
                 } else {
                     item.put("success", true);
                     item.put("value", text);
+                }
+            }
+            results.put(item);
+        }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("results", results);
+        call.resolve(ret);
+    }
+
+    /**
+     * 🚀 v1.10.2 轻量化:批量提取 PNG 内嵌 chara 文本块。
+     * 与 readTextBatch 同构:单次 IPC 提取多个 PNG 的文本块(不传输图像二进制),
+     * 使 300+/2000 卡库加载时的桥接载荷有界(每批 24 个 × 每卡几十 KB)。
+     * 入参 paths: ["/library/a.png", ...];返回 results: [{path, success, value|error}]
+     */
+    @PluginMethod()
+    public void readCharaBatch(PluginCall call) {
+        com.getcapacitor.JSArray paths = call.getArray("paths");
+        if (paths == null || paths.length() == 0) {
+            call.resolve(new JSObject());
+            return;
+        }
+        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
+        for (int i = 0; i < paths.length(); i++) {
+            String p;
+            try {
+                p = paths.getString(i);
+            } catch (org.json.JSONException e) {
+                continue;
+            }
+            if (p == null) continue;
+            JSObject item = new JSObject();
+            item.put("path", p);
+            DocumentFile f = fileByRelPath(p);
+            if (f == null || !f.canRead()) {
+                item.put("success", false);
+                item.put("error", "文件不存在或不可读");
+            } else {
+                String embedded = extractChara(f);
+                if (embedded == null) {
+                    item.put("success", false);
+                    item.put("error", "无内嵌角色卡数据");
+                } else {
+                    item.put("success", true);
+                    item.put("value", embedded);
                 }
             }
             results.put(item);

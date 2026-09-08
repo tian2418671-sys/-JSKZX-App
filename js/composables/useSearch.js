@@ -17,6 +17,8 @@ import tokenCache from '../utils/tokenCache.js';
  * 备选开场白列表、深度提示词/系统提示词、正则脚本、内嵌世界书全部词条（名称/注释/触发词/正文）
  */
 export function extractCardSearchableText(item) {
+    // 🚀 移动端轻量条目快速路径:搜索全文已在加载时预提取(桌面条目无此字段,走原逻辑)
+    if (item && typeof item._searchText === 'string') return item._searchText;
     const data = (item && item.data && item.data.data) || (item && item.data) || {};
     const textSegments = [];
     const push = (v) => { if (v !== undefined && v !== null && v !== '') textSegments.push(String(v)); };
@@ -86,6 +88,21 @@ export function extractCardSearchableText(item) {
  */
 export function extractCardTags(item, opts = {}) {
     const { ignoreNative = false } = opts;
+    // 🚀 移动端轻量条目快速路径:原生标签已预提取到 _tags(桌面条目无此字段,走原逻辑)
+    if (item && Array.isArray(item._tags)) {
+        const tags = new Set();
+        const collect = (t) => {
+            if (Array.isArray(t)) {
+                t.forEach(x => { if (x !== undefined && x !== null && x !== '') tags.add(String(x).toLowerCase()); });
+            } else if (typeof t === 'string' && t.trim() !== '') {
+                t.split(',').map(x => x.trim()).filter(Boolean).forEach(x => tags.add(x.toLowerCase()));
+            }
+        };
+        collect(item.tags);
+        collect(item.customTags);
+        if (!ignoreNative) collect(item._tags);
+        return Array.from(tags);
+    }
     const data = (item && item.data && item.data.data) || (item && item.data) || {};
     const tags = new Set();
     const collect = (t) => {

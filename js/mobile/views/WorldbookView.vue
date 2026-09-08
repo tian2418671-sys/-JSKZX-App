@@ -296,7 +296,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { showSuccessToast, showToast, showConfirmDialog } from 'vant';
-import { mobileLibrary, loadLibrary, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb, setLastOpenedPath } from '../useMobileLibrary';
+import { mobileLibrary, loadLibrary, loadCardFullData, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb, setLastOpenedPath } from '../useMobileLibrary';
 import DedupeModal from '../components/DedupeModal.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import GlobalEntrySearchModal from '../components/GlobalEntrySearchModal.vue';
@@ -411,7 +411,7 @@ export default {
         function onMoreSelect(action) {
             showMore.value = false;
             if (action.value === 'search') openGlobalEntrySearch();
-            else if (action.value === 'assets') showGlobalAsset.value = true;
+            else if (action.value === 'assets') { showGlobalAsset.value = true; buildGlobalIndexes(); }
             else if (action.value === 'dedupe') onDedupe();
         }
 
@@ -700,8 +700,11 @@ export default {
 
         // ---------- 从角色卡提取世界书(卡内 keys/secondary_keys → 库 key/keysecondary 字段转换) ----------
         async function extractFromCard(card) {
-            const d = (card.data && card.data.data) || card.data || {};
-            const book = d.character_book || (card.data && card.data.character_book) || {};
+            // 🚀 轻量化:按需加载全量数据(用后即弃)
+            const full = await loadCardFullData(card);
+            if (!full) { showToast('读取卡片失败'); return; }
+            const d = full.data || full;
+            const book = d.character_book || {};
             const entries = extractBookEntries(book);
             if (!entries.length) { showToast('该角色卡没有内嵌世界书词条'); return; }
             const baseName = d.name || card.name || '未命名角色';
@@ -879,14 +882,8 @@ export default {
             showDedupe.value = true;
         }
 
-        const cardWithWb = computed(() =>
-            library.library.filter((c) => {
-                // 对齐桌面:内嵌世界书在 data.character_book(V2/V3),兼容 V1 顶层;extractBookEntries 全形态安全提取
-                const data = c.data || {};
-                const book = (data.data && data.data.character_book) || data.character_book;
-                return extractBookEntries(book).length > 0;
-            })
-        );
+        // 🚀 轻量化:内嵌世界书特征在加载时预提取(_lb),此处直接用标记过滤,不再触碰全量 data
+        const cardWithWb = computed(() => library.library.filter((c) => c._lb));
 
         function entryName(e) {
             if (!e || typeof e !== 'object') return '';
@@ -895,22 +892,25 @@ export default {
         function entryDisplayName(e) { return entryName(e) || '未命名条目'; }
 
         function entryCount(card) {
-            const data = card.data || {};
-            const book = (data.data && data.data.character_book) || data.character_book;
-            return extractBookEntries(book).length;
+            // 🚀 轻量化:卡内世界书条目数在打开编辑器时按需读取;列表徽标用 _lb 近似(有书=≥1)
+            return card._lb ? 1 : 0;
         }
 
         function reload() { loadLibrary(true); } // 下拉刷新/手动刷新:强制重扫
 
         async function openCardWb(card) {
-            const { entries } = getCardEmbeddedWb(card);
+            // 🚀 轻量化:按需加载全量数据为编辑副本(编辑/保存只作用于副本,保存后回写轻量字段)
+            const full = await loadCardFullData(card);
+            if (!full) { showToast('读取卡片失败'); return; }
+            const editable = { ...card, data: full };
+            const { entries } = getCardEmbeddedWb(editable);
             Object.values(entries).forEach(normalizeEntry);
             editing.value = {
                 path: card.path,
                 name: card.name + '（卡内）',
                 entries,
                 wrapped: false,
-                card
+                card: editable
             };
         }
 
@@ -1291,36 +1291,65 @@ export default {
             };
         }
 
-        const globalEntryIndex = computed(() => {
-            const list = [];
+        // 🚀 轻量化:全库词条/正则聚合改为按需异步构建(打开弹窗时触发),
+        //   只水合带特征标记(_lb/_rx)的卡片,有界并发,构建后全量数据即弃。
+        const globalEntryIndex = ref([]);
+        const globalAllWorldbooks = ref([]);
+        const globalAllRegexScripts = ref([]);
+        let globalIndexBuilt = false;
+
+        async function buildGlobalIndexes() {
+            if (globalIndexBuilt) return;
+            const entries = [];
+            const allWbs = [];
+            const allRegex = [];
             (library.worldbooks || []).forEach((wb) => {
                 const name = (wb.wb && wb.wb.name) || (wb.name || '').replace(/\.json$/i, '') || '未命名世界书';
-                const entries = extractBookEntries(wb.wb || {});
-                entries.forEach((e) => {
+                extractBookEntries(wb.wb || {}).forEach((e) => {
                     const n = buildSearchEntry(e, 'worldbook', name, wb.path || '');
-                    if (n) list.push(n);
+                    if (n) entries.push(n);
                 });
             });
             (extWorldbooks.value || []).forEach((wb) => {
                 const name = (wb.wb && wb.wb.name) || (wb.name || '').replace(/\.json$/i, '') || '未命名世界书';
-                const entries = extractBookEntries(wb.wb || {});
-                entries.forEach((e) => {
+                extractBookEntries(wb.wb || {}).forEach((e) => {
                     const n = buildSearchEntry(e, 'worldbook', name, wb.path || '');
-                    if (n) list.push(n);
+                    if (n) entries.push(n);
                 });
             });
-            (library.library || []).forEach((item) => {
-                const d = (item.data && item.data.data) || item.data || {};
-                const book = d.character_book || (item.data && item.data.character_book) || {};
-                const entries = extractBookEntries(book);
-                const name = d.name || item.name || '未知角色';
-                entries.forEach((e) => {
-                    const n = buildSearchEntry(e, 'card', name, item.path || '');
-                    if (n) list.push(n);
-                });
-            });
-            return list;
-        });
+            const cardItems = (library.library || []).filter((c) => c._lb || c._rx);
+            let idx = 0;
+            const WORKERS = 4;
+            await Promise.all(Array.from({ length: Math.min(WORKERS, cardItems.length) }, async () => {
+                while (idx < cardItems.length) {
+                    const item = cardItems[idx++];
+                    try {
+                        const full = await loadCardFullData(item);
+                        if (!full) continue;
+                        const d = full.data || full;
+                        const ownerName = d.name || item.name || '未知角色';
+                        const book = d.character_book || {};
+                        extractBookEntries(book).forEach((e) => {
+                            const n = buildSearchEntry(e, 'card', ownerName, item.path || '');
+                            if (n) entries.push(n);
+                            allWbs.push({
+                                ...e,
+                                displayName: e.name || e.comment || '未命名条目',
+                                ownerCardName: ownerName
+                            });
+                        });
+                        const regex = (d.extensions && d.extensions.regex_scripts) || d.regex_scripts || [];
+                        (Array.isArray(regex) ? regex : []).forEach((r) => {
+                            allRegex.push({ ...r, ownerCardName: ownerName });
+                        });
+                    } catch (e) { /* 单卡失败跳过 */ }
+                }
+            }));
+            globalEntryIndex.value = entries;
+            globalAllWorldbooks.value = allWbs;
+            globalAllRegexScripts.value = allRegex;
+            globalIndexBuilt = true;
+        }
 
         const globalEntryResults = computed(() => {
             const q = globalEntryQuery.value.trim().toLowerCase();
@@ -1334,6 +1363,7 @@ export default {
         function openGlobalEntrySearch() {
             globalEntryQuery.value = '';
             showGlobalEntrySearch.value = true;
+            buildGlobalIndexes();
         }
 
         // 点击结果跳转到来源(世界书打开编辑器 / 角色卡打开详情)
@@ -1362,33 +1392,6 @@ export default {
 
         // ---------- 全局资产中心 ----------
         const showGlobalAsset = ref(false);
-        const globalAllWorldbooks = computed(() => {
-            const list = [];
-            (library.library || []).forEach((item) => {
-                const d = (item.data && item.data.data) || item.data || {};
-                const book = d.character_book || (item.data && item.data.character_book) || {};
-                const entries = extractBookEntries(book);
-                entries.forEach((e) => {
-                    list.push({
-                        ...e,
-                        displayName: e.name || e.comment || '未命名条目',
-                        ownerCardName: d.name || item.name || '未知角色'
-                    });
-                });
-            });
-            return list;
-        });
-        const globalAllRegexScripts = computed(() => {
-            const list = [];
-            (library.library || []).forEach((item) => {
-                const d = (item.data && item.data.data) || item.data || {};
-                const regex = (d.extensions && d.extensions.regex_scripts) || d.regex_scripts || [];
-                (Array.isArray(regex) ? regex : []).forEach((r) => {
-                    list.push({ ...r, ownerCardName: d.name || item.name || '未知角色' });
-                });
-            });
-            return list;
-        });
 
         return {
             library, cardWithWb, editing, entryCount, reload, showDedupe, onDedupe,

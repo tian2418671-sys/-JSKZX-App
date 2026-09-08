@@ -11,6 +11,8 @@ class TokenCache {
 
     get(card) {
         if (!card || typeof card !== 'object') return 0;
+        // 🚀 移动端轻量条目快速路径:Token 已在加载时预估算(桌面条目无此字段,走原逻辑)
+        if (typeof card._tokens === 'number') return card._tokens;
         if (this.cache.has(card)) {
             this.stats.hits++;
             return this.cache.get(card);

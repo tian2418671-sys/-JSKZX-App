@@ -398,7 +398,23 @@ export const androidImpl = {
         if (!rels.length) return { success: true, results: [] };
         const res = await LibraryFs.readTextBatch({ paths: rels });
         if (!res || !res.success) return { success: false, error: (res && res.error) || '批量读取失败' };
-        return { success: true, results: res.results || [] };
+        // 原生返回相对路径,统一补回 /library 前缀与调用方 f.path 对齐(否则批量预取静默失效)
+        return { success: true, results: (res.results || []).map((it) => ({
+            ...it,
+            path: it && it.path && !it.path.startsWith('/') ? LIBRARY_ROOT + '/' + it.path : it.path
+        })) };
+    },
+    /** 批量提取 PNG 内嵌 chara 文本块(轻量化加载:只过桥文本,不过桥整图 base64,防大库 OOM) */
+    async readCharaBatch(paths) {
+        const rels = (paths || []).map(toRelativePath).filter((p) => p !== null);
+        if (!rels.length) return { success: true, results: [] };
+        const res = await LibraryFs.readCharaBatch({ paths: rels });
+        if (!res || !res.success) return { success: false, error: (res && res.error) || '批量提取失败' };
+        // 原生返回相对路径,统一补回 /library 前缀与调用方 f.path 对齐
+        return { success: true, results: (res.results || []).map((it) => ({
+            ...it,
+            path: it && it.path && !it.path.startsWith('/') ? LIBRARY_ROOT + '/' + it.path : it.path
+        })) };
     },
     async saveCard(filePath, updatedJson) {
         const rel = toRelativePath(filePath);

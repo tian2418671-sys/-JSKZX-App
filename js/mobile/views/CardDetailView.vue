@@ -549,7 +549,7 @@ import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
 import TestSidebar from '../components/TestSidebar.vue';
 import ChatPanelSeg from '../components/ChatPanelSeg.vue';
-import { findCard, saveCardData, loadLibrary, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath } from '../useMobileLibrary';
+import { findCard, saveCardData, loadLibrary, hydrateCardForEdit, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
@@ -1377,7 +1377,7 @@ export default {
             if (res && res.success) {
                 showSuccessToast('已恢复');
                 await loadLibrary(true); // 快照恢复会覆盖文件内容,强制重扫以重解析卡片数据
-                card.value = findCard(id.value) || null;
+                card.value = await hydrateCardForEdit(locateCard(id.value));
                 initChat();
                 showSnapshots.value = false;
             } else {
@@ -2508,11 +2508,12 @@ export default {
             try {
                 resolveId();
                 await ensureLibraryReady();
-                card.value = locateCard(id.value) || null;
+                // 🚀 轻量化:先定位轻量条目,再按需加载全量数据为深响应式编辑副本
+                card.value = await hydrateCardForEdit(locateCard(id.value));
                 // 兜底:库可能为空/陈旧(如上次扫描失败、SAF 授权失效后重扫),强制重扫后重试一次
                 if (!card.value) {
                     try { await loadLibrary(true); } catch (e) { /* 忽略重扫异常 */ }
-                    card.value = locateCard(id.value) || null;
+                    card.value = await hydrateCardForEdit(locateCard(id.value));
                 }
                 if (!card.value) {
                     console.error('[CardDetail] 未找到卡片', JSON.stringify({
@@ -2549,8 +2550,9 @@ export default {
         // 兜底:库数据到达/刷新后若仍未找到卡(并发加载、导入后重扫等场景),再解析一次
         watch(() => mobileLibrary.library, () => {
             if (!card.value && id.value) {
-                card.value = findCard(id.value) || null;
-                if (card.value) initChat();
+                hydrateCardForEdit(locateCard(id.value)).then((c) => {
+                    if (c) { card.value = c; initChat(); }
+                });
             }
         });
 

@@ -72,8 +72,11 @@ export default {
         let linkCache = [];
         let debounceTimer = null;
 
-        // 标签提取:移动端卡片标签在 data.data.tags(数组)
+        // 标签提取:移动端卡片标签在 data.data.tags(数组);🚀 轻量化后预提取到 _tags
         const cardTags = (item) => {
+            if (item && Array.isArray(item._tags)) {
+                return item._tags.map((x) => String(x).trim()).filter(Boolean);
+            }
             const dd = (item.data && item.data.data) || {};
             const t = dd.tags;
             return Array.isArray(t) ? t.map(x => String(x).trim()).filter(Boolean) : [];
