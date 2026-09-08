@@ -331,7 +331,7 @@ export default {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             title, treeUri, q, loading, filtered, presets, showEditor, edName, edJson, saving, edError,
             pageSize, pageSizeOptions, currentPage, totalPages, paginatedList, nextPage, prevPage,
-            pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta
+            pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta, openDetail
         };
     }
 };

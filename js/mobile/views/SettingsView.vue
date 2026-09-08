@@ -86,18 +86,7 @@
                     is-link
                     @click="openTrash"
                 />
-                <!-- 🚀 长期记忆:开关/条数/数据查看入口(此前仅测卡侧边栏有,设置页完全缺失) -->
-                <van-cell title="🧠 长期记忆" label="测卡时自动记录并检索相关记忆">
-                    <template #right-icon>
-                        <van-switch v-model="memoryEnabled" size="20px" @update:model-value="saveMemoryEnabled" />
-                    </template>
-                </van-cell>
-                <van-cell title="记忆检索条数" label="每次注入的最多相关记忆">
-                    <template #value>
-                        <van-stepper v-model="memoryLimit" min="1" max="50" integer @change="saveMemoryLimit" />
-                    </template>
-                </van-cell>
-                <van-cell title="查看记忆数据" label="浏览已存储的对话与事实记忆" icon="notes-o" is-link @click="openMemoryViewer" />
+                <!-- 记忆相关设置统一收口在「测卡侧边栏 → 设置 Tab」,主设置页不再重复放置 -->
                 <van-cell title="更新源地址" label="已预填 GitHub Releases 源，一般无需修改">
                     <template #value>
                         <van-field
@@ -151,7 +140,7 @@
 
             <!-- 关于 -->
             <van-cell-group inset title="关于">
-                <van-cell title="版本" value="v1.10.1 (移动端)" />
+                <van-cell title="版本" value="v1.10.5 (移动端)" />
                 <van-cell title="数据存储" :label="rootUri || '使用系统文件夹(SAF 目录树授权)'" />
             </van-cell-group>
         </div>
@@ -213,35 +202,6 @@
             </div>
         </van-popup>
 
-        <!-- 记忆查看 / 管理弹窗 -->
-        <van-popup v-model:show="showMemoryViewer" position="bottom" round style="height: 70%">
-            <van-nav-bar title="长期记忆" @click-left="showMemoryViewer = false">
-                <template #left><van-icon name="arrow-left" /></template>
-                <template #right>
-                    <van-icon name="delete-o" size="18" style="margin-right: 12px" @click="clearAllMemory" />
-                </template>
-            </van-nav-bar>
-            <div class="mem-toolbar">
-                <van-radio-group v-model="memoryFilter" direction="horizontal">
-                    <van-radio name="all" :style="radioStyle">全部</van-radio>
-                    <van-radio name="fact" :style="radioStyle">事实</van-radio>
-                    <van-radio name="message" :style="radioStyle">消息</van-radio>
-                </van-radio-group>
-            </div>
-            <div class="mem-list">
-                <van-loading v-if="memoryLoading" size="20">加载中…</van-loading>
-                <van-empty v-else-if="!memoryItems.length" description="暂无记忆" />
-                <div v-else v-for="m in memoryItems" :key="m.id" class="mem-item">
-                    <div class="mem-item-body">
-                        <div class="mem-item-type">{{ m.type === 'fact' ? '📌 事实' : '💬 消息' }}</div>
-                        <div class="mem-item-content">{{ m.content }}</div>
-                        <div class="mem-item-meta">{{ m.cardName || '全局' }} · {{ fmtTime(m.createdAt) }}</div>
-                    </div>
-                    <van-icon name="cross" size="16" color="#c8c9cc" @click="removeOneMemory(m)" />
-                </div>
-            </div>
-        </van-popup>
-
         <!-- 主题选择弹窗 -->
         <van-popup v-model:show="showThemePicker" position="bottom" round>
             <div class="theme-picker-head">
@@ -271,7 +231,6 @@ import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
-import { isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit, listMemory, removeMemory, clearMemory } from '../useChatMemory';
 import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs, THEME_LABELS } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
@@ -478,43 +437,7 @@ export default {
         function saveUserName() { setUserName(userName.value); showSuccessToast('用户名已保存'); }
         function saveUserPersona() { setUserPersona(userPersona.value); showSuccessToast('用户人设已保存'); }
 
-        // ---------- 长期记忆 ----------
-        const memoryEnabled = ref(isMemoryEnabled());
-        const memoryLimit = ref(getMemoryLimit());
-        const showMemoryViewer = ref(false);
-        const memoryLoading = ref(false);
-        const memoryItems = ref([]);
-        const memoryFilter = ref('all');
-        function saveMemoryEnabled() { setMemoryEnabled(memoryEnabled.value); }
-        function saveMemoryLimit() { setMemoryLimit(memoryLimit.value); }
-        function fmtTime(ts) {
-            if (!ts) return '';
-            const d = new Date(Number(ts));
-            const p = (n) => String(n).padStart(2, '0');
-            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-        }
-        async function openMemoryViewer() {
-            showMemoryViewer.value = true;
-            await refreshMemory();
-        }
-        async function refreshMemory() {
-            memoryLoading.value = true;
-            const type = memoryFilter.value === 'all' ? '' : memoryFilter.value;
-            memoryItems.value = await listMemory(type, 200);
-            memoryLoading.value = false;
-        }
-        async function removeOneMemory(m) {
-            await removeMemory(m.id);
-            await refreshMemory();
-        }
-        async function clearAllMemory() {
-            try {
-                await showConfirmDialog({ title: '清空记忆', message: '将删除全部记忆，不可恢复。', confirmButtonText: '清空', confirmButtonColor: '#ee0a24' });
-            } catch (e) { return; }
-            await clearMemory('');
-            await refreshMemory();
-        }
-        watch(memoryFilter, () => { refreshMemory(); });
+        // 🚀 记忆相关设置统一收口在「测卡侧边栏 → 设置 Tab」,主设置页不再维护(避免双处漂移)
 
         const libraryState = () => (granted.value ? '已授权 ✓' : (authLost.value ? '已失效' : '未授权'));
 
@@ -711,8 +634,6 @@ export default {
             availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
             fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
             replyCount, userName, userPersona, saveReplyCount, saveUserName, saveUserPersona,
-            memoryEnabled, memoryLimit, saveMemoryEnabled, saveMemoryLimit, showMemoryViewer, openMemoryViewer,
-            memoryItems, memoryFilter, memoryLoading, removeOneMemory, clearAllMemory, fmtTime,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
             fmtSize, checkUpdate, doDownload,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
