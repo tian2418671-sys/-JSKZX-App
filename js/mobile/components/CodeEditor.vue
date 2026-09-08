@@ -9,13 +9,14 @@
             <span class="ce-info">{{ lineCount }} 行 · {{ charCount }} 字符</span>
             <van-button size="mini" plain type="primary" @click="doFormat">✨ 格式化</van-button>
         </div>
-        <div class="ce-body" :style="{ height: height }">
+        <div class="ce-body" :class="{ 'ce-fallback': !overlaySupported }" :style="{ height: height }">
             <div class="ce-gutter" ref="gutterEl" aria-hidden="true">{{ gutterText }}</div>
             <div class="ce-stage">
-                <pre class="ce-highlight" ref="hlEl" aria-hidden="true" v-html="highlighted"></pre>
+                <pre v-if="overlaySupported" class="ce-highlight" ref="hlEl" aria-hidden="true" v-html="highlighted"></pre>
                 <textarea
                     ref="taEl"
                     class="ce-input"
+                    :class="{ 'ce-input-fallback': !overlaySupported }"
                     :value="modelValue"
                     :spellcheck="false"
                     :autocapitalize="off"
@@ -44,6 +45,20 @@ export default {
         const taEl = ref(null);
         const hlEl = ref(null);
         const gutterEl = ref(null);
+        // 🚀 WebView 兜底:检测透明文字叠层是否受支持(部分旧 WebView 不支持 -webkit-text-fill-color:transparent
+        //    → 文字会以黑色直接显示,与高亮层叠影)。不支持时切「直显模式」:黑字白底,仍可正常编辑。
+        const overlaySupported = (() => {
+            try {
+                const el = document.createElement('textarea');
+                el.style.setProperty('-webkit-text-fill-color', 'transparent');
+                document.body.appendChild(el);
+                const v = getComputedStyle(el).webkitTextFillColor;
+                el.remove();
+                return v === 'transparent' || v === 'rgba(0, 0, 0, 0)';
+            } catch (e) {
+                return false;
+            }
+        })();
         const code = computed(() => String(props.modelValue == null ? '' : props.modelValue));
         const highlighted = computed(() => highlightJs(code.value));
         const lineCount = computed(() => (code.value ? code.value.split('\n').length : 1));
@@ -85,7 +100,7 @@ export default {
             }
         });
         return {
-            taEl, hlEl, gutterEl, highlighted, lineCount, charCount, gutterText,
+            taEl, hlEl, gutterEl, overlaySupported, highlighted, lineCount, charCount, gutterText,
             onInput, onScroll, onTab, doFormat
         };
     }
@@ -120,6 +135,21 @@ export default {
     z-index: 2; color: transparent; caret-color: #38bdf8; background: transparent;
     resize: none; outline: none; -webkit-text-fill-color: transparent;
 }
+/* 🚀 选中态修复:叠层方案下编辑层文字是透明的,默认选中时看不到选中内容(只剩色块)。
+   显式给选中态上白字+半透明蓝底,拖选/全选都有清晰反馈。 */
+.ce-input::selection {
+    background: rgba(56, 189, 248, 0.45);
+    color: #ffffff;
+    -webkit-text-fill-color: #ffffff;
+}
+.ce-highlight::selection { background: rgba(56, 189, 248, 0.30); }
+/* 🚀 直显回退模式(WebView 不支持透明叠层):白底黑字,放弃高亮保可编辑性 */
+.ce-fallback { background: #ffffff; }
+.ce-input-fallback {
+    color: #1e293b; background: #ffffff; -webkit-text-fill-color: #1e293b;
+    caret-color: #0284c7;
+}
+.ce-fallback .ce-gutter { background: #f1f5f9; color: #94a3b8; }
 /* 语法高亮色系(暗色编辑器) */
 .ce-highlight :deep(.kw) { color: #c084fc; }
 .ce-highlight :deep(.str) { color: #86efac; }
