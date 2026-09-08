@@ -12,7 +12,7 @@
     <div class="pd-page">
         <van-nav-bar :title="presetName" left-arrow @click-left="$router.back()" safe-area-inset-top>
             <template #right>
-                <van-icon name="description" size="18" style="margin-right: 12px" @click="showJsonEditor = true" />
+                <van-icon name="description" size="18" style="margin-right: 12px" @click="openJsonEditor" />
                 <van-icon name="success" size="18" :color="dirty ? '#06b6d4' : ''" @click="save" />
             </template>
         </van-nav-bar>
@@ -119,13 +119,13 @@
             </div>
         </van-popup>
 
-        <!-- JSON 源码编辑(保留原深度编辑能力) -->
+        <!-- JSON 源码编辑(编程式编辑器:行号/高亮/格式化) -->
         <van-popup v-model:show="showJsonEditor" position="bottom" round class="pd-json-popup">
             <div class="pd-json-head">
                 <span class="pd-json-title">✏️ JSON 源码编辑</span>
                 <van-icon name="cross" size="18" @click="showJsonEditor = false" />
             </div>
-            <textarea v-model="jsonDraft" class="pd-json" spellcheck="false" />
+            <CodeEditor v-model="jsonDraft" height="52vh" />
             <div class="pd-json-actions">
                 <van-button size="small" plain @click="showJsonEditor = false">取消</van-button>
                 <van-button size="small" type="primary" @click="applyJsonDraft">应用</van-button>
