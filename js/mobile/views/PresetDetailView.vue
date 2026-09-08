@@ -67,11 +67,28 @@
                     </div>
                 </van-tab>
 
-                <!-- ③ 插件 -->
+                <!-- ③ 插件(预设自带 JS 脚本 + 插件定义) -->
                 <van-tab title="插件" name="plugins">
                     <div class="pd-body">
-                        <div class="pd-tip">预设内嵌的插件定义(宏/系统提示词/触发词),测卡时与手动插件一并生效</div>
-                        <van-empty v-if="!editablePlugins.length" description="此预设没有内嵌插件" image-size="60" />
+                        <div class="pd-tip">预设自带的 JS 脚本(酒馆助手 tavern_helper.scripts)与插件定义</div>
+                        <!-- 预设脚本(tavern_helper.scripts:完整 JS 代码) -->
+                        <div class="pd-sec-title">📜 预设脚本（{{ editablePresetScripts.length }}）</div>
+                        <van-empty v-if="!editablePresetScripts.length" description="此预设没有自带脚本" image-size="60" />
+                        <div v-for="(s, i) in editablePresetScripts" :key="s._uid" class="pd-item">
+                            <div class="pd-item-head">
+                                <span class="pd-item-name">{{ s.name || ('脚本 ' + (i + 1)) }}</span>
+                                <van-switch v-model="s.enabled" size="16px" @click.stop />
+                            </div>
+                            <div class="pd-item-meta">{{ s.info || '无描述' }} · {{ fmtCodeSize(s.content) }}</div>
+                            <div class="pd-item-ops">
+                                <van-button size="mini" plain type="primary" @click="viewScriptCode(i)">查看代码</van-button>
+                                <van-button size="mini" plain type="danger" @click="removePresetScript(i)">删除</van-button>
+                            </div>
+                        </div>
+                        <van-button block plain type="primary" size="small" style="margin-top: 10px" @click="addPresetScript">＋ 新增脚本</van-button>
+                        <!-- 插件定义(extensions.plugins 自定义约定) -->
+                        <div class="pd-sec-title" style="margin-top: 14px">🧩 插件定义（{{ editablePlugins.length }}）</div>
+                        <van-empty v-if="!editablePlugins.length" description="此预设没有插件定义" image-size="60" />
                         <div v-for="(pl, i) in editablePlugins" :key="pl._uid" class="pd-item">
                             <div class="pd-item-head">
                                 <span class="pd-item-name">{{ pl.name || ('插件 ' + (i + 1)) }}</span>
@@ -88,6 +105,19 @@
                 </van-tab>
             </van-tabs>
         </template>
+
+        <!-- 脚本代码查看/编辑弹窗(编程式编辑器:行号/高亮/格式化) -->
+        <van-popup v-model:show="showScriptCode" position="bottom" round class="pd-code-popup">
+            <div class="pd-json-head">
+                <span class="pd-json-title">📜 {{ scriptCodeName }}</span>
+                <van-icon name="cross" size="18" @click="showScriptCode = false" />
+            </div>
+            <CodeEditor v-model="scriptCodeDraft" height="52vh" />
+            <div class="pd-json-actions">
+                <van-button size="small" plain @click="showScriptCode = false">取消</van-button>
+                <van-button size="small" type="primary" @click="applyScriptCode">应用</van-button>
+            </div>
+        </van-popup>
 
         <!-- JSON 源码编辑(保留原深度编辑能力) -->
         <van-popup v-model:show="showJsonEditor" position="bottom" round class="pd-json-popup">
@@ -119,6 +149,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { showToast, showSuccessToast } from 'vant';
 import { api } from '../../bridge/api';
+import CodeEditor from '../components/CodeEditor.vue';
 import { isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
 
 const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir';
@@ -129,6 +160,7 @@ const nextUid = () => 'pd' + (++UID);
 
 export default {
     name: 'PresetDetailView',
+    components: { CodeEditor },
     setup() {
         const route = useRoute();
         const router = useRouter();
@@ -173,6 +205,21 @@ export default {
             const ext = presetExt(preset.value);
             return Array.isArray(ext.plugins) ? ext.plugins : [];
         });
+        // 🚀 预设自带 JS 脚本(酒馆助手 tavern_helper.scripts:完整 JS 代码,如 394KB 悬浮窗应用)
+        const editablePresetScripts = computed(() => {
+            const d = preset.value && preset.value.data;
+            if (!d) return [];
+            const th = d.extensions && d.extensions.tavern_helper;
+            return (th && Array.isArray(th.scripts)) ? th.scripts : [];
+        });
+
+        /** 代码体积人性化(KB/MB) */
+        function fmtCodeSize(s) {
+            const n = String(s == null ? '' : s).length;
+            if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+            if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+            return n + ' 字符';
+        }
 
         /** 加载后预处理:补临时 _uid(折叠 key)与缺失的默认值(在 setup 阶段执行,避免 computed 内变异) */
         function prepareEditable() {
@@ -181,6 +228,15 @@ export default {
             if (!d.extensions) d.extensions = {};
             if (!Array.isArray(d.extensions.regex_scripts)) d.extensions.regex_scripts = [];
             if (!Array.isArray(d.extensions.plugins)) d.extensions.plugins = [];
+            // 预设脚本(tavern_helper.scripts)补齐临时 _uid 与默认值
+            const th = d.extensions.tavern_helper || (d.extensions.tavern_helper = {});
+            if (!Array.isArray(th.scripts)) th.scripts = [];
+            th.scripts.forEach((s) => {
+                if (!s._uid) s._uid = nextUid();
+                if (s.enabled === undefined) s.enabled = true;
+                if (!s.name) s.name = '未命名脚本';
+                if (s.content === undefined) s.content = '';
+            });
             if (!Array.isArray(d.prompts)) d.prompts = [];
             d.prompts.forEach((p) => {
                 if (!p._uid) p._uid = nextUid();
@@ -309,6 +365,40 @@ export default {
             markDirty();
         }
 
+        // ---------- 预设脚本(tavern_helper.scripts) ----------
+        const showScriptCode = ref(false);
+        const scriptCodeName = ref('');
+        const scriptCodeDraft = ref('');
+        let scriptCodeTarget = null;
+        function viewScriptCode(i) {
+            const s = editablePresetScripts.value[i];
+            if (!s) return;
+            scriptCodeTarget = s;
+            scriptCodeName.value = s.name || '脚本';
+            scriptCodeDraft.value = String(s.content || '');
+            showScriptCode.value = true;
+        }
+        function applyScriptCode() {
+            if (scriptCodeTarget) {
+                scriptCodeTarget.content = scriptCodeDraft.value;
+                markDirty();
+            }
+            showScriptCode.value = false;
+        }
+        function addPresetScript() {
+            const th = preset.value.data.extensions.tavern_helper || (preset.value.data.extensions.tavern_helper = {});
+            if (!Array.isArray(th.scripts)) th.scripts = [];
+            const s = { name: '新脚本', enabled: true, content: '', info: '', type: 'script', _uid: nextUid() };
+            th.scripts.push(s);
+            markDirty();
+            viewScriptCode(th.scripts.indexOf(s));
+        }
+        function removePresetScript(i) {
+            const th = preset.value.data.extensions.tavern_helper;
+            if (th && Array.isArray(th.scripts)) th.scripts.splice(i, 1);
+            markDirty();
+        }
+
         // ---------- JSON 源码 ----------
         function openJsonEditor() {
             jsonDraft.value = JSON.stringify(preset.value.data, null, 2);
@@ -371,8 +461,10 @@ export default {
         onMounted(load);
         return {
             preset, presetName, loading, dirty, activeTab, promptOpen,
-            editablePrompts, editableRegex, editablePlugins,
+            editablePrompts, editableRegex, editablePlugins, editablePresetScripts, fmtCodeSize,
             addPrompt, removePrompt, addRegex, editRegex, removeRegex, addPlugin, editPlugin, removePlugin,
+            addPresetScript, removePresetScript, viewScriptCode, applyScriptCode,
+            showScriptCode, scriptCodeName, scriptCodeDraft,
             shortText, showJsonEditor, jsonDraft, openJsonEditor, applyJsonDraft,
             showItemEdit, itemEditTitle, itemEditLabel1, itemEditLabel2, itemEditForm, onItemEditClose,
             save
@@ -405,7 +497,9 @@ export default {
 .pd-item-name { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pd-item-meta { font-size: 12px; color: var(--van-gray-5, #969799); margin: 6px 0; word-break: break-all; }
 .pd-item-ops { display: flex; gap: 8px; justify-content: flex-end; }
+.pd-sec-title { font-size: 13px; font-weight: 600; color: var(--van-gray-6, #646566); margin: 10px 2px 8px; }
 .pd-json-popup { height: 75vh; display: flex; flex-direction: column; }
+.pd-code-popup { height: 75vh; display: flex; flex-direction: column; }
 .pd-json-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
 .pd-json-title { font-size: 15px; font-weight: 600; }
 .pd-json { flex: 1; width: 100%; border: 0; padding: 10px 16px; font-size: 12px; font-family: monospace; resize: none; background: transparent; }
