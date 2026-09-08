@@ -176,9 +176,12 @@ function yieldFrame() {
     });
 }
 
-// 桥接能力探测:readCharaBatch(PNG 文本块批量提取,新增);低版本桥接自动回退 readBuffer
-const bridgeHasCharaBatch = typeof window !== 'undefined'
-    && window.electronAPI && typeof window.electronAPI.readCharaBatch === 'function';
+// 桥接能力探测:readCharaBatch(PNG 文本块批量提取,新增);低版本桥接自动回退 readBuffer。
+// ⚠️ 必须调用时探测:本模块在 entry.js 注入 window.electronAPI 之前就可能被 import 求值。
+function hasCharaBatch() {
+    return typeof window !== 'undefined'
+        && window.electronAPI && typeof window.electronAPI.readCharaBatch === 'function';
+}
 
 export async function loadLibrary(refresh = false) {
     // 已加载完成且库非空时跳过重复扫描（返回页面/组件重复挂载不重扫；下拉刷新等传 true 强制重扫）
@@ -229,7 +232,7 @@ export async function loadLibrary(refresh = false) {
         for (let i = 0; i < imgFiles.length; i += PNG_BATCH) {
             const batch = imgFiles.slice(i, i + PNG_BATCH);
             const textMap = new Map();
-            if (bridgeHasCharaBatch) {
+            if (hasCharaBatch()) {
                 try {
                     const cr = await window.electronAPI.readCharaBatch(batch.map((f) => f.path));
                     if (cr && cr.success && Array.isArray(cr.results)) {
@@ -392,7 +395,7 @@ export async function loadCardFullData(card) {
             if (!parsed || !isCharacterCardData(parsed)) return null;
             return normalizeCardData(parsed);
         }
-        if (name.endsWith('.png') && bridgeHasCharaBatch) {
+        if (name.endsWith('.png') && hasCharaBatch()) {
             const cr = await window.electronAPI.readCharaBatch([card.path]);
             const item = cr && cr.success && Array.isArray(cr.results) && cr.results[0];
             if (item && item.success && typeof item.value === 'string') {
