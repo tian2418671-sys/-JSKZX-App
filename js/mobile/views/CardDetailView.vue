@@ -1467,8 +1467,13 @@ export default {
                 return null; // showdown 加载失败 → 走轻量降级
             }
         })();
+        // 🚀 Markdown 渲染缓存:同样的文本段每条消息渲染一次即可(切 Tab 重渲染是卡顿大头)
+        const mdCache = new Map();
         function renderChatHtml(text) {
-            let s = String(text == null ? '' : text);
+            const key = String(text == null ? '' : text);
+            const hit = mdCache.get(key);
+            if (hit !== undefined) return hit;
+            let s = key;
             if (mdConverter) {
                 try { s = mdConverter.makeHtml(s); } catch (e) { /* 转轻量降级 */ }
             }
@@ -1487,7 +1492,10 @@ export default {
                 s = s.replace(/\n/g, '<br/>');
             }
             // DOMPurify 白名单清洗(禁止脚本/事件/外联追踪,允许 a[href] 新窗口)
-            return sanitizeStatusHtml(s);
+            const out = sanitizeStatusHtml(s);
+            if (mdCache.size > 300) { const first = mdCache.keys().next().value; mdCache.delete(first); }
+            mdCache.set(key, out);
+            return out;
         }
 
         const chatApiEndpoint = ref(localStorage.getItem(LS_ENDPOINT) || 'http://127.0.0.1:1234/v1/chat/completions');
@@ -1643,12 +1651,24 @@ export default {
             }
         }
         // ---------- 分段渲染（对齐「渲染方案.MD」：文本段 + HTML 面板段） ----------
+        // 🚀 结果缓存:v-for 每次重渲染(切 Tab/滚动/输入)都会重算分段+宏替换+srcdoc,
+        //    大段消息(142KB 面板模板)重算秒级 → 切 Tab 卡顿根因。按消息文本缓存,消息变才重算。
+        const segCache = new Map();
         function messageSegments(m) {
+            const raw = messageText(m);
+            // 缓存键含两个显示层宏({{char}}/{{user}}),任一变即失效
+            const macroSig = String(fullMacros.value['{{char}}'] || '') + '|' + String(fullMacros.value['{{user}}'] || '');
+            const cacheKey = (m && m.role) + '\u0000' + raw.length + '\u0000' + (segRenderEnabled.value ? 1 : 0) + '\u0000' + macroSig;
+            const hit = segCache.get(cacheKey);
+            if (hit && hit.raw === raw) return hit.segs;
             // 对齐酒馆 substituteParams:显示层先做宏替换({{char}}/{{user}} 等,幂等安全)
-            let text = applyMacros(messageText(m), fullMacros.value);
-            if (!segRenderEnabled.value) return [{ type: 'text', content: text }];
-            // 围栏切分 + 裸 HTML 模板段升级(正则输出的完整面板 HTML 无围栏,直接走 sandbox iframe)
-            return promoteHtmlSegments(segmentMessage(text));
+            let text = applyMacros(raw, fullMacros.value);
+            let segs;
+            if (!segRenderEnabled.value) segs = [{ type: 'text', content: text }];
+            else segs = promoteHtmlSegments(segmentMessage(text));
+            if (segCache.size > 120) { const first = segCache.keys().next().value; segCache.delete(first); }
+            segCache.set(cacheKey, { raw, segs });
+            return segs;
         }
 
         // 持久化当前对话到会话

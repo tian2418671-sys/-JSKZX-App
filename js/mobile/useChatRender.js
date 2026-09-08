@@ -98,22 +98,46 @@ export function buildHtmlSrcdoc(html, varsJson, panelId) {
     const varsLiteral = String(varsJson || '{"stat_data":{}}')
         .replace(/<\/(script)/gi, '<\\/$1');
     const pid = String(panelId || '');
+    // 🚀 高度上报增强:load 多次重测 + MutationObserver 持续监听(SPA 模板 mount 后高度才稳定)
     const bridge = '<script>window.getVariables=function(){try{return ' + varsLiteral +
         ';}catch(e){return {stat_data:{}};}};' +
         'window.getMessageVar=function(p){var v=window.getVariables();var c=v;' +
         'try{p.split(".").forEach(function(s){c=(c==null)?undefined:c[s];});}catch(e){c=undefined;}' +
         'return c;};' +
-        // 高度上报：load 后量取文档高度 postMessage 给宿主（多次延迟重测，等字体/图片就位）
         'function __rh(){try{var h=Math.max(document.body?document.body.scrollHeight:0,' +
         'document.documentElement?document.documentElement.scrollHeight:0);' +
         'if(h>0)parent.postMessage({type:"jsx-panel-height",id:' + JSON.stringify(pid) + ',h:h},"*");}catch(e){}}' +
-        'window.addEventListener("load",function(){__rh();setTimeout(__rh,200);setTimeout(__rh,800);});' +
-        'setTimeout(__rh,100);<\/script>';
+        'window.addEventListener("load",function(){__rh();setTimeout(__rh,200);setTimeout(__rh,800);setTimeout(__rh,2000);});' +
+        'setTimeout(__rh,100);setTimeout(__rh,600);' +
+        'if(window.MutationObserver){new MutationObserver(function(){__rh();}).observe(' +
+        'document.documentElement||document.body,{childList:true,subtree:true,attributes:true});}' +
+        '<\/script>';
+    // 完整文档/准完整文档(head/body 片段,如 JS-Slash-Runner 状态栏的 webpack SPA 模板) → 原位注入桥
     if (/<html[\s>]/i.test(body)) {
-        // 完整文档：在 </head> 或 <body> 后注入变量桥
         if (/<\/head>/i.test(body)) return body.replace(/<\/head>/i, bridge + '</head>');
         if (/<body[^>]*>/i.test(body)) return body.replace(/<body[^>]*>/i, (mm) => mm + bridge);
         return bridge + body;
+    }
+    if (/<head[\s>]/i.test(body) || /<body[\s>]/i.test(body)) {
+        // 🚀 准完整文档:补 <html> 包裹,head/body 各归其位(不能整段塞进 body——head 失效/body 嵌套)
+        let doc = '<!DOCTYPE html><html>';
+        if (/<head[\s>]/i.test(body)) {
+            const hi = body.search(/<head[\s>]/i);
+            const he = body.search(/<\/head>/i);
+            const pre = body.slice(0, hi);
+            doc += '<head>' + body.slice(hi + body.slice(hi).match(/<head[^>]*>/i)[0].length, he >= 0 ? he : body.length);
+            doc += bridge + '</head>';
+            const rest = he >= 0 ? body.slice(he + 7) : '';
+            if (/<body[\s>]/i.test(rest)) {
+                doc += rest.replace(/<body[^>]*>/i, (mm) => mm + '');
+            } else {
+                doc += '<body>' + rest + '</body>';
+            }
+            doc += '</html>';
+            if (pre.trim()) doc = pre + doc;
+            return doc;
+        }
+        return '<!DOCTYPE html><html><head><meta charset="utf-8">' + bridge + '</head>' + body + '</html>';
     }
     return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
         '<meta name="viewport" content="width=device-width,initial-scale=1">' +

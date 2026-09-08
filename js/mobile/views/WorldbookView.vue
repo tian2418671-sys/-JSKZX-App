@@ -126,53 +126,31 @@
                         <van-cell title="导入 JSONL/Rentry 世界书" icon="description-o" is-link @click="importWbJsonl" />
                         <van-cell title="批量导出库内世界书" icon="share-o" is-link @click="batchExportWb" />
                         <van-cell title="世界书库统计" icon="chart-trending-o" is-link @click="showWbStats" />
+                        <van-cell
+                            :title="extWbDirTitle ? '世界书目录 · 点击更换' : '选择世界书目录'"
+                            :label="extWbDirTitle || '额外扫描一个文件夹中的世界书 JSON'"
+                            icon="folder-o"
+                            is-link
+                            @click="pickExternalWbDir"
+                        />
                     </template>
                 </van-cell-group>
 
-                <van-cell-group inset title="独立世界书文件">
+                <!-- 🚀 v1.10.4 设计修正:世界书就是世界书,不再分「独立文件」与「外部目录」两个列表。
+                     库内与外部目录统一为一个世界书列表;外部目录选择入口移入工具组。 -->
+                <van-cell-group inset title="世界书">
                     <van-cell
-                        v-for="wb in library.worldbooks"
-                        :key="wb.path"
+                        v-for="wb in allWorldbooks"
+                        :key="wb._key"
                         :title="wb.name"
                         :label="`${Object.keys(wb.wb.entries || {}).length} 条条目 · ${wbCategoryOf(wb)}`"
-                        @click="openFileWb(wb)"
+                        @click="openAnyWb(wb)"
                     >
                         <template #right-icon>
                             <van-icon name="ellipsis" size="20" @click.stop="openWbOps(wb)" />
                         </template>
                     </van-cell>
-                    <van-empty v-if="!library.worldbooks.length" description="暂无独立世界书文件" image-size="60" />
-                </van-cell-group>
-
-                <van-cell-group inset title="外部世界书目录">
-                    <van-cell
-                        v-if="extWbDirTitle"
-                        title="已选目录 · 点击更换"
-                        :label="extWbDirTitle"
-                        icon="location-o"
-                        is-link
-                        @click="pickExternalWbDir"
-                    />
-                    <van-cell v-else title="选择世界书目录" label="扫描任意文件夹中的世界书 JSON" icon="folder-o" is-link @click="pickExternalWbDir" />
-                    <div v-if="extWbLoading" class="status-wrap"><van-loading>扫描世界书中…</van-loading></div>
-                    <template v-else>
-                        <van-cell
-                            v-for="wb in extWorldbooks"
-                            :key="wb.path"
-                            :title="wb.name"
-                            :label="`${Object.keys(wb.wb.entries || {}).length} 条条目 · 外部 · ${wbCategoryOf(wb)}`"
-                            @click="openExternalWb(wb)"
-                        >
-                            <template #right-icon>
-                                <van-icon name="ellipsis" size="20" @click.stop="openWbOps(wb)" />
-                            </template>
-                        </van-cell>
-                        <van-empty
-                            v-if="extWbDirTitle && !extWorldbooks.length"
-                            description="该目录下没有可识别的世界书"
-                            image-size="60"
-                        />
-                    </template>
+                    <van-empty v-if="!allWorldbooks.length" description="暂无世界书" image-size="60" />
                 </van-cell-group>
             </template>
         </div>
@@ -383,6 +361,20 @@ export default {
                 file: wb,
                 payload: wb.wb
             };
+        }
+
+        // 🚀 v1.10.4 统一世界书列表:库内 + 外部目录合并(世界书就是世界书,不分来源)
+        const allWorldbooks = computed(() => {
+            const list = [];
+            (library.worldbooks || []).forEach((wb) => list.push({ ...wb, _key: 'lib:' + wb.path, _external: false }));
+            (extWorldbooks.value || []).forEach((wb) => list.push({ ...wb, _key: 'ext:' + wb.path, _external: true }));
+            // 名称 A-Z 稳定排序(来源不参与排序,彻底抹平「独立/外部」观感差异)
+            list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'));
+            return list;
+        });
+        function openAnyWb(wb) {
+            if (wb && wb._external) openExternalWb(wb);
+            else openFileWb(wb);
         }
 
         // ---------- 世界书分组(内存映射 + localStorage 持久化,对齐桌面 wbCategoryMap) ----------
@@ -1396,7 +1388,7 @@ export default {
         return {
             library, cardWithWb, editing, entryCount, reload, showDedupe, onDedupe,
             showMore, moreActions, onMoreSelect,
-            openCardWb, openFileWb, closeEditor, addEntry, removeEntry, saveAll,
+            openCardWb, openFileWb, openAnyWb, allWorldbooks, closeEditor, addEntry, removeEntry, saveAll,
             WB_POSITIONS, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys,
             ENTRY_FILTER_OPTIONS, ENTRY_SORT_OPTIONS, entrySearchQuery, entryFilterState, entrySortBy, entryList,
             entryPageSize, entryPageSizeOptions, entryPage, entryTotalPages, entryPaginatedList, nextEntryPage, prevEntryPage,

@@ -86,6 +86,18 @@
                     is-link
                     @click="openTrash"
                 />
+                <!-- 🚀 长期记忆:开关/条数/数据查看入口(此前仅测卡侧边栏有,设置页完全缺失) -->
+                <van-cell title="🧠 长期记忆" label="测卡时自动记录并检索相关记忆">
+                    <template #right-icon>
+                        <van-switch v-model="memoryEnabled" size="20px" @update:model-value="saveMemoryEnabled" />
+                    </template>
+                </van-cell>
+                <van-cell title="记忆检索条数" label="每次注入的最多相关记忆">
+                    <template #value>
+                        <van-stepper v-model="memoryLimit" min="1" max="50" integer @change="saveMemoryLimit" />
+                    </template>
+                </van-cell>
+                <van-cell title="查看记忆数据" label="浏览已存储的对话与事实记忆" icon="notes-o" is-link @click="openMemoryViewer" />
                 <van-cell title="更新源地址" label="已预填 GitHub Releases 源，一般无需修改">
                     <template #value>
                         <van-field

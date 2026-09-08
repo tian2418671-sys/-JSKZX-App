@@ -755,6 +755,7 @@ public class LibraryFsPlugin extends Plugin {
 
     /**
      * 批量读文本（万卡优化：单次 IPC 拉取多个 json 文件，减少桥接往返）。
+     * 🚀 v1.10.4:批内并行读取(8 线程)——SAF 流式读取是加载耗时大头,串行时每批 ~1s。
      * 入参 paths: ["/library/a.json", ...]；返回 results: [{path, success, value|error}]
      */
     @PluginMethod()
@@ -764,32 +765,42 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(new JSObject());
             return;
         }
-        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
-        for (int i = 0; i < paths.length(); i++) {
-            String p;
-            try {
-                p = paths.getString(i);
-            } catch (org.json.JSONException e) {
-                continue;
-            }
-            if (p == null) continue;
-            JSObject item = new JSObject();
-            item.put("path", p);
-            DocumentFile f = fileByRelPath(p);
-            if (f == null || !f.canRead()) {
-                item.put("success", false);
-                item.put("error", "文件不存在或不可读");
-            } else {
-                String text = readStream(f.getUri(), false, 0);
-                if (text == null) {
-                    item.put("success", false);
-                    item.put("error", "读取失败");
-                } else {
-                    item.put("success", true);
-                    item.put("value", text);
+        final int n = paths.length();
+        final JSObject[] collected = new JSObject[n];
+        final java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger(0);
+        final int threads = Math.min(8, n);
+        Thread[] pool = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            pool[t] = new Thread(() -> {
+                while (true) {
+                    int i = idx.getAndIncrement();
+                    if (i >= n) return;
+                    JSObject item = new JSObject();
+                    String p;
+                    try { p = paths.getString(i); } catch (org.json.JSONException e) { p = null; }
+                    if (p == null) { item.put("success", false); item.put("error", "路径无效"); }
+                    else {
+                        item.put("path", p);
+                        DocumentFile f = fileByRelPath(p);
+                        if (f == null || !f.canRead()) {
+                            item.put("success", false);
+                            item.put("error", "文件不存在或不可读");
+                        } else {
+                            String text = readStream(f.getUri(), false, 0);
+                            if (text == null) { item.put("success", false); item.put("error", "读取失败"); }
+                            else { item.put("success", true); item.put("value", text); }
+                        }
+                    }
+                    collected[i] = item;
                 }
-            }
-            results.put(item);
+            }, "jsx-readtext-" + t);
+            pool[t].start();
+        }
+        for (Thread t : pool) { try { t.join(); } catch (InterruptedException e) { /* 忽略 */ } }
+        // 串行回填(JSONArray 非线程安全,并行只写各自数组槽)
+        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
+        for (int i = 0; i < n; i++) {
+            if (collected[i] != null) results.put(collected[i]);
         }
         JSObject ret = new JSObject();
         ret.put("success", true);
@@ -810,32 +821,46 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(new JSObject());
             return;
         }
-        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
-        for (int i = 0; i < paths.length(); i++) {
-            String p;
-            try {
-                p = paths.getString(i);
-            } catch (org.json.JSONException e) {
-                continue;
-            }
-            if (p == null) continue;
-            JSObject item = new JSObject();
-            item.put("path", p);
-            DocumentFile f = fileByRelPath(p);
-            if (f == null || !f.canRead()) {
-                item.put("success", false);
-                item.put("error", "文件不存在或不可读");
-            } else {
-                String embedded = extractChara(f);
-                if (embedded == null) {
-                    item.put("success", false);
-                    item.put("error", "无内嵌角色卡数据");
-                } else {
-                    item.put("success", true);
-                    item.put("value", embedded);
+        final int n = paths.length();
+        final JSObject[] collected = new JSObject[n];
+        final java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger(0);
+        final int threads = Math.min(8, n);
+        Thread[] pool = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            pool[t] = new Thread(() -> {
+                while (true) {
+                    int i = idx.getAndIncrement();
+                    if (i >= n) return;
+                    JSObject item = new JSObject();
+                    String p;
+                    try { p = paths.getString(i); } catch (org.json.JSONException e) { p = null; }
+                    if (p == null) { item.put("success", false); item.put("error", "路径无效"); }
+                    else {
+                        item.put("path", p);
+                        DocumentFile f = fileByRelPath(p);
+                        if (f == null || !f.canRead()) {
+                            item.put("success", false);
+                            item.put("error", "文件不存在或不可读");
+                        } else {
+                            String embedded = extractChara(f);
+                            if (embedded == null) {
+                                item.put("success", false);
+                                item.put("error", "无内嵌角色卡数据");
+                            } else {
+                                item.put("success", true);
+                                item.put("value", embedded);
+                            }
+                        }
+                    }
+                    collected[i] = item;
                 }
-            }
-            results.put(item);
+            }, "jsx-chara-" + t);
+            pool[t].start();
+        }
+        for (Thread t : pool) { try { t.join(); } catch (InterruptedException e) { /* 忽略 */ } }
+        com.getcapacitor.JSArray results = new com.getcapacitor.JSArray();
+        for (int i = 0; i < n; i++) {
+            if (collected[i] != null) results.put(collected[i]);
         }
         JSObject ret = new JSObject();
         ret.put("success", true);

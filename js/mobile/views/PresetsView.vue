@@ -34,7 +34,7 @@
 
                 <!-- 列表 -->
                 <div v-else-if="paginatedList.length" class="pv-list">
-                    <div v-for="p in paginatedList" :key="p.path" class="pv-card" @click="openEditor(p)">
+                    <div v-for="p in paginatedList" :key="p.path" class="pv-card" @click="openDetail(p)">
                         <div class="pv-card-main">
                             <div class="pv-name">{{ pName(p) }}</div>
                             <div class="pv-meta">
@@ -90,14 +90,17 @@
 
 <script>
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 
-const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir'; // { uri, title }
+const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir';
+const SS_PRESET_DATA = 'jsmobile-preset-detail-data'; // { uri, title }
 
 export default {
     name: 'PresetsView',
     setup() {
+        const router = useRouter();
         const title = ref('⚙️ 预设管理');
         const treeUri = ref('');
         const treeTitle = ref('');
@@ -137,6 +140,15 @@ export default {
 
         function pName(p) {
             return (p.data && p.data.name) || p.name || '未命名预设';
+        }
+        // 🚀 打开预设详情页(三子选项卡:提示词/正则/插件);扫描结果经 sessionStorage 快传
+        function openDetail(p) {
+            try {
+                sessionStorage.setItem(SS_PRESET_DATA, JSON.stringify(presets.value.map((x) => ({
+                    path: x.path, treeUri: x.treeUri, rel: x.rel, name: x.name, data: x.data, external: x.external
+                }))));
+            } catch (e) { /* 快传失败,详情页回退重扫 */ }
+            router.push({ name: 'presetDetail', query: { p: p.path } });
         }
         function pMeta(p) {
             const d = p.data || {};

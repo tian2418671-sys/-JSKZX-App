@@ -87,3 +87,34 @@ test('splitPending 流式挂起检测未闭合围栏', () => {
     // 无围栏
     assert.deepEqual(splitPending('普通文本'), ['普通文本', '']);
 });
+
+// ============ v1.10.4 准完整文档包壳(JS-Slash-Runner 状态栏 webpack SPA 模板) ============
+test('buildHtmlSrcdoc 准完整文档(head+body 无 html 包裹)正确入壳不嵌套', () => {
+    const tpl = '<head><script type="module">var a=1;</script><style>.x{}</style></head><body><div id="app"></div></body>';
+    const srcdoc = buildHtmlSrcdoc(tpl, '{"stat_data":{}}', 'p9');
+    // module script 必须在 head 内,不得被塞进 body
+    const headIdx = srcdoc.indexOf('<head>');
+    const bodyIdx = srcdoc.indexOf('<body>');
+    const scriptIdx = srcdoc.indexOf('type="module"');
+    assert.ok(headIdx >= 0 && bodyIdx > headIdx, 'head 应在 body 之前');
+    assert.ok(scriptIdx > headIdx && scriptIdx < bodyIdx, 'module script 应位于 head 内');
+    // 不得出现嵌套 body
+    assert.equal((srcdoc.match(/<body[^>]*>/gi) || []).length, 1, '只允许一个 body');
+    // 变量桥注入
+    assert.ok(srcdoc.includes('window.getVariables'));
+    assert.ok(srcdoc.includes('<!DOCTYPE html>'));
+});
+
+test('segmentMessage 裸围栏内 <head> 模板升级为 html 段(示例卡复现)', () => {
+    const text = '开场白\n```\n<head><script type="module">x</script></head><body><div id="app"></div></body>\n```\n结尾';
+    const segs = segmentMessage(text);
+    assert.deepEqual(segs.map((s) => s.type), ['text', 'html', 'text']);
+    assert.ok(segs[1].content.startsWith('<head>'));
+});
+
+test('segmentMessage 裸围栏普通代码块保持文本段(由 Markdown 渲染)', () => {
+    const text = '说明\n```\nconst a = 1;\nconsole.log(a);\n```\n结束';
+    const segs = segmentMessage(text);
+    assert.deepEqual(segs.map((s) => s.type), ['text', 'text', 'text']);
+    assert.ok(segs[1].content.includes('```'));
+});
