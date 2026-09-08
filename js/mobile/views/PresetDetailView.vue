@@ -67,11 +67,11 @@
                     </div>
                 </van-tab>
 
-                <!-- ③ 插件(预设自带 JS 脚本 + 插件定义) -->
+                <!-- ③ 插件(预设自带 JS 脚本 + 通用扫描脚本 + 扩展数据树) -->
                 <van-tab title="插件" name="plugins">
                     <div class="pd-body">
-                        <div class="pd-tip">预设自带的 JS 脚本(酒馆助手 tavern_helper.scripts)与插件定义</div>
-                        <!-- 预设脚本(tavern_helper.scripts:完整 JS 代码) -->
+                        <div class="pd-tip">预设自带的 JS 脚本与全部扩展数据(通用扫描,不依赖固定字段)</div>
+                        <!-- 预设脚本(tavern_helper.scripts:完整 JS 代码,可编辑) -->
                         <div class="pd-sec-title">📜 预设脚本（{{ editablePresetScripts.length }}）</div>
                         <van-empty v-if="!editablePresetScripts.length" description="此预设没有自带脚本" image-size="60" />
                         <div v-for="(s, i) in editablePresetScripts" :key="s._uid" class="pd-item">
@@ -86,9 +86,29 @@
                             </div>
                         </div>
                         <van-button block plain type="primary" size="small" style="margin-top: 10px" @click="addPresetScript">＋ 新增脚本</van-button>
-                        <!-- 插件定义(extensions.plugins 自定义约定) -->
-                        <div class="pd-sec-title" style="margin-top: 14px">🧩 插件定义（{{ editablePlugins.length }}）</div>
-                        <van-empty v-if="!editablePlugins.length" description="此预设没有插件定义" image-size="60" />
+                        <!-- 🚀 通用扫描脚本:任意位置的 JS 代码(SPreset/自定义插件键等),只读查看+复制 -->
+                        <div v-if="scannedScripts.length" class="pd-sec-title" style="margin-top: 14px">🔎 通用扫描脚本（{{ scannedScripts.length }}）</div>
+                        <div v-for="(s, i) in scannedScripts" :key="s.path" class="pd-item">
+                            <div class="pd-item-head">
+                                <span class="pd-item-name">{{ s.name }}</span>
+                            </div>
+                            <div class="pd-item-meta">来源 {{ s.path }} · {{ fmtCodeSize(s.content) }}</div>
+                            <div class="pd-item-ops">
+                                <van-button size="mini" plain type="primary" @click="viewScannedScript(s)">查看代码</van-button>
+                            </div>
+                        </div>
+                        <!-- 🚀 扩展数据树:extensions 下全部键(含未知插件键),点击查看内容 -->
+                        <div class="pd-sec-title" style="margin-top: 14px">🧩 扩展数据（{{ extEntries.length }}）</div>
+                        <van-empty v-if="!extEntries.length" description="此预设没有扩展数据" image-size="60" />
+                        <div v-for="e in extEntries" :key="e.path" class="pd-item pd-item-sm" :style="{ marginLeft: (e.path.split('.').length - 1) * 10 + 'px' }">
+                            <div class="pd-item-head" @click="viewExtEntry(e)">
+                                <span class="pd-item-name">{{ e.name }}</span>
+                                <van-tag size="mini" plain>{{ e.type }} · {{ fmtCodeSize(e.preview) }}</van-tag>
+                            </div>
+                            <div v-if="e.preview" class="pd-item-meta">{{ e.preview }}</div>
+                        </div>
+                        <!-- 插件定义(extensions.plugins 自定义约定,兼容保留) -->
+                        <div v-if="editablePlugins.length" class="pd-sec-title" style="margin-top: 14px">🧩 插件定义（{{ editablePlugins.length }}）</div>
                         <div v-for="(pl, i) in editablePlugins" :key="pl._uid" class="pd-item">
                             <div class="pd-item-head">
                                 <span class="pd-item-name">{{ pl.name || ('插件 ' + (i + 1)) }}</span>
@@ -100,11 +120,25 @@
                                 <van-button size="mini" plain type="danger" @click="removePlugin(i)">删除</van-button>
                             </div>
                         </div>
-                        <van-button block plain type="primary" size="small" style="margin-top: 10px" @click="addPlugin">＋ 新增插件</van-button>
+                        <van-button v-if="editablePlugins.length" block plain type="primary" size="small" style="margin-top: 10px" @click="addPlugin">＋ 新增插件</van-button>
                     </div>
                 </van-tab>
             </van-tabs>
         </template>
+
+        <!-- 扩展数据查看弹窗(字符串→只读展示;脚本→代码编辑器) -->
+        <van-popup v-model:show="showExtEntry" position="bottom" round class="pd-code-popup">
+            <div class="pd-json-head">
+                <span class="pd-json-title">🧩 {{ extEntryTitle }}</span>
+                <van-icon name="cross" size="18" @click="showExtEntry = false" />
+            </div>
+            <CodeEditor v-if="extEntryIsScript" :model-value="extEntryText" height="46vh" />
+            <pre v-else class="pd-ext-text">{{ extEntryText }}</pre>
+            <div class="pd-json-actions">
+                <van-button size="small" plain @click="showExtEntry = false">关闭</van-button>
+                <van-button size="small" type="primary" @click="copyExtEntry">📋 复制</van-button>
+            </div>
+        </van-popup>
 
         <!-- 脚本代码查看/编辑弹窗(编程式编辑器:行号/高亮/格式化) -->
         <van-popup v-model:show="showScriptCode" position="bottom" round class="pd-code-popup">
@@ -150,6 +184,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { showToast, showSuccessToast } from 'vant';
 import { api } from '../../bridge/api';
 import CodeEditor from '../components/CodeEditor.vue';
+import { scanPresetData, looksLikeScript } from '../../utils/presetScan.js';
 import { isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
 
 const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir';
@@ -399,6 +434,78 @@ export default {
             markDirty();
         }
 
+        // ---------- 🚀 通用扫描(任意位置的脚本 + 全部扩展数据树) ----------
+        const scannedScripts = ref([]);
+        const extEntries = ref([]);
+        function runPresetScan() {
+            try {
+                const { scripts, extEntries: entries } = scanPresetData(preset.value && preset.value.data);
+                scannedScripts.value = scripts;
+                extEntries.value = entries;
+            } catch (e) {
+                scannedScripts.value = [];
+                extEntries.value = [];
+            }
+        }
+        // 扩展数据查看弹窗
+        const showExtEntry = ref(false);
+        const extEntryTitle = ref('');
+        const extEntryText = ref('');
+        const extEntryIsScript = ref(false);
+        function viewScannedScript(s) {
+            extEntryTitle.value = s.path || s.name;
+            extEntryText.value = String(s.content || '');
+            extEntryIsScript.value = true;
+            showExtEntry.value = true;
+        }
+        function viewExtEntry(e) {
+            extEntryTitle.value = e.path;
+            // 字符串叶子:显示内容;容器:序列化摘要
+            const found = findByPath(preset.value && preset.value.data, e.path);
+            if (typeof found === 'string') {
+                extEntryText.value = found;
+                extEntryIsScript.value = looksLikeScript(found);
+            } else if (found !== undefined) {
+                try {
+                    extEntryText.value = JSON.stringify(found, null, 2);
+                } catch (err) {
+                    extEntryText.value = String(found);
+                }
+                extEntryIsScript.value = false;
+            } else {
+                extEntryText.value = String(e.preview || '');
+                extEntryIsScript.value = false;
+            }
+            showExtEntry.value = true;
+        }
+        function findByPath(root, path) {
+            let cur = root;
+            for (const seg of String(path || '').split('.')) {
+                if (cur == null) return undefined;
+                if (Array.isArray(cur)) cur = cur[Number(seg)];
+                else cur = cur[seg];
+            }
+            return cur;
+        }
+        async function copyExtEntry() {
+            const text = extEntryText.value;
+            if (!text) return;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+                else {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    ta.remove();
+                }
+                showSuccessToast('已复制');
+            } catch (e) { showToast('复制失败'); }
+        }
+
         // ---------- JSON 源码 ----------
         function openJsonEditor() {
             jsonDraft.value = JSON.stringify(preset.value.data, null, 2);
@@ -441,7 +548,7 @@ export default {
                 if (ss) {
                     const arr = JSON.parse(ss);
                     const hit = arr.find((x) => (x.path === target) || (x.rel === target) || (x.name === target));
-                    if (hit) { preset.value = hit; prepareEditable(); loading.value = false; return; }
+                    if (hit) { preset.value = hit; prepareEditable(); runPresetScan(); loading.value = false; return; }
                 }
                 // ② 回退:重扫外部目录
                 const cfg = JSON.parse(localStorage.getItem(LS_EXT_PRESET_DIR) || 'null');
@@ -449,7 +556,7 @@ export default {
                     const res = await api.scanExternalPresets(cfg.uri);
                     const list = res.presets || [];
                     const hit = list.find((x) => (x.path === target) || (x.rel === target) || (x.name === target));
-                    if (hit) { preset.value = hit; prepareEditable(); }
+                    if (hit) { preset.value = hit; prepareEditable(); runPresetScan(); }
                 }
             } catch (e) {
                 console.error('[PresetDetail] 加载失败', e);
@@ -462,6 +569,8 @@ export default {
         return {
             preset, presetName, loading, dirty, activeTab, promptOpen,
             editablePrompts, editableRegex, editablePlugins, editablePresetScripts, fmtCodeSize,
+            scannedScripts, extEntries, viewScannedScript, viewExtEntry, copyExtEntry,
+            showExtEntry, extEntryTitle, extEntryText, extEntryIsScript,
             addPrompt, removePrompt, addRegex, editRegex, removeRegex, addPlugin, editPlugin, removePlugin,
             addPresetScript, removePresetScript, viewScriptCode, applyScriptCode,
             showScriptCode, scriptCodeName, scriptCodeDraft,
@@ -505,4 +614,13 @@ export default {
 .pd-json { flex: 1; width: 100%; border: 0; padding: 10px 16px; font-size: 12px; font-family: monospace; resize: none; background: transparent; }
 .pd-json-actions { display: flex; gap: 10px; justify-content: flex-end; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
 .pd-edit-body { padding: 8px 16px 4px; }
+/* 扩展数据树 */
+.pd-item-sm { padding: 8px 10px; margin-bottom: 6px; cursor: pointer; }
+.pd-item-sm .pd-item-head { cursor: pointer; }
+.pd-ext-text {
+    flex: 1; margin: 0; padding: 12px 16px; overflow-y: auto;
+    font-size: 12px; font-family: 'Consolas', 'Monaco', monospace;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--van-text-color, #323233); background: var(--van-background-2, #f7f8fa);
+}
 </style>
