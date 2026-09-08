@@ -5,6 +5,7 @@
  * 若在本组合式函数内部定义会触发 TDZ），其余状态与操作方法在此定义，依赖通过参数注入，保持原有行为不变。
  */
 import { ref, computed, triggerRef } from 'vue';
+import { normalizeTagName } from '../utils/tagCategories.js';
 
 export function useTags({
     systemCommonTags, // ⚠️ 系统常用标签池 ref，由 App.vue 顶层持有（syncConfigToDisk 引用）
@@ -19,7 +20,11 @@ export function useTags({
     selectedIds,
     clearSelection,
     syncConfigToDisk,
-    createProgressToast     // 🔧 批量进度 Toast 工厂（并发安全）
+    createProgressToast,     // 🔧 批量进度 Toast 工厂（并发安全）
+    customTagCategories,     // 🛠️ 自定义大分类数组 ref（App.vue 顶层持有 + 持久化）
+    customTagAssignments,    // 🎯 手动标签归属 ref（普通对象，便于 JSON 持久化）
+    compiledAutoTagRules,    // 📋 自动打标规则编译结果 computed（{标签名: RegExp}），作清洗白名单
+    customKeywords           // ✏️ 自定义关键词库 ref（AI 候选词池），作清洗白名单
 }) {
     // ================= 批量标签与预设系统 =================
     const showBatchTagModal = ref(false);
@@ -436,6 +441,188 @@ export function useTags({
         clearSelection();
     };
 
+    // 🧹 一键清洗历史「外来标签」：清除历史上（sanitize 开关开启前）被收编进卡片的、
+    //    不在应用自身标签词表内的标签（customTags + 原生 data.tags 双清），并物理落盘。
+    //    —— 开关只影响「新导入」；历史卡的外来标签已被 persistCardUpdate 永久写回 PNG，
+    //       且 globalAvailableTags 无条件聚合 customTags → 表现为「开关无效」的体感残留。
+    //    customTags 无「用户手动添加 vs 历史收编」元数据，只能按词表白名单反向清洗：
+    //    keep 词表 = 系统/常用标签库 + 自动打标规则标签 + 用户手动归类过的标签 + 自定义关键词库。
+    //    保留策略说明：如需保留个别词表外的标签，请先将其加入「系统/常用标签库」再执行本清洗。
+    const cleanForeignTagsFromLibrary = async () => {
+        if (!library.value.length) return nativeAlert('当前没有已加载的卡片，无需清洗。', 'info');
+
+        // 1. 组装 keep 词表（大小写不敏感比较，兼容自定义归属存小写键）
+        const keepLower = new Set();
+        const addKeep = (v) => { if (typeof v === 'string' && v.trim()) keepLower.add(v.trim().toLowerCase()); };
+        (systemCommonTags.value || []).forEach(addKeep);
+        const rules = (compiledAutoTagRules && compiledAutoTagRules.value) || {};
+        Object.keys(rules).forEach(addKeep);
+        const kw = (customKeywords && customKeywords.value) || [];
+        (Array.isArray(kw) ? kw : []).forEach(addKeep);
+        Object.keys(customTagAssignments.value || {}).forEach(addKeep); // 手动归类键 = 用户显式意图保留
+        const isKeep = (t) => typeof t === 'string' && t.trim() !== '' && keepLower.has(t.trim().toLowerCase());
+
+        // 2. 全库扫描：收集词表外的外来标签 + 受影响卡片
+        const foreign = new Map(); // 标签 → 出现次数
+        const modified = [];
+        const scanTags = (tag) => { if (typeof tag === 'string' && tag.trim() && !isKeep(tag)) foreign.set(tag.trim(), (foreign.get(tag.trim()) || 0) + 1); };
+        library.value.forEach(item => {
+            let hit = false;
+            if (Array.isArray(item.customTags)) {
+                item.customTags.forEach(t => { if (typeof t === 'string' && t.trim() && !isKeep(t)) { scanTags(t); hit = true; } });
+            }
+            const d = item.data?.data || item.data || {};
+            if (Array.isArray(d.tags)) {
+                d.tags.forEach(t => { if (typeof t === 'string' && t.trim() && !isKeep(t)) { scanTags(t); hit = true; } });
+            } else if (typeof d.tags === 'string' && d.tags.trim()) {
+                d.tags.split(',').forEach(t => { t = t.trim(); if (t && !isKeep(t)) { scanTags(t); hit = true; } });
+            }
+            if (hit) modified.push(item);
+        });
+
+        if (foreign.size === 0) return nativeAlert('🎉 未发现外来标签：全库标签均已在系统常用标签库 / 自动规则 / 手动归类范围内。', 'info');
+
+        const tagList = Array.from(foreign.keys()).sort();
+        const preview = tagList.slice(0, 15).join('、') + (tagList.length > 15 ? ` 等共 ${tagList.length} 个` : '');
+        const ok = await confirmDialog(
+            `确定要清洗历史「外来标签」吗？\n\n` +
+            `· 将清除 ${tagList.length} 个不在你系统标签库中的外来标签\n` +
+            `· 涉及 ${modified.length} 张卡片（customTags 与原生 data.tags 双清，物理落盘）\n` +
+            `· 示例：${preview}\n\n` +
+            `✅ 保留：系统/常用标签库 + 自动打标规则标签 + 你手动归类过的标签 + 自定义关键词库\n` +
+            `⚠️ 如需保留个别词表外标签，请先将其加入「系统/常用标签库」再执行本操作\n` +
+            `⚠️ 此操作不可撤销！`
+        );
+        if (!ok) return;
+
+        // 3. 逐张清洗（词表外的标签全部剔除）并物理落盘
+        const total = tagList.length;
+        const savedCount = await runWithProgress(modified, '🧹 清洗外来标签', async (item) => {
+            let isModified = false;
+            if (Array.isArray(item.customTags)) {
+                const f = item.customTags.filter(t => !(typeof t === 'string' && t.trim() !== '' && !isKeep(t)));
+                if (f.length !== item.customTags.length) { item.customTags = f; isModified = true; }
+            }
+            const d = item.data?.data || item.data || {};
+            if (Array.isArray(d.tags)) {
+                const f = d.tags.filter(t => !(typeof t === 'string' && t.trim() !== '' && !isKeep(t)));
+                if (f.length !== d.tags.length) { d.tags = f; isModified = true; }
+            } else if (typeof d.tags === 'string' && d.tags.trim()) {
+                const cleaned = d.tags.split(',').map(t => t.trim()).filter(t => t && isKeep(t)).join(', ');
+                if (cleaned !== d.tags) { d.tags = cleaned; isModified = true; }
+            }
+            if (!isModified) return false;
+            try {
+                await persistCardUpdate(item, { tags: item.customTags || [], category: item.category });
+                return true;
+            } catch (e) {
+                console.error(`清洗外来标签后物理保存失败 [${item.name}]:`, e);
+                return false;
+            }
+        });
+        if (cardData.value) triggerRef(cardData);
+        nativeAlert(`🧹 清洗完成！\n已清除 ${total} 个外来标签，清洗 ${modified.length} 张卡片，物理保存 ${savedCount} 张。`, 'info');
+    };
+
+    // ================= 自定义大分类系统 =================
+    // 新增自定义分类（key 自动生成 custom_<时间戳>；幂等：同名（含空白/全角/零宽变体）返回已有 key，杜绝重复分类）
+    const addCustomTagCategory = (name, icon = '🏷️') => {
+        const trimmed = normalizeTagName(name);
+        if (!trimmed) { nativeAlert('分类名称不能为空', 'warning'); return null; }
+        const existing = customTagCategories.value.find(c => normalizeTagName(c.name) === trimmed);
+        if (existing) return existing.key; // 幂等：已存在同名 → 复用，不重复建
+        // 🔧 key 防碰撞：Date.now() 毫秒精度在“同一毫秒内连续建多个分类”时碰撞
+        //   （AI 归类一次应用连建多类必然触发）→ 追加随机段保证唯一
+        const key = `custom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+        customTagCategories.value.push({ key, name: trimmed, icon: String(icon || '🏷️') });
+        syncConfigToDisk();
+        return key;
+    };
+
+    // 重命名自定义分类（规范化判重）
+    const renameCustomTagCategory = (key, name) => {
+        const cat = customTagCategories.value.find(c => c.key === key);
+        if (!cat) return false;
+        const trimmed = normalizeTagName(name);
+        if (!trimmed) { nativeAlert('分类名称不能为空', 'warning'); return false; }
+        if (customTagCategories.value.some(c => c.key !== key && normalizeTagName(c.name) === trimmed)) {
+            nativeAlert(`已存在同名分类「${trimmed}」`, 'warning'); return false;
+        }
+        cat.name = trimmed;
+        syncConfigToDisk();
+        return true;
+    };
+
+    // 删除自定义分类（同时清除其下所有手动归属标签）
+    const removeCustomTagCategory = (key) => {
+        customTagCategories.value = customTagCategories.value.filter(c => c.key !== key);
+        for (const [tag, catKey] of Object.entries(customTagAssignments.value)) {
+            if (catKey === key) delete customTagAssignments.value[tag];
+        }
+        syncConfigToDisk();
+    };
+
+    // 🧹 合并同名自定义分类（含空白/全角/零宽变体）：保留首个，重复分类的标签归属迁移到保留分类后删除
+    // @returns {number} 合并（删除）的重复分类数
+    const mergeDuplicateTagCategories = () => {
+        const cats = customTagCategories.value || [];
+        const seen = new Map(); // normalized name → 保留 key
+        const dropKeyMap = new Map(); // 被删 key → 保留 key
+        const kept = [];
+        let merged = 0;
+        for (const c of cats) {
+            const n = normalizeTagName(c.name);
+            const keepKey = seen.get(n);
+            if (keepKey) { dropKeyMap.set(c.key, keepKey); merged++; }
+            else { seen.set(n, c.key); kept.push(c); }
+        }
+        if (!merged) return 0;
+        for (const [tag, catKey] of Object.entries(customTagAssignments.value || {})) {
+            const keepKey = dropKeyMap.get(catKey);
+            if (keepKey) customTagAssignments.value[tag] = keepKey;
+        }
+        customTagCategories.value = kept;
+        syncConfigToDisk();
+        return merged;
+    };
+
+    // 🔧 修复历史脏数据：给同 key 的重复分类条目重发唯一 key（歧义标签归属保留给首个条目）
+    // @returns {number} 修复（重发 key）的条目数
+    const ensureUniqueCustomCategoryKeys = () => {
+        const cats = customTagCategories.value || [];
+        const seen = new Set();
+        let fixed = 0;
+        for (const c of cats) {
+            if (!c || seen.has(c.key)) {
+                if (c) {
+                    c.key = `custom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+                    fixed++;
+                }
+            }
+            if (c) seen.add(c.key);
+        }
+        if (fixed) syncConfigToDisk();
+        return fixed;
+    };
+
+    // 🎯 手动归属（批量）：将多个标签分配到指定分类（key 为 'other' 时解除归属）。
+    //    批量循环内只改内存态、末尾统一 syncConfigToDisk 一次（避免几百次全量写盘）。
+    const assignTagsToCategory = (tags, key) => {
+        const list = (Array.isArray(tags) ? tags : [tags])
+            .map(t => String(t || '').trim())
+            .filter(Boolean);
+        if (!list.length) return;
+        const lower = k => String(k || '').toLowerCase();
+        if (!key || key === 'other') {
+            for (const t of list) delete customTagAssignments.value[lower(t)];
+        } else {
+            for (const t of list) customTagAssignments.value[lower(t)] = key;
+        }
+        syncConfigToDisk();
+    };
+    // 手动归属单标签（兼容入口：内部走批量实现）
+    const assignTagToCategory = (tag, key) => assignTagsToCategory([tag], key);
+
     return {
         showBatchTagModal, batchInputTags, batchMode, presetTagsLibrary,
         batchTagChips, toggleBatchCommonTag, removeBatchTag,
@@ -443,6 +630,9 @@ export function useTags({
         togglePresetTag, executeBatchTagSave,
         globalAvailableTags, newGlobalTagInput, addTagToGlobalPool,
         removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags,
-        appendTagToSearch, isEditingSystemTags, addGlobalTag
+        cleanForeignTagsFromLibrary,
+        appendTagToSearch, isEditingSystemTags, addGlobalTag,
+        addCustomTagCategory, renameCustomTagCategory,
+        removeCustomTagCategory, mergeDuplicateTagCategories, ensureUniqueCustomCategoryKeys, assignTagToCategory, assignTagsToCategory
     };
 }

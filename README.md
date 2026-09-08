@@ -9,11 +9,11 @@
 
 **🖥️ 推荐 · 安装版**（双击安装，自动生成桌面/开始菜单快捷方式，免管理员权限，支持 OTA 自动更新）：
 
-[⬇️ 下载安装包 `sillytavern-card-manager-1.9.0.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载安装包 `sillytavern-card-manager-2.2.4.exe`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 **📦 绿色免安装版**（解压即用，无需安装）：
 
-[⬇️ 下载绿色版 `sillytavern-card-manager-1.9.0.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
+[⬇️ 下载绿色版 `sillytavern-card-manager-2.2.4.zip`](https://github.com/tian2418671-sys/JSKZX/releases/latest)
 
 > 💡 两个版本功能完全相同，任选其一即可。支持 Windows 10/11（64 位）。
 > 安装版内置 OTA 自动更新（检测 → 下载 → 静默安装 → 自动重启）；绿色版需手动下载新版覆盖。
@@ -52,6 +52,8 @@
 - **千卡库性能优化**：异步分片扫描、分块加载、Token 缓存、I/O 风暴治理——上千张卡片也能秒开
 - **OTA 自动更新**：新版本一键下载、静默安装、自动重启，全程无需手动操作
 
+> 📱 **安卓版预告**：安卓版正在编写中，未来将发布测试版，敬请期待！
+
 ---
 
 ## 📸 界面预览
@@ -76,14 +78,15 @@
 
 | 模块 | 说明 |
 |------|------|
-| 📂 卡片库 | 文件夹导入、自动分类、多选勾选、Ctrl/Shift 连选、右键快捷菜单、**列表/网格双视图 + 常规/紧凑双密度**、排序（名称/最新/Token） |
+| 📂 卡片库 | 文件夹导入、自动分类、多选勾选、Ctrl/Shift 连选、右键快捷菜单、**列表/网格双视图 + 常规/紧凑双密度**、**9 种排序方式**（导入最新/本地文件最新/A-Z 正序·倒序/修改时间/创建时间/大小正·倒序/Token，中文拼音+数字自然排序，稳定键链防乱飘） |
+| ⚙️ 预设管理 | **全新预设引擎**：加载酒馆预设目录、搜索、批量导出；脚本/正则分区在线编辑、沙箱 iframe 渲染预览；重命名/复制/回收站 |
 | 🔍 超级搜索 | 全字段穿透检索（含备选开场白、深度提示词、正则脚本、**世界书全部词条**、**物理文件名/路径**）、多关键词 AND、`tag:`/`author:`/`file:`/`wb:` 高级前缀语法、`-排除`、300ms 防抖 |
 | 🔎 全库词条搜索 | 一次性检索**全部独立世界书 + 全部角色卡内嵌词条**（触发词/次级词/备注/正文），点击直达并高亮 |
 | 🌍 世界书 | 独立世界书库（双引擎）+ 角色卡内嵌世界书；词条级 IDE（增删改/克隆/排序/启用/常驻/条件/插入位置/标签化触发词）、URL 直链导入、JSONL 批量导入、批量导出、内嵌提取为独立书、快照/一键恢复 |
 | ⚙️ 正则脚本 | 查看 / 在线编辑、正则作用域可读化展示 |
 | � 状态栏预览 | **所见即所得调试**：AI 输出的 `<status>` 文本块应用卡内渲染型正则脚本实时预览 HTML 效果、一键注入内置状态栏模板、脚本勾选隔离、渲染/源码双视图（DOMPurify 安全清洗）；内置 **15 套渲染模板** + **11 套世界书指令模板（三合一：初始值+显示格式+更新规则）**，模板库可折叠收起 |
 | �💬 聊天测卡 | OpenAI 兼容 / Anthropic 双协议、渲染/代码双模式、API Key 可配置、系统提示词预设 |
-| 🤖 AI 智能打标 | 候选标签池 + 自由提取开关、自定义提示词、**破限（Jailbreak）机制**、429 退避重试、批量打标限流 |
+| 🤖 AI 智能打标 | 候选标签池 + 自由提取开关、自定义提示词、**破限（Jailbreak）机制**、429 退避重试、批量打标限流；**三层漏斗**：①可配置规则 → ②**小型本地向量引擎**（免费离线语义匹配，MiniLM 多语言模型、余弦相似度、标签索引持久化、三源下载自动切换）→ ③LLM API（仅剩余卡片消耗额度） |
 | ✨ AI 工具 | 一键汉化、格式升维（W++/JSON → 高密度 Markdown 降 Token） |
 | 🏷️ 标签系统 | 单卡/批量标签、53 个中英预设、全局标签池、快捷添加、**全部操作物理落盘**（重启不丢） |
 | 📁 分组系统 | **物理文件夹分组**（建文件夹 = 建分组、移动卡片 = 物理移动文件）、预设 + 自定义、中英双语、批量移分组、空分组自动清理 |
@@ -99,6 +102,13 @@
 | 🛡️ 安全机制 | 主进程路径白名单、`app://` 协议 + CSP、DOMPurify XSS 清洗、符号链接环路防护、原子写入、崩溃兜底日志 |
 | 🌐 离线可用 | 前端依赖经 Vite 构建全部打包进产物，无网络也能完整运行 |
 
+### 📌 近期版本要点（v2.2.x）
+- **v2.2.0** —— 标签大分类体系（18 大分类 + 关键词规则/向量语义辅助归类）+ 自定义大分类 + 手动批量归属 + 实验·AI 归类
+- **v2.2.1** —— ①设置菜单新增「历史外来标签一键清洗」；「导入时忽略卡片自带标签」开关仅对新导入生效，历史残留可一键清出并物理落盘；②AI 归类**转正**（移除「实验」标记）并支持**未命中现有分组时按语义自动创建大分类承接**（同类标签聚成「番剧动画/游戏角色」等，核对后一键应用）；③修复自定义大分类 key 碰撞、分类名规范化判重、历史重复数据自愈
+- **v2.2.3** —— ①新增「🧩 插件」Tab：本地扫描并统一管理酒馆插件（酒馆助手 JSON / 用户脚本 / SlashRunner 命令 / 扩展工程），沙箱 iframe 模拟酒馆运行、预览插件效果；②内置 18 大分类开放改名/删除(隐藏)/一键恢复；③修复效果页扩展工程 bundle 路径匹配 bug 与宿主桩全局 API 缺失导致的渲染失败
+- **v2.2.4** —— ①插件「效果」预览标注为**实验性**，并修复预览渲染链路（内联脚本被 CSP 拦截、插件空白缺挂载点、内容净化不全），对外如实提示依赖完整酒馆 API 的插件可能空白/不完整；②「导入时忽略卡片自带标签」开关覆盖全部标签来源（自动打标规则标签不再绕过）
+- 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)
+
 ---
 
 ## 🛠 技术栈
@@ -113,6 +123,7 @@
 | 打包 | [electron-builder](https://www.electron.build/) `26.x`（NSIS 安装包 + zip 绿色版） |
 | 自动更新 | [electron-updater](https://github.com/electron-userland/electron-builder/tree/master/packages/electron-updater) `6.x`（OTA） |
 | 图像处理 | [sharp](https://sharp.pixelplumbing.com/)（换卡图转 PNG） |
+| 本地向量引擎 | [@xenova/transformers](https://github.com/xenova/transformers.js) `2.x` + [onnxruntime-node](https://github.com/microsoft/onnxruntime)（Worker 线程 ONNX 推理） |
 | 安全 | [DOMPurify](https://github.com/cure53/DOMPurify)（渲染层 XSS 清洗） |
 
 ---
@@ -182,7 +193,7 @@ npm run build
 
 产物输出到 `dist/`：
 - `dist/win-unpacked/` —— 免安装绿色版（可压缩为 zip 分发）
-- `dist/sillytavern-card-manager-1.9.0.exe` —— NSIS 安装包
+- `dist/sillytavern-card-manager-2.2.4.exe` —— NSIS 安装包
 - `dist/latest.yml` —— **OTA 更新必需**（与 exe 一起上传 GitHub Release）
 
 ---
@@ -436,10 +447,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "build\generate-icon.ps1"
 
 完整发布流程：
 
-1. 修改 `package.json` 的 `version`（如 1.8.9 → 1.9.0）
+1. 修改 `package.json` 的 `version`（如 2.1.0 → 2.1.1）
 2. `RELEASE_NOTES.md` 顶部加新版本节
 3. README 下载链接/产物名同步版本号
 4. `npm run build`（或上面的离线打包）
+5. 上传 GitHub Release（exe + latest.yml + zip）
 5. 创建 GitHub Release（tag 用 `vX.Y.Z`，必须与 package.json version 对应）：
    ```powershell
    gh release create vX.Y.Z --repo tian2418671-sys/JSKZX --notes-file notes.md

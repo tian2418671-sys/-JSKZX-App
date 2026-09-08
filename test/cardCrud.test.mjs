@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { useCardCrud } from '../js/composables/useCardCrud.js';
+import { compileAutoTagRules } from '../js/utils/cardLoader.js';
 
 // ---------- 测试夹具 ----------
 
@@ -35,6 +36,8 @@ function makeMock(overrides = {}) {
         importedConfig,
         localCategoryMap,
         sanitizeImportedTags,
+        // 使用系统预设规则表（含「魔法/精灵 → Fantasy (奇幻)」等默认规则）编译结果
+        autoTagRules: { value: compileAutoTagRules(null) },
         isDragging: { value: false },
         dragCounter: { value: 0 },
         importFileInput: { value: null },
@@ -76,14 +79,21 @@ function makeCard(overrides = {}) {
 
 // ---------- 优先级链 ①：物理文件夹 ----------
 
-test('优先级链①：物理文件夹分组优先于一切（含 overlay）', () => {
+test('优先级链①：物理文件夹分组优先（分类取文件夹，标签仍恢复 overlay）', () => {
     const m = makeMock();
-    // 即使存在 overlay，物理文件夹位置仍是事实依据
+    // 分类的事实依据 = 物理文件夹位置；但标签必须按覆盖层恢复
+    // （2026-09-01 修复：旧实现 subFolder 分支裸 return 跳过覆盖层恢复，
+    //   导致子文件夹卡 AI 打标/手动标签重启后丢失）
     m.appConfig.value.cardOverlays['C:/lib/恋活/test.png'] = { category: '奇幻', tags: ['魔法'] };
-    const card = makeCard({ path: 'C:/lib/恋活/test.png', subFolder: '恋活/子目录' });
+    const card = makeCard({
+        path: 'C:/lib/恋活/test.png',
+        subFolder: '恋活/子目录',
+        data: { data: { name: '测试卡', description: '魔法 精灵 异世界', tags: [] } }
+    });
     m.crud.processAutoTagsAndCategory(card);
-    assert.equal(card.category, '恋活', '应取一级文件夹名');
-    assert.deepEqual(card.customTags, [], '物理文件夹命中后不应用 overlay/自动规则');
+    assert.equal(card.category, '恋活', '分类应取一级文件夹名，不用 overlay 分类');
+    assert.deepEqual(card.customTags, ['魔法'], '标签仍恢复 overlay（修复：防重启丢失），且不追加自动规则标签');
+    assert.ok(card.data.data.tags.includes('魔法'), '标签应同步回原生 data.tags');
 });
 
 // ---------- 优先级链 ②：overlay（app_config 覆盖层） ----------
@@ -157,13 +167,18 @@ test('自动规则：未知分组名不设分类（保持未分类）', () => {
     assert.equal(card.category, '未分类', '未知分组不设分类');
 });
 
-test('自动规则：sanitizeImportedTags 开启时不带入原生 tags', () => {
+test('自动规则：sanitizeImportedTags 开启时不带入原生 tags，规则只定分类不贴标签', () => {
     const m = makeMock();
     m.sanitizeImportedTags.value = true;
     const card = makeCard({ data: { data: { name: '测试卡', description: '魔法', tags: ['他人杂标签'] } } });
     m.crud.processAutoTagsAndCategory(card);
     assert.ok(!card.customTags.includes('他人杂标签'), '开启净化时不带入原生 tags');
-    assert.ok(card.customTags.includes('Fantasy (奇幻)'), '自动规则标签照常生成');
+    // 开关契约：开启后仅保留自动分类结果（见 App.vue 导入数据清洗开关注释），
+    // 自动规则只承担分类，不再把规则标签贴到新导入的卡片上。
+    assert.deepEqual(card.customTags, [], '开启净化时自动规则不再贴标签');
+    assert.equal(card.category, 'Fantasy', '自动规则仍承担分类');
+    // v2.1.4：物理清洗——原生 data.tags 必须被清空（防保存写回 PNG / 关闭开关复活）
+    assert.deepEqual(card.data.data.tags, [], '开启净化时原生 data.tags 应被物理清空');
 });
 
 test('自动规则：sanitizeImportedTags 关闭时带入原生 tags 并去重', () => {

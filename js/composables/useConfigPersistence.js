@@ -18,12 +18,18 @@ export function useConfigPersistence({
     appConfig,
     // —— 收集源：全局状态 ——
     tagLangMode, customCategories, removedDefaultKeys, systemCommonTags,
+    customTagCategories, customTagAssignments,
+    builtinCatRenames, builtinCatHidden,
+    // —— 收集源：自动打标规则表（可配置，v2.1） ——
+    autoTagRules, customKeywords,
     // —— 收集源：API 配置 ——
     apiEndpoint, apiKey, apiModel, apiType,
     // —— 收集源：UI 状态 ——
     theme, appSettings, sanitizeImportedTags, snapshotConfig, localCategoryMap,
     sidebarWidth, viewMode, isCompactMode, sortBy,
-    systemPromptPresets, lastWorldbookDirPath, wbCategoryMap
+    systemPromptPresets, lastWorldbookDirPath, lastPresetDirPath, wbCategoryMap,
+    // —— 收集源：导入时间映射（卡片首次入库时刻持久化） ——
+    cardImportTimes
 }) {
     // 🛡️ 启动配置恢复保护：loadAppConfig 恢复字段时置 true，防止各 watch 触发写盘把「恢复值/旧残留」回写 app_config.json
     //    （否则旧文件 / localStorage 残留会在加载竞态中被写回权威文件，导致「删除/清空后重启复活」）
@@ -50,6 +56,10 @@ export function useConfigPersistence({
             customCategories: JSON.parse(JSON.stringify(Array.isArray(customCategories.value) ? customCategories.value : [])),
             removedDefaultKeys: JSON.parse(JSON.stringify(Array.isArray(removedDefaultKeys.value) ? removedDefaultKeys.value : [])),
             globalTags: JSON.parse(JSON.stringify(Array.isArray(systemCommonTags.value) ? systemCommonTags.value : [])),
+            // 🏷️ 自动打标规则表（可配置：[{name, regex}]，v2.1 新增）——空数组 = 用默认规则
+            autoTagRules: JSON.parse(JSON.stringify(Array.isArray(autoTagRules.value) ? autoTagRules.value : [])),
+            // ✏️ 自定义关键词库（候选词池，v2.1）
+            customKeywords: JSON.parse(JSON.stringify(Array.isArray(customKeywords.value) ? customKeywords.value : [])),
             cardOverlays: JSON.parse(JSON.stringify(appConfig.value.cardOverlays || {})),
             api: {
                 endpoint: apiEndpoint ? apiEndpoint.value : (appConfig.value.api && appConfig.value.api.endpoint) || '',
@@ -70,8 +80,15 @@ export function useConfigPersistence({
                 sortBy: sortBy.value,
                 systemPromptPresets: JSON.parse(JSON.stringify(Array.isArray(systemPromptPresets.value) ? systemPromptPresets.value : [])),
                 lastWorldbookDirPath: lastWorldbookDirPath.value || '',
-                wbCategoryMap: JSON.parse(JSON.stringify(wbCategoryMap.value || {}))
-            }
+                lastPresetDirPath: lastPresetDirPath.value || '',
+                wbCategoryMap: JSON.parse(JSON.stringify(wbCategoryMap.value || {})),
+                customTagCategories: JSON.parse(JSON.stringify(Array.isArray(customTagCategories.value) ? customTagCategories.value : [])),
+                customTagAssignments: JSON.parse(JSON.stringify(customTagAssignments.value || {})),
+                builtinCatHidden: JSON.parse(JSON.stringify(builtinCatHidden.value || {})),
+                builtinCatRenames: JSON.parse(JSON.stringify(builtinCatRenames.value || {}))
+            },
+            // 📥 卡片导入时间映射 { [path]: timestampMs }（「导入时间」排序持久化）
+            cardImportTimes: JSON.parse(JSON.stringify(cardImportTimes.value || {}))
         };
         window.electronAPI.saveAppConfig(payload).catch(() => { });
     };

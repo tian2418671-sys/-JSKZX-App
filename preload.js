@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readBuffer: (filePath) => ipcRenderer.invoke('file:readBuffer', filePath),
     // 读取文本（用于 JSON 卡片）
     readText: (filePath) => ipcRenderer.invoke('file:readText', filePath),
+    // 🚀 v2.0 批量读取：单条 IPC 携带至多 64 张卡，万张导入从「万次往返」降到「百次」
+    // readTextBatch(paths[]) → [{path,text,ok}]；readEmbeddedBatch([{path,size}]) → [{path,data,ok}]
+    readTextBatch: (paths) => ipcRenderer.invoke('files:readTextBatch', paths),
+    readEmbeddedBatch: (paths) => ipcRenderer.invoke('files:readEmbeddedBatch', paths),
     // 保存卡片 JSON 到本地文件
     saveCard: (filePath, updatedJson) => ipcRenderer.invoke('file:saveCard', filePath, updatedJson),
     // 📸 换角色卡图：选择新图并替换，返回新路径与校验校准报告
@@ -117,6 +121,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteWorldbookSnapshot: (snapshotPath) => ipcRenderer.invoke('wb:deleteSnapshot', snapshotPath),
     // 🌍 世界书专属通道：批量导出已落盘世界书
     exportWorldbooksBatch: (filePaths) => ipcRenderer.invoke('wb:exportBatch', filePaths),
+    // ⚙️ 预设专属通道：扫描目录下的 .json 预设文件
+    scanPresets: (dirPath) => ipcRenderer.invoke('preset:scan', dirPath),
+    // ⚙️ 预设专属通道：物理覆写预设文件（保存前自动快照备份）
+    savePreset: (params) => ipcRenderer.invoke('preset:save', params),
+    // ⚙️ 预设专属通道：新建预设文件
+    createPreset: (params) => ipcRenderer.invoke('preset:create', params),
+    // ⚙️ 预设专属通道：重命名预设物理文件
+    renamePresetFile: (params) => ipcRenderer.invoke('preset:rename', params),
+    // ⚙️ 预设专属通道：列表预设历史快照
+    listPresetSnapshots: (filePath) => ipcRenderer.invoke('preset:listSnapshots', filePath),
+    // ⚙️ 预设专属通道：回滚到指定预设快照
+    restorePresetSnapshot: (payload) => ipcRenderer.invoke('preset:restoreSnapshot', payload),
+    // ⚙️ 预设专属通道：删除一条预设历史快照
+    deletePresetSnapshot: (snapshotPath) => ipcRenderer.invoke('preset:deleteSnapshot', snapshotPath),
+    // ⚙️ 预设专属通道：批量导出已落盘预设
+    exportPresetsBatch: (filePaths) => ipcRenderer.invoke('preset:exportBatch', filePaths),
+    // 🧩 插件专属通道：扫描目录下的插件（酒馆助手 JSON 脚本 / 散落脚本 / 扩展工程）
+    scanPlugins: (dirPath) => ipcRenderer.invoke('plugin:scan', dirPath),
+    // 🧩 插件专属通道：读取扩展工程文本资源源码
+    readPluginFile: (filePath) => ipcRenderer.invoke('plugin:readFile', filePath),
+    // 🧩 插件「效果」预览：预览 HTML 存主进程内存，返回独立 app:// 预览 URL（绕过父页 CSP 对内联脚本的拦截）
+    setPluginPreview: (html) => ipcRenderer.invoke('plugin:setPreview', html),
     // 🗑️ 智能查重清洗：将冗余文件移动到 userData 下的全局回收站（绝不物理删除）
     trashFiles: (paths) => ipcRenderer.invoke('sys:trashFiles', paths),
     // 🗑️ 打开全局回收站（世界书删除/查重清洗的 userData/jsTavern_Trash）
@@ -159,5 +185,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUpdateError: (cb) => {
         ipcRenderer.removeAllListeners('update-error');
         ipcRenderer.on('update-error', (event, err) => cb(err));
+    },
+    // 🧠 向量引擎（本地语义匹配，Worker 线程推理）
+    vectorEngine: {
+        init: (modelName) => ipcRenderer.invoke('vector:init', modelName),
+        getStatus: () => ipcRenderer.invoke('vector:status'),
+        deleteCache: () => ipcRenderer.invoke('vector:deleteCache'),
+        batchMatch: (cards, labelPool, topK, threshold, modelName) =>
+            ipcRenderer.invoke('vector:batchMatch', { cards, labelPool, topK, threshold, modelName }),
+        // 监听模型下载进度（用 removeAllListeners 防重复绑定，与现有 onUpdate* 模式一致）
+        onDownloadProgress: (cb) => {
+            ipcRenderer.removeAllListeners('vector:downloadProgress');
+            ipcRenderer.on('vector:downloadProgress', (event, p) => cb(p));
+        },
+        // 监听模型下载源切换（多下载源：官方 HF → 国内镜像）
+        onDownloadSource: (cb) => {
+            ipcRenderer.removeAllListeners('vector:downloadSource');
+            ipcRenderer.on('vector:downloadSource', (event, p) => cb(p));
+        },
+        // 监听批量匹配进度
+        onBatchProgress: (cb) => {
+            ipcRenderer.removeAllListeners('vector:batchProgress');
+            ipcRenderer.on('vector:batchProgress', (event, p) => cb(p));
+        }
     }
 });

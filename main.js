@@ -41,6 +41,17 @@ app.commandLine.appendSwitch('high-dpi-support', '1');
 // 2. 开启 GPU 光栅化，确保高 DPI 缩放下的滚动与动画流畅度不掉帧
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 
+// ================= 本地崩溃转储（crashReporter） =================
+// renderer/GPU 进程 native 崩溃时在 userData/Crashpad 生成 .dmp，
+// 供定位 exitCode 崩溃的真实堆栈（uploadToServer=false 不联网、不上传）。
+try {
+  app.crashReporter.start({
+    uploadToServer: false,
+    productName: 'sillytavern-card-manager',
+    compress: false
+  });
+} catch (e) { /* crashReporter 启动失败不影响主流程 */ }
+
 // ================= 全局异常兜底（崩溃不闪退，错误堆栈落盘） =================
 function crashLogPath() {
   return path.join(app.getPath('userData'), 'crash.log');
@@ -54,6 +65,12 @@ function writeCrashLog(err) {
 }
 
 process.on('uncaughtException', (err) => {
+  // 🛡️ EPIPE 属已知无害的 I/O 中断（日志管道对端关闭：终端退出/调试管道被剪断等），
+  //    只记录不弹窗——应用本身正常运行，仅日志输出管道断了，绝不打扰用户。
+  if (err && err.code === 'EPIPE') {
+    writeCrashLog(err);
+    return;
+  }
   writeCrashLog(err);
   console.error('未捕获异常:', err);
   try {
@@ -65,6 +82,20 @@ process.on('unhandledRejection', (reason) => {
   writeCrashLog(reason instanceof Error ? reason : new Error(String(reason)));
   console.error('未处理的 Promise 拒绝:', reason);
 });
+
+// 🛡️ EPIPE 容错（2026-08-28）：stdout/stderr 对端关闭（终端退出、调试管道被剪断、
+//    日志经 Select-String 管道提前截断等）时，Node 的 console.log/console.error 写管道
+//    会抛 "EPIPE: broken pipe"，冒泡到 uncaughtException 被误报为「程序崩溃」弹窗。
+//    这里在流层直接消费 EPIPE 错误——应用本身正常运行，仅日志管道断了，绝不弹窗打扰。
+try {
+  for (const stream of [process.stdout, process.stderr]) {
+    if (stream && typeof stream.on === 'function') {
+      stream.on('error', (err) => {
+        if (err && err.code === 'EPIPE') { /* 管道断开：静默忽略 */ }
+      });
+    }
+  }
+} catch (e) { /* 忽略 */ }
 
 // ================= [ 📸 历史快照配置与节流阀（可在设置面板动态更新） ] =================
 // snapshotConfig 默认值；前端通过 settings:updateSnapshotConfig IPC 实时同步
@@ -535,23 +566,71 @@ const APP_CONFIG_PATH = path.join(app.getPath('userData'), 'app_config.json');
 //    cardOverlays 随库规模膨胀到几 MB 时，写盘期间窗口直接冻结。
 // 🚀 v1.8.5 并发修复：tmp 文件名加 pid+序号唯一化 —— 异步化后高频/并发调用
 //    （如连续切换快照开关）会共用同一 `.tmp` 路径互相覆盖/撞 ENOENT。
+// 🔧 2026-08-29 修复：writeFile 或 rename 中途失败/进程退出会遗留 `.tmp` 垃圾
+//    （实测 userData 积攒 95 个 app_config/snapshot_config 的 .tmp），
+//    catch 精确清理本次 tmp，并在启动时统一清扫历史残留（见 cleanupStaleConfigTmp）。
 let atomicTmpSeq = 0;
 async function atomicWriteJson(filePath, data) {
   const tmpPath = `${filePath}.${process.pid}.${++atomicTmpSeq}.tmp`;
-  await fsp.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-  await fsp.rename(tmpPath, filePath);
+  try {
+    await fsp.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    // 🔧 EPERM 重试（2026-08-29）：360 主动防御（ZhuDongFangYu 内核驱动）会瞬时拦截 rename
+    //    （EPERM），实测多为瞬时 → 短间隔重试 3 次基本可成功；仍失败再抛错走 tmp 清理。
+    let renamed = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await fsp.rename(tmpPath, filePath);
+        renamed = true;
+        break;
+      } catch (e) {
+        if (attempt < 2 && (e.code === 'EPERM' || e.code === 'EACCES')) {
+          await new Promise(r => setTimeout(r, 200 * (attempt + 1))); // 200ms / 400ms 退避
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!renamed) throw new Error('rename 失败（多次重试后仍被拦截）');
+  } catch (e) {
+    // 本次写入失败：清理遗留 tmp，绝不误删他人 tmp（tmp 文件名含 pid 唯一化，安全）
+    await fsp.unlink(tmpPath).catch(() => { });
+    throw e;
+  }
 }
+// 🔧 启动时清扫配置原子写的历史 .tmp 残留（写盘中途崩溃/被杀遗留的孤儿文件）
+function cleanupStaleConfigTmp() {
+  try {
+    const userData = app.getPath('userData');
+    const files = fs.readdirSync(userData);
+    for (const name of files) {
+      // 仅清理本应用配置的原子写 tmp：app_config.json.*.tmp / snapshot_config.json.*.tmp / tavern_manager_config.json.*.tmp
+      if (/^(app_config|snapshot_config|tavern_manager_config)\.json\.\d+\.\d+\.tmp$/.test(name)) {
+        const full = path.join(userData, name);
+        try {
+          // 只删未被占用的（应用启动早期无人写，基本都能删）
+          fs.unlinkSync(full);
+        } catch (e) { /* 被占用则跳过，下次启动再清 */ }
+      }
+    }
+  } catch (e) { /* 清理失败静默忽略，不影响启动 */ }
+}
+cleanupStaleConfigTmp();
 
 // 🔁 通用退避重试（代码审查修复 8）：仅对 5xx / 网络错误重试，业务错误（4xx）立即返回
 async function fetchWithRetry(url, options, retries = 2, backoffMs = 800) {
+  const REQUEST_TIMEOUT_MS = 120000; // ⏱️ 上游黑洞保护：120s 无响应即中止
+  //    （AI 分类/翻译/打标共用本通道：中转挂起不返回时若无超时 → 渲染端 await 永久 pending，
+  //    表现为"点了没反应"只转圈。加超时后明确报错，不再无限挂起）
   let lastError;
   for (let i = 0; i <= retries; i++) {
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(url, { ...options, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       if (res.ok || res.status < 500) return res; // 仅对 5xx / 网络错误重试
       lastError = new Error(`HTTP ${res.status}`);
     } catch (e) {
-      lastError = e;
+      lastError = (e && (e.name === 'TimeoutError' || e.name === 'AbortError'))
+        ? new Error('请求超时（120 秒无响应），请检查网络或中转服务是否可用')
+        : e;
     }
     if (i < retries) {
       await new Promise(r => setTimeout(r, backoffMs * (i + 1)));
@@ -653,14 +732,42 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
+// 🧩 插件「效果」页预览内存存储：渲染进程生成完整预览 HTML（含内联宿主桩脚本），
+// 通过 IPC 存入主进程内存，再由 app:// 协议独立 URL 提供给 iframe 加载。
+// 原因：预览依赖大量内联 <script>（jquery/lodash/handlebars/showdown/dompurify + 用户脚本），
+// 而生产模式 CSP `script-src 'self' app:` 不含 unsafe-inline，srcdoc/data:/blob: iframe 会继承父页
+// CSP 导致内联脚本被全部拦截；独立 app:// 文档拥有自己的响应头（跳过 CSP 注入）即可正常运行。
+const previewStore = new Map(); // id -> { html, ts }
+let previewSeq = 0;
+const PREVIEW_PATH_PREFIX = '/__jsk_preview__/';
+
+/** 存入预览 HTML，返回唯一 id */
+function setPluginPreview(html) {
+  const id = String(++previewSeq) + '-' + crypto.randomBytes(4).toString('hex');
+  previewStore.set(id, { html, ts: Date.now() });
+  // 最多保留 32 份，超限清最旧（防内存泄漏）
+  if (previewStore.size > 32) {
+    const oldest = [...previewStore.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) previewStore.delete(oldest[0]);
+  }
+  return id;
+}
+
 /**
  * 注册自定义协议
- * - app://        -> 项目根目录下的文件（页面、JS、CSS）
+ * - app://        -> 项目根目录下的文件（页面、JS、CSS） + 内存中的插件预览页
  * - local-file:// -> 磁盘上的任意本地文件（仅用于展示本地立绘图片）
  */
 function registerAppProtocol() {
   protocol.handle('app', (request) => {
     const url = new URL(request.url);
+    // 🧩 插件预览页：命中内存路由直接返回，不落盘、不受路径越界校验限制
+    if (url.pathname.startsWith(PREVIEW_PATH_PREFIX)) {
+      const id = url.pathname.slice(PREVIEW_PATH_PREFIX.length).replace(/\.html$/, '');
+      const entry = previewStore.get(id);
+      if (!entry) return new Response('Not Found', { status: 404 });
+      return new Response(entry.html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
     // standard scheme 下页面 origin 为 app://index.html，其相对资源形如 app://index.html/css/style.css
     // （host 恒为 index.html，pathname 为项目根下的相对路径）；极少数跨 host 场景按 host 首段拼接
     const host = url.hostname;
@@ -766,6 +873,50 @@ function createWindow() {
     win.show();
   });
 
+  // 🩺 诊断：加载完成后记录页面 URL（排查加载失败）
+  win.webContents.on('did-finish-load', () => {
+    console.log('[diag] 页面 URL:', win.webContents.getURL());
+  });
+
+  // 🩺 诊断：渲染进程控制台日志转发到主进程终端（排查编辑工作区消失等渲染层错误）
+  // Electron 43 起 console-message 改为事件对象传参，兼容新旧两种签名
+  win.webContents.on('console-message', (e, levelOrEvent, message) => {
+    let level = levelOrEvent, msg = message;
+    let lineNumber = '', sourceId = '', frameInfo = '';
+    if (levelOrEvent && typeof levelOrEvent === 'object') {
+      level = levelOrEvent.level;
+      msg = levelOrEvent.message;
+      lineNumber = levelOrEvent.lineNumber || '';
+      sourceId = levelOrEvent.sourceId || '';
+      // frame 标识消息来自哪个 frame（主 frame vs iframe srcdoc 子 frame）
+      try {
+        if (levelOrEvent.frame) {
+          const f = levelOrEvent.frame;
+          const src = (f.url || f.getURL ? (f.url || '') : '');
+          frameInfo = `[frame:${src ? src.slice(-80) : 'main'}]`;
+        }
+      } catch (err) { frameInfo = '[frame:?]'; }
+    }
+    const tag = ['VERBOSE', 'INFO', 'WARN', 'ERROR'][level] || 'LOG';
+    const loc = lineNumber !== '' ? ` (${sourceId}:${lineNumber})` : '';
+    console.log(`[renderer:${tag}]${frameInfo}${loc} ${msg}`);
+  });
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[renderer] 页面加载失败: ${errorCode} ${errorDescription} ${validatedURL}`);
+  });
+  win.webContents.on('render-process-gone', (event, details) => {
+    console.error('[renderer] 渲染进程崩溃:', JSON.stringify(details));
+    // 🛡️ 崩溃兜底：记录详情到 crash.log + 自动 reload 恢复，避免白屏/整个应用退出
+    try {
+      fs.appendFileSync(crashLogPath(), `[${new Date().toISOString()}] render-process-gone: ${JSON.stringify(details)}\n`);
+    } catch (e) { /* 日志写入失败忽略 */ }
+    if (details && (details.reason === 'crashed' || details.reason === 'oom' || details.reason === 'killed')) {
+      setTimeout(() => {
+        try { if (!win.isDestroyed()) win.reload(); } catch (e) { /* 恢复失败忽略 */ }
+      }, 1500);
+    }
+  });
+
   return win;
 }
 
@@ -783,6 +934,7 @@ const MIN_CARD_FILE_SIZE = 40960;
 // 🔢 魔法数字常量化（代码审查修复 9）：集中定义散落的大小上限 / 批次 / 进度 / 缺省值
 const MAX_URL_DOWNLOAD_BYTES = 20 * 1024 * 1024; // 角色卡 URL 下载上限
 const MAX_WB_FETCH_BYTES     = 50 * 1024 * 1024; // 世界书 URL 拉取上限
+const MAX_PLUGIN_SCRIPT_BYTES   = 2 * 1024 * 1024;  // 🧩 单个插件脚本读取上限（超大文件跳过）
 const SCAN_FILE_BATCH        = 64;               // 扫描文件批并发
 const SCAN_PROGRESS_STEP     = 100;              // 每 N 个文件上报一次进度
 const CHAT_DEFAULT_MAX_TOKENS = 4096;            // OpenAI/Anthropic 缺省 max_tokens
@@ -866,6 +1018,14 @@ app.whenReady().then(() => {
   // 会挡掉 ws:// 导致热更新失效，故仅在 !isDev 下注册该拦截器。
   if (!isDev) {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      // 🧩 插件预览页跳过 CSP 注入：该页由渲染进程提供内容（含内联宿主桩脚本），
+      // 内联脚本是其渲染的必要手段；若套用主页面严格 CSP 会全被拦截。预览页仅在
+      // sandbox="allow-scripts" iframe 内加载、无同源访问、无 Node 能力，风险可控。
+      let url = details.url;
+      try { url = new URL(details.url).pathname; } catch (e) { /* 非标准 URL 忽略 */ }
+      if (typeof url === 'string' && url.startsWith(PREVIEW_PATH_PREFIX)) {
+        return callback({ responseHeaders: details.responseHeaders });
+      }
       callback({
         responseHeaders: {
           ...details.responseHeaders,
@@ -1135,6 +1295,71 @@ app.whenReady().then(() => {
     } catch (e) {
       return { success: false, error: e.message };
     }
+  });
+
+  // ================= [ 🚀 v2.0 批量读取：万张卡导入提速 ] =================
+  // 逐卡 readText/readBuffer 在万张量级 = 万次 IPC 往返，是导入慢/超时/超时后
+  // 部分丢失的主因之一。新增批量通道：单条 IPC 携带至多 READ_BATCH 张卡，把
+  // 「万次往返」降到「百次」，且不再出现「数 GB 单条消息」。
+  // 安全：每个 path 仍逐个过 isPathAllowed 白名单，越界项返回 ok:false 绝不读取。
+  // 🚀 v2.2 提速：64 → 128，减少分批轮数与 yield 次数（万卡读取 IPC 往返更少）
+  const READ_BATCH = 128;
+
+  ipcMain.handle('files:readTextBatch', async (event, paths) => {
+    const results = [];
+    const items = Array.isArray(paths) ? paths : [];
+    for (let i = 0; i < items.length; i += READ_BATCH) {
+      const batch = items.slice(i, i + READ_BATCH);
+      const part = await Promise.all(batch.map(async (p) => {
+        if (!isPathAllowed(p)) return { path: p, ok: false, reason: 'forbidden' };
+        try {
+          const text = await fs.promises.readFile(p, 'utf-8');
+          return { path: p, text, ok: true };
+        } catch (e) {
+          return { path: p, ok: false, reason: e.message };
+        }
+      }));
+      results.push(...part);
+      if (i + READ_BATCH < items.length) await yieldToEventLoop();
+    }
+    return results;
+  });
+
+  ipcMain.handle('files:readEmbeddedBatch', async (event, paths) => {
+    // paths: [{ path, size, mtime }] —— size 供自适应窗口计算读头长度（兼容纯字符串数组）
+    const results = [];
+    const items = Array.isArray(paths) ? paths : [];
+    await loadEmbedCache(); // 🚀 v2.3 惰性加载缓存（首次调用前，异步分片读防阻塞）
+    for (let i = 0; i < items.length; i += READ_BATCH) {
+      const batch = items.slice(i, i + READ_BATCH);
+      const part = await Promise.all(batch.map(async (item) => {
+        const p = (typeof item === 'string' ? item : (item && item.path)) || '';
+        const size = (item && typeof item === 'object') ? (item.size || 0) : 0;
+        const mtime = (item && typeof item === 'object') ? (item.mtime || 0) : 0;
+        if (!isPathAllowed(p)) return { path: p, ok: false, reason: 'forbidden' };
+        try {
+          // 🚀 v2.3 缓存命中：同一文件（mtime+size 未变）已提取过 → 直接复用，跳过 PNG 读取
+          const ck = `${p}|${mtime}|${size}`;
+          if (mtime && embedCache.has(ck)) {
+            return { path: p, data: embedCache.get(ck), ok: true, cached: true };
+          }
+          const data = await readPngEmbeddedFromFile(p, size);
+          if (data && mtime) {
+            // 🚀 v2.3 LRU 缓存：单条 > 512KB 的巨卡跳过，防缓存文件膨胀
+            try {
+              if (JSON.stringify(data).length <= EMBED_CACHE_ITEM_MAX) cacheSetEmbed(ck, data);
+            } catch (e) { /* 序列化失败跳过缓存 */ }
+            scheduleEmbedCacheSave();
+          }
+          return { path: p, data: data || null, ok: true };
+        } catch (e) {
+          return { path: p, ok: false, reason: e.message };
+        }
+      }));
+      results.push(...part);
+      if (i + READ_BATCH < items.length) await yieldToEventLoop();
+    }
+    return results;
   });
 
   // IPC：获取所有存在的盘符 (Windows 专属 C:, D:, E: ...)
@@ -1605,26 +1830,37 @@ app.whenReady().then(() => {
   });
 
   // IPC：系统级拖拽复制文件到库
-  ipcMain.handle('file:copyToLibrary', (event, sourcePaths, targetFolder) => {
+  // 🚀 v2.0 修复：异步化 + 并发复制 —— 旧版 fs.copyFileSync 循环万次阻塞主进程
+  //    事件循环（拖拽/文件菜单批量导入 1 万张时窗口「未响应」）。现按 COPY_CONCURRENCY
+  //    分批并发 fs.promises.copyFile，批间让出事件循环；同名跳过与返回值语义不变。
+  const COPY_CONCURRENCY = 32;
+  ipcMain.handle('file:copyToLibrary', async (event, sourcePaths, targetFolder) => {
     const copiedFiles = [];
     // 【安全加固】目标必须落在白名单内（卡片库）；源为拖拽授权，不做限制
     if (!isPathAllowed(targetFolder)) return copiedFiles;
-    for (const src of sourcePaths) {
-      try {
-        // 确保拖入的是支持的文件格式
-        if (!src.match(/\.(png|webp|json)$/i)) continue;
+    const items = Array.isArray(sourcePaths) ? sourcePaths : [];
+    for (let i = 0; i < items.length; i += COPY_CONCURRENCY) {
+      const batch = items.slice(i, i + COPY_CONCURRENCY);
+      const part = await Promise.all(batch.map(async (src) => {
+        try {
+          // 确保拖入的是支持的文件格式
+          if (!src.match(/\.(png|webp|json)$/i)) return null;
 
-        const fileName = path.basename(src);
-        const dest = path.join(targetFolder, fileName);
+          const fileName = path.basename(src);
+          const dest = path.join(targetFolder, fileName);
 
-        // 如果目标文件夹中没有同名文件，则进行复制
-        if (!fs.existsSync(dest)) {
-          fs.copyFileSync(src, dest);
-          copiedFiles.push(dest);
+          // 如果目标文件夹中没有同名文件，则进行复制
+          if (!fs.existsSync(dest)) {
+            await fs.promises.copyFile(src, dest);
+            return dest;
+          }
+        } catch (e) {
+          console.error('复制文件失败:', e);
         }
-      } catch (e) {
-        console.error('复制文件失败:', e);
-      }
+        return null;
+      }));
+      for (const dest of part) if (dest) copiedFiles.push(dest);
+      if (i + COPY_CONCURRENCY < items.length) await yieldToEventLoop();
     }
     return copiedFiles; // 返回成功复制的文件路径数组
   });
@@ -2060,7 +2296,7 @@ app.whenReady().then(() => {
           await fs.promises.writeFile(tmpPath, JSON.stringify(updatedJson, null, 2), 'utf-8');
           await fs.promises.rename(tmpPath, filePath);
           const st = await fs.promises.stat(filePath);
-          return { success: true, mtime: st.mtimeMs };
+          return { success: true, mtime: st.mtimeMs, size: st.size };
         } else if (ext === '.png') {
           const buffer = await fs.promises.readFile(filePath);
           const newBuffer = writeTavernPNGChunk(buffer, updatedJson);
@@ -2071,7 +2307,7 @@ app.whenReady().then(() => {
             await fs.promises.writeFile(tmpPath, newBuffer);
             await fs.promises.rename(tmpPath, filePath);
             const st = await fs.promises.stat(filePath);
-            return { success: true, mtime: st.mtimeMs };
+            return { success: true, mtime: st.mtimeMs, size: st.size };
           } else {
             return { success: false, error: "无法写入 PNG 结构。" };
           }
@@ -2095,6 +2331,23 @@ app.whenReady().then(() => {
   // ==========================================
   // 🌍 世界书 (Worldbook) 专属物理文件接口 (严格过滤版)
   // ==========================================
+
+  // 🚀 v1.8.6 扫描结果增量缓存：目录文件 mtime 未变则跳过 readFile+JSON.parse，
+  //    大目录（如 H:\01 含数百 JSON）二次启动从数秒降至毫秒级。
+  //    只缓存 { mtime, valid } 标记（不存 data，避免体积膨胀）；有效文件仍需读取 data。
+  const scanCachePath = path.join(app.getPath('userData'), 'scan_cache.json');
+  let scanCache = null;
+  const loadScanCache = () => {
+    if (scanCache) return scanCache;
+    try {
+      if (fs.existsSync(scanCachePath)) scanCache = JSON.parse(fs.readFileSync(scanCachePath, 'utf-8'));
+    } catch (e) { /* 缓存损坏忽略 */ }
+    if (!scanCache || typeof scanCache !== 'object') scanCache = {};
+    return scanCache;
+  };
+  const saveScanCache = () => {
+    try { fs.writeFileSync(scanCachePath, JSON.stringify(scanCache), 'utf-8'); } catch (e) { /* 忽略 */ }
+  };
 
   // 智能校验：是否为标准的酒馆世界书 JSON
   function isValidWorldbook(wbData) {
@@ -2162,42 +2415,71 @@ app.whenReady().then(() => {
       // 🛡️ v1.8.5：realpath + visited 集合防符号链接/junction 环路（指回祖先目录的
       //    链接会让递归无限循环、results 无限膨胀直至内存耗尽）
       const visitedDirs = new Set();
-      const walk = async (dir) => {
+      // 🚀 v1.8.6 性能优化：目录递归串行（防环路），目录内 JSON 32 路并发解析——
+      //    旧版逐个 readFile+JSON.parse，大目录（数百 JSON）串行耗时数秒；并发后毫秒级。
+      const SCAN_JSON_BATCH = 32;
+      const walk = async (dir, depth = 0) => {
         let realDir;
         try { realDir = fs.realpathSync(dir); } catch (e) { return; }
         if (visitedDirs.has(realDir)) return; // 环路保护：同一物理目录只扫一次
         visitedDirs.add(realDir);
         const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        const dirs = [];
+        const jsonFiles = [];
         for (const entry of entries) {
           if (entry.name.startsWith('.')) continue; // 忽略隐藏文件/目录
           const fullPath = path.join(dir, entry.name);
-
           if (entry.isDirectory()) {
-            await walk(fullPath); // 递归进入子文件夹
+            // 🚀 v1.8.6：黑名单目录（node_modules/.git 等海量垃圾）直接剪枝
+            if (skipFolders.includes(entry.name.toLowerCase())) continue;
+            dirs.push(fullPath);
             continue;
           }
-          if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.json') continue;
-
-          try {
-            const content = await fs.promises.readFile(fullPath, 'utf-8');
-            const wbData = JSON.parse(content);
-
-            // 严格防伪校验：确保只拦截真正的世界书 JSON
-            if (isValidWorldbook(wbData)) {
-              results.push({
-                path: fullPath,
-                name: entry.name,
-                data: wbData
-              });
-            }
-          } catch (parseErr) {
-            // 静默跳过损坏或非标准 JSON 文件
-            console.warn('[wb:scan] 跳过非世界书文件:', entry.name, parseErr.message);
-          }
+          if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.json') jsonFiles.push(fullPath);
         }
+        // 🚀 v1.8.6 深度剪枝：世界书有效文件实测都在浅层，限 5 层
+        if (depth >= 5) return;
+        // 本目录 JSON 并发解析（严格防伪校验：确保只拦截真正的世界书 JSON）
+        const cache = (loadScanCache().worldbook = loadScanCache().worldbook || {});
+        for (let i = 0; i < jsonFiles.length; i += SCAN_JSON_BATCH) {
+          const batch = jsonFiles.slice(i, i + SCAN_JSON_BATCH);
+          await Promise.all(batch.map(async (fullPath) => {
+            try {
+              const st = await fs.promises.stat(fullPath);
+              if (st.size > 5 * 1024 * 1024) return;
+              const mt = Math.round(st.mtimeMs);
+              const cached = cache[fullPath];
+              // 🚀 增量缓存：已知无效且 mtime 未变 → 跳过 readFile+JSON.parse
+              if (cached && cached.mtime === mt && cached.valid === false) return;
+              // 🚀 大文件预检：世界书必有 entries 字段；超过 512KB 的先读头 64KB 查关键字，
+              //    不含则跳过（避免 readFile+JSON.parse 大文件——目录里常有 table_data/模板等大 JSON）
+              if (st.size > 512 * 1024) {
+                let fh;
+                try {
+                  fh = await fs.promises.open(fullPath, 'r');
+                  const head = Buffer.alloc(64 * 1024);
+                  await fh.read(head, 0, head.length, 0);
+                  if (!head.toString('utf-8').includes('"entries"')) { cache[fullPath] = { mtime: mt, valid: false }; return; }
+                } finally { if (fh) await fh.close().catch(() => {}); }
+              }
+              const content = await fs.promises.readFile(fullPath, 'utf-8');
+              const wbData = JSON.parse(content);
+              const valid = isValidWorldbook(wbData);
+              cache[fullPath] = { mtime: mt, valid };
+              if (valid) {
+                results.push({ path: fullPath, name: path.basename(fullPath), data: wbData });
+              }
+            } catch (parseErr) {
+              // 静默跳过损坏或非标准 JSON 文件
+              console.warn('[wb:scan] 跳过非世界书文件:', path.basename(fullPath), parseErr.message);
+            }
+          }));
+        }
+        for (const d of dirs) await walk(d, depth + 1); // 递归子目录
       };
 
       await walk(dirPath);
+      saveScanCache();
       return { success: true, data: results };
     } catch (err) {
       return { success: false, error: err.message };
@@ -2470,6 +2752,464 @@ app.whenReady().then(() => {
         count++;
       }
       return { success: true, count, outDir };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==========================================
+  // ⚙️ 预设 (Preset) 专属物理文件接口
+  // ==========================================
+
+  // 智能校验：是否为酒馆预设 JSON（OpenAI Settings / Presets 目录下的 .json）
+  function isValidPreset(pData) {
+    if (!pData || typeof pData !== 'object') return false;
+    // 排除角色卡 / 世界书
+    if (pData.spec === 'chara_card_v2' || pData.spec === 'chara_card_v3') return false;
+    if (pData.entries) return false;
+    // 预设常见字段：prompts / prompt_order / temperature / max_tokens 等
+    const presetKeys = ['prompts', 'prompt_order', 'temperature', 'max_tokens', 'max_context', 'rep_pen', 'top_p', 'openai_model'];
+    const hasPresetField = presetKeys.some(k => k in pData);
+    return hasPresetField;
+  }
+
+  // 扫描预设目录（仅限 .json，经 isValidPreset 过滤）
+  ipcMain.handle('preset:scan', async (event, dirPath) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) {
+        return { success: false, error: '目录不存在: ' + dirPath };
+      }
+      // 安全加固：未授权目录需通过预设指纹验证
+      if (!isPathAllowed(dirPath)) {
+        let hasPresetFingerprint = false;
+        try {
+          const names = fs.readdirSync(dirPath).filter(n => n.toLowerCase().endsWith('.json')).slice(0, 20);
+          for (const n of names) {
+            try {
+              if (isValidPreset(JSON.parse(fs.readFileSync(path.join(dirPath, n), 'utf-8')))) {
+                hasPresetFingerprint = true;
+                break;
+              }
+            } catch (e) { /* 单个损坏文件继续检查下一个 */ }
+          }
+        } catch (e) { /* 目录不可读按无指纹处理 */ }
+        if (!hasPresetFingerprint) {
+          return { success: false, error: '该目录不含有效预设文件，或目录来源未经验证，已拒绝授权。请通过「打开预设目录」按钮重新选择。' };
+        }
+        addAllowedRoot(dirPath);
+      }
+
+      const results = [];
+      const visitedDirs = new Set();
+      // 🚀 v1.8.6 性能优化：目录递归串行（防环路），目录内 JSON 32 路并发解析
+      const SCAN_JSON_BATCH = 32;
+      const walk = async (dir, depth = 0) => {
+        let realDir;
+        try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+        if (visitedDirs.has(realDir)) return;
+        visitedDirs.add(realDir);
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        const dirs = [];
+        const jsonFiles = [];
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue;
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            // 🚀 v1.8.6：黑名单目录（node_modules/.git 等海量垃圾）直接剪枝
+            if (skipFolders.includes(entry.name.toLowerCase())) continue;
+            dirs.push(fullPath);
+            continue;
+          }
+          if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.json') jsonFiles.push(fullPath);
+        }
+        // 🚀 v1.8.6 深度剪枝：预设有效文件实测都在一级/二级目录内，限 2 层
+        //    （H:\01 这种根级预设目录含 3 万+ 深层子目录，深度限制是启动提速关键）
+        if (depth >= 2) return;
+        const cache = (loadScanCache().preset = loadScanCache().preset || {});
+        for (let i = 0; i < jsonFiles.length; i += SCAN_JSON_BATCH) {
+          const batch = jsonFiles.slice(i, i + SCAN_JSON_BATCH);
+          await Promise.all(batch.map(async (fullPath) => {
+            try {
+              const st = await fs.promises.stat(fullPath);
+              if (st.size > 5 * 1024 * 1024) return;
+              const mt = Math.round(st.mtimeMs);
+              const cached = cache[fullPath];
+              // 🚀 增量缓存：已知无效且 mtime 未变 → 跳过 readFile+JSON.parse（大目录提速关键）
+              if (cached && cached.mtime === mt && cached.valid === false) return;
+              // 🚀 大文件预检：预设常见字段 prompts/temperature/max_tokens 等；超过 512KB 的
+              //    先读头 64KB 查关键字，不含则跳过（避免 readFile+JSON.parse 大文件）
+              const PRESET_HINTS = ['prompts', 'prompt_order', 'temperature', 'max_tokens', 'max_context', 'rep_pen', 'top_p', 'openai_model'];
+              if (st.size > 512 * 1024) {
+                let fh;
+                try {
+                  fh = await fs.promises.open(fullPath, 'r');
+                  const head = Buffer.alloc(64 * 1024);
+                  await fh.read(head, 0, head.length, 0);
+                  const headStr = head.toString('utf-8');
+                  if (!PRESET_HINTS.some(k => headStr.includes('"' + k + '"'))) { cache[fullPath] = { mtime: mt, valid: false }; return; }
+                } finally { if (fh) await fh.close().catch(() => {}); }
+              }
+              const content = await fs.promises.readFile(fullPath, 'utf-8');
+              const pData = JSON.parse(content);
+              const valid = isValidPreset(pData);
+              cache[fullPath] = { mtime: mt, valid };
+              if (valid) {
+                results.push({ path: fullPath, name: path.basename(fullPath), data: pData });
+              }
+            } catch (parseErr) {
+              // 静默跳过损坏或非标准 JSON 文件
+              console.warn('[preset:scan] 跳过非预设文件:', path.basename(fullPath), parseErr.message);
+            }
+          }));
+        }
+        for (const d of dirs) await walk(d, depth + 1);
+      };
+      await walk(dirPath);
+      saveScanCache();
+      return { success: true, data: results };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 物理覆写预设文件（保存前自动快照备份）
+  ipcMain.handle('preset:save', async (event, { filePath, data }) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      if (!isPathAllowed(filePath)) return forbidden();
+      if (!fs.existsSync(filePath)) return { success: false, error: '原文件不存在，无法保存。' };
+
+      // 数据清洗（剔除 _ 前缀临时字段）
+      const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
+        if (key.startsWith('_')) return undefined;
+        return value;
+      }));
+      const fileContent = JSON.stringify(cleanData, null, 4);
+
+      // 快照备份
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'presets');
+      await backupWorldbookSnapshot(backupDir, path.basename(filePath, '.json'), filePath);
+
+      // 原子覆写
+      const tmpPath = `${filePath}.${process.pid}.${Date.now()}_${Math.floor(Math.random() * 1e6)}.tmp`;
+      try {
+        await fs.promises.writeFile(tmpPath, fileContent, 'utf-8');
+        await fs.promises.rename(tmpPath, filePath);
+      } catch (writeErr) {
+        await fs.promises.unlink(tmpPath).catch(() => { });
+        throw writeErr;
+      }
+      return { success: true };
+    } catch (err) {
+      console.error('保存预设失败:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 新建预设文件
+  ipcMain.handle('preset:create', async (event, { filePath, data }) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      if (!isPathAllowed(filePath)) return forbidden();
+      if (fs.existsSync(filePath)) return { success: false, error: '目标文件已存在，请换一个文件名。' };
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      const cleanData = JSON.parse(JSON.stringify(data, (key, value) => {
+        if (key.startsWith('_')) return undefined;
+        return value;
+      }));
+      await fs.promises.writeFile(filePath, JSON.stringify(cleanData, null, 4), 'utf-8');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 重命名预设物理文件
+  ipcMain.handle('preset:rename', async (event, { oldPath, newPath }) => {
+    try {
+      if (!oldPath || !newPath) return { success: false, error: '路径为空。' };
+      if (!isPathAllowed(oldPath) || !isPathAllowed(newPath)) return forbidden();
+      if (!fs.existsSync(oldPath)) return { success: false, error: '原文件不存在。' };
+      if (fs.existsSync(newPath)) return { success: false, error: '目标文件已存在，请换一个名称。' };
+      await fs.promises.rename(oldPath, newPath);
+      return { success: true, newPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 预设快照：列表
+  ipcMain.handle('preset:listSnapshots', async (event, filePath) => {
+    try {
+      if (!filePath) return { success: false, error: '文件路径为空。' };
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'presets');
+      if (!fs.existsSync(backupDir)) return { success: true, data: [] };
+      const baseName = path.basename(filePath, '.json');
+      const files = await fs.promises.readdir(backupDir);
+      const snaps = files
+        .filter(f => isSnapshotOf(f, baseName) && f.endsWith('.json'))
+        .sort()
+        .reverse();
+      const detail = await Promise.all(snaps.map(async f => {
+        const p = path.join(backupDir, f);
+        const st = await fs.promises.stat(p).catch(() => null);
+        return { file: f, path: p, mtime: st ? st.mtimeMs : 0, size: st ? st.size : 0 };
+      }));
+      return { success: true, data: detail };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 预设快照：回滚
+  ipcMain.handle('preset:restoreSnapshot', async (event, { filePath, snapshotPath }) => {
+    try {
+      if (!filePath || !snapshotPath) return { success: false, error: '参数缺失。' };
+      if (!isPathAllowed(filePath)) return forbidden();
+      const backupDir = path.join(app.getPath('userData'), 'jsTavern_Backups', 'presets');
+      const baseName = path.basename(filePath, '.json');
+      const resolvedSnapshot = path.resolve(snapshotPath);
+      const resolvedBackupDir = path.resolve(backupDir);
+      if (path.dirname(resolvedSnapshot).toLowerCase() !== resolvedBackupDir.toLowerCase()) {
+        return { success: false, error: '非法快照路径：仅能回滚预设快照目录内的文件。' };
+      }
+      if (!isSnapshotOf(path.basename(resolvedSnapshot), baseName) || !resolvedSnapshot.toLowerCase().endsWith('.json')) {
+        return { success: false, error: '非法快照文件：该快照不属于当前预设。' };
+      }
+      if (!fs.existsSync(resolvedSnapshot)) return { success: false, error: '快照文件不存在。' };
+      if (fs.existsSync(filePath)) {
+        await backupWorldbookSnapshot(backupDir, baseName, filePath);
+      }
+      await fs.promises.copyFile(resolvedSnapshot, filePath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 预设快照：删除
+  ipcMain.handle('preset:deleteSnapshot', async (event, snapshotPath) => {
+    try {
+      if (!snapshotPath || typeof snapshotPath !== 'string') return { success: false, error: '参数缺失。' };
+      const backupDir = path.resolve(app.getPath('userData'), 'jsTavern_Backups', 'presets');
+      const resolved = path.resolve(snapshotPath);
+      if (path.dirname(resolved).toLowerCase() !== backupDir.toLowerCase()) {
+        return { success: false, error: '非法快照路径：仅能删除预设快照目录内的文件。' };
+      }
+      if (!/_\d{4}-\d{2}-\d{2}T/.test(path.basename(snapshotPath))) {
+        return { success: false, error: '非法快照文件名，操作被拒绝。' };
+      }
+      if (!fs.existsSync(snapshotPath)) return { success: false, error: '快照文件不存在。' };
+      await fs.promises.unlink(snapshotPath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 预设批量导出
+  ipcMain.handle('preset:exportBatch', async (event, filePaths) => {
+    try {
+      if (!Array.isArray(filePaths) || filePaths.length === 0) return { success: false, error: '未选择任何预设。' };
+      const { canceled, filePaths: targetDirs } = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择预设批量导出的目标文件夹'
+      });
+      if (canceled || targetDirs.length === 0) return { success: false, error: '用户取消操作' };
+      const outDir = path.join(targetDirs[0], `Preset_Batch_Export_${Date.now()}`);
+      await fs.promises.mkdir(outDir, { recursive: true });
+      let count = 0;
+      for (const p of filePaths) {
+        if (!isPathAllowed(p) || !fs.existsSync(p)) continue;
+        await fs.promises.copyFile(p, path.join(outDir, path.basename(p)));
+        count++;
+      }
+      return { success: true, count, outDir };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==========================================
+  // 🧩 插件 (Plugin) 专属物理文件接口
+  // ==========================================
+
+  // 智能校验：是否为「酒馆助手 JSON 脚本」（content 为注入 JS 字符串 + 可选 buttons）
+  function isValidPluginJson(pData) {
+    if (!pData || typeof pData !== 'object') return false;
+    if (typeof pData.content !== 'string') return false;
+    // 排除角色卡 / 世界书 / 预设
+    if (pData.spec === 'chara_card_v2' || pData.spec === 'chara_card_v3') return false;
+    if (pData.entries) return false;
+    if (['prompts', 'prompt_order', 'temperature', 'max_tokens'].some(k => k in pData)) return false;
+    // 至少要有 name / id / buttons 之一，才算插件脚本
+    return !!(pData.name || pData.id || Array.isArray(pData.buttons));
+  }
+
+  // 校验扩展工程 manifest.json。兼容三种 SillyTavern 扩展格式：
+  //   ① 原生扩展：manifest_version 字段
+  //   ② 原生扩展：extensions[] 数组
+  //   ③ 独立扩展（st-yuzi-phone 等）：display_name + js/css 入口（js 或 css 至少其一）
+  function isValidExtensionManifest(mData) {
+    if (!mData || typeof mData !== 'object') return false;
+    if (mData.manifest_version !== undefined) return true;
+    if (Array.isArray(mData.extensions) && mData.extensions.length > 0) return true;
+    if (typeof mData.display_name === 'string' && mData.display_name.trim()) {
+      if (typeof mData.js === 'string' && mData.js.trim()) return true;
+      if (typeof mData.css === 'string' && mData.css.trim()) return true;
+    }
+    return false;
+  }
+
+  // 递归收集某扩展工程根目录下的文件树（js/css/json/html 等文本资源；跳过黑名单目录）
+  function collectExtensionFiles(rootDir) {
+    const files = [];
+    const walk = (dir) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (skipFolders.includes(entry.name.toLowerCase())) continue;
+          walk(full);
+        } else if (entry.isFile()) {
+          files.push(full);
+        }
+      }
+    };
+    walk(rootDir);
+    return files;
+  }
+
+  // 扫描插件目录：识别三类形态 —— 酒馆助手 JSON 脚本 / 散落 JS 脚本 / 扩展工程（含 manifest.json 的目录）
+  ipcMain.handle('plugin:scan', async (event, dirPath) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) {
+        return { success: false, error: '目录不存在: ' + dirPath };
+      }
+      if (!isPathAllowed(dirPath)) {
+        let hasFingerprint = false;
+        try {
+          const names = fs.readdirSync(dirPath).slice(0, 200);
+          for (const n of names) {
+            const full = path.join(dirPath, n);
+            try {
+              const st = fs.statSync(full);
+              if (st.isFile() && n.toLowerCase().endsWith('.json')) {
+                try { if (isValidPluginJson(JSON.parse(fs.readFileSync(full, 'utf-8')))) { hasFingerprint = true; break; } } catch (e) { /* 继续 */ }
+              }
+            } catch (e) { /* 继续 */ }
+          }
+        } catch (e) { /* 目录不可读按无指纹处理 */ }
+        if (!hasFingerprint) {
+          return { success: false, error: '该目录不含有效插件文件，或目录来源未经验证，已拒绝授权。请通过「打开插件目录」按钮重新选择。' };
+        }
+        addAllowedRoot(dirPath);
+      }
+
+      const results = [];
+      const visitedDirs = new Set();
+      const walk = async (dir, depth = 0) => {
+        let realDir;
+        try { realDir = fs.realpathSync(dir); } catch (e) { return; }
+        if (visitedDirs.has(realDir)) return;
+        visitedDirs.add(realDir);
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+        // ③ 扩展工程优先：含 manifest.json 的目录整目录作为一个插件，
+        //    直接收录后 return（不再递归内部子目录），否则 dist/index.js、
+        //    eslint.config.mjs、lib/*.js、tsconfig*.json 等工程文件会被误识别成
+        //    独立散落脚本，导致「一个扩展裂变成五六个插件条目」。
+        const hasManifest = entries.some(e => e.isFile() && e.name.toLowerCase() === 'manifest.json');
+        if (hasManifest) {
+          try {
+            const mPath = path.join(dir, 'manifest.json');
+            const mData = JSON.parse(await fs.promises.readFile(mPath, 'utf-8'));
+            if (isValidExtensionManifest(mData)) {
+              const files = collectExtensionFiles(dir).filter(f => {
+                const fext = path.extname(f).toLowerCase();
+                return ['.js', '.mjs', '.css', '.json', '.html', '.svg'].includes(fext);
+              });
+              results.push({ type: 'extension', root: dir, name: path.basename(dir), manifest: mData, files });
+              return; // 扩展工程整目录收录完毕，不再递归内部
+            }
+          } catch (e) { /* 跳过损坏 manifest，按普通目录继续扫描 */ }
+        }
+
+        const dirs = [];
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue;
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (skipFolders.includes(entry.name.toLowerCase())) continue;
+            dirs.push(fullPath);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          const ext = path.extname(entry.name).toLowerCase();
+
+          // ① 酒馆助手 JSON 脚本：目录下任意 .json，含 content JS 字符串
+          if (ext === '.json') {
+            try {
+              const st = await fs.promises.stat(fullPath);
+              if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return;
+              const pData = JSON.parse(await fs.promises.readFile(fullPath, 'utf-8'));
+              if (isValidPluginJson(pData)) {
+                results.push({ type: 'json', path: fullPath, name: path.basename(fullPath), data: pData });
+              }
+            } catch (e) { /* 静默跳过非插件 JSON */ }
+            continue;
+          }
+
+          // ② 散落 JS 脚本：顶层/次层 .js/.mjs（含 userscript / SlashRunner 命令）
+          if (ext === '.js' || ext === '.mjs') {
+            // 跳过扩展工程内部文件（其 manifest 已整体收录），仅散落脚本走单文件识别
+            if (depth <= 1) {
+              try {
+                const st = await fs.promises.stat(fullPath);
+                if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return;
+                const content = await fs.promises.readFile(fullPath, 'utf-8');
+                results.push({ type: 'script', path: fullPath, name: path.basename(fullPath), content });
+              } catch (e) { /* 跳过不可读文件 */ }
+            }
+            continue;
+          }
+        }
+        if (depth >= 4) return; // 深度剪枝：插件工程多在 1~3 层内
+        for (const d of dirs) await walk(d, depth + 1);
+      };
+      await walk(dirPath);
+      return { success: true, data: results };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 读取扩展工程某个文本资源内容（供工作区「代码」页展示源码；白名单校验 + 文本类型限制）
+  ipcMain.handle('plugin:readFile', async (event, filePath) => {
+    try {
+      if (!filePath || !isPathAllowed(filePath)) return forbidden();
+      const ext = path.extname(filePath).toLowerCase();
+      if (!['.js', '.mjs', '.css', '.json', '.html', '.svg'].includes(ext)) {
+        return { success: false, error: '仅支持读取文本类资源（js/mjs/css/json/html/svg）。' };
+      }
+      const st = await fs.promises.stat(filePath);
+      if (st.size > MAX_PLUGIN_SCRIPT_BYTES) return { success: false, error: '文件过大，已跳过读取。' };
+      const content = await fs.promises.readFile(filePath, 'utf-8');
+      return { success: true, data: content };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 🧩 插件「效果」页预览：渲染进程生成预览 HTML 后存主进程内存，返回 app:// 预览 URL
+  ipcMain.handle('plugin:setPreview', async (event, html) => {
+    try {
+      if (typeof html !== 'string' || html.length === 0) return { success: false, error: '预览内容为空' };
+      if (html.length > 5 * 1024 * 1024) return { success: false, error: '预览内容过大' };
+      const id = setPluginPreview(html);
+      return { success: true, url: 'app://index.html' + PREVIEW_PATH_PREFIX + id + '.html' };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -2924,6 +3664,50 @@ app.whenReady().then(() => {
     }
   });
 
+  // ================= 🧠 向量引擎 IPC（本地语义打标，Worker 线程承载 ONNX 推理） =================
+  const vectorManager = require('./main/vectorManager');
+
+  ipcMain.handle('vector:init', async (event, modelName) => {
+    try {
+      const result = await vectorManager.init(modelName || undefined, (progress) => {
+        event.sender.send('vector:downloadProgress', progress);
+      }, (source, attempt, total) => {
+        event.sender.send('vector:downloadSource', { source, attempt, total });
+      });
+      return { success: true, ...result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vector:status', async () => {
+    try {
+      return { success: true, ...(await vectorManager.getStatus()) };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vector:deleteCache', async () => {
+    try {
+      await vectorManager.deleteCache();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vector:batchMatch', async (event, { cards, labelPool, topK, threshold, modelName }) => {
+    try {
+      const result = await vectorManager.batchMatch(cards, labelPool, topK, threshold, modelName, (current, total) => {
+        event.sender.send('vector:batchProgress', { current, total });
+      });
+      return { success: true, results: result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // macOS：点击 Dock 图标且无窗口时重新创建窗口
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -2950,7 +3734,159 @@ app.on('window-all-closed', () => {
 const YIELD_EVERY = 25; // 每处理 25 张卡让出一次事件循环（UI 心跳粒度）
 const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
 
-async function walkLibraryDir(dirPath, relPath, files, categories, visitedDirs) {
+// 🚀 v1.8.6 性能优化：并发批量提取 PNG 内嵌卡片 JSON
+//    旧版在 walkLibraryDir 中逐张串行 open/read(1MB)/parse，1 万张卡 = 1 万次串行磁盘
+//    IO + JSON 解析，扫描耗时数分钟。现改为遍历完成后 64 路并发批量提取（批间让出
+//    事件循环，避免 EMFILE 句柄爆炸与主线程长阻塞），万卡库提速一个数量级。
+const EMBED_BATCH = 64;
+async function extractPngEmbedded(pngFiles) {
+  for (let i = 0; i < pngFiles.length; i += EMBED_BATCH) {
+    const batch = pngFiles.slice(i, i + EMBED_BATCH);
+    await Promise.all(batch.map(async (file) => {
+      if (!file.path || !file.size) { file.embeddedData = null; return; }
+      const headLen = Math.min(1024 * 1024, file.size);
+      // 🔐 文件句柄 try/finally 防泄漏（代码审查修复 4）
+      let fh = null;
+      try {
+        fh = await fsp.open(file.path, 'r');
+        const head = Buffer.alloc(headLen);
+        await fh.read(head, 0, headLen, 0);
+        file.embeddedData = readTavernPNGChunk(head) || null;
+      } catch (e) {
+        file.embeddedData = null; // 提取失败 → 前端自动回退完整 readBuffer，绝不漏卡
+      } finally {
+        if (fh) { try { await fh.close(); } catch (e) { /* 关闭失败忽略 */ } }
+      }
+    }));
+    if (i + EMBED_BATCH < pngFiles.length) await yieldToEventLoop();
+  }
+}
+
+// 🚀 v2.0 修复：自适应窗口读取 PNG 内嵌 card JSON（供批量 IPC files:readEmbeddedBatch 使用）
+//    旧 extractPngEmbedded 仅读 1MB 文件头，内嵌大世界书/正则脚本的卡 chunk 超 1MB 时会被
+//    截断 → embeddedData=null 回退整图 readBuffer（慢）甚至静默丢卡。
+//    现按 1MB 头 → 8MB 头 → 整文件 三级窗口重试：大卡不丢、小卡不慢。
+//    返回 null 时由前端回退完整 readBuffer 兜底，绝不漏卡。
+async function readPngEmbeddedFromFile(filePath, size) {
+  if (!filePath || !size) return null;
+  const WINDOWS = [1024 * 1024, 8 * 1024 * 1024]; // 1MB → 8MB
+  let fh = null;
+  try {
+    fh = await fsp.open(filePath, 'r');
+    for (const win of WINDOWS) {
+      if (size <= win) break; // 文件不超过该窗口 → 直接走整文件兜底
+      const head = Buffer.alloc(win);
+      await fh.read(head, 0, win, 0);
+      const data = readTavernPNGChunk(head);
+      if (data) return data;
+    }
+    // 整文件兜底：大卡内嵌数据超 8MB 时全量读取，保证不丢
+    const full = Buffer.alloc(size);
+    await fh.read(full, 0, size, 0);
+    return readTavernPNGChunk(full) || null;
+  } catch (e) {
+    return null; // 读取失败 → 前端自动回退完整 readBuffer，绝不漏卡
+  } finally {
+    if (fh) { try { await fh.close(); } catch (e) { /* 关闭失败忽略 */ } }
+  }
+}
+
+// 🚀 v2.2 性能优化：批量并发 stat（替代逐文件串行 await fsp.stat）。
+//    旧版 walkLibraryDir 对每个文件 await stat，1 万张 = 1 万次串行磁盘 IO，
+//    是万卡库扫描耗时的主要瓶颈；现入队后按 STAT_BATCH(128) 并发批量 stat。
+const STAT_BATCH = 128;
+// ================= [ 🚀 v2.3 PNG 内嵌提取缓存 ] =================
+// 万卡/真实大库（数万张 PNG）每次启动都重读全部 PNG 头部提取内嵌 card JSON，
+// 是首屏慢的主因之一。按 (path+mtime+size) 缓存已提取结果到 embed_cache_N.json：
+//   - 首次启动：逐 PNG 提取并写入缓存（内存 Map + 防抖分片落盘）
+//   - 后续启动：缓存命中直接复用，跳过 PNG 读取，首屏大幅提速
+// 安全：key 含 mtime+size，文件被修改/替换后 key 失效自动重新提取，绝不返回旧数据。
+// 防爆：LRU 上限 EMBED_CACHE_MAX 条 + 单条 > EMBED_CACHE_ITEM_MAX 不缓存 +
+//       分片保存（每片 EMBED_CACHE_CHUNK 条），杜绝 JSON.stringify 超限崩溃。
+const embedCache = new Map();
+let embedCacheLoaded = false;
+let embedCacheSaveTimer = null;
+const EMBED_CACHE_MAX = 12000;            // LRU 上限：覆盖万卡级库（2000 上限下万卡库命中率仅 20%，二次启动大量重读 PNG）
+const EMBED_CACHE_ITEM_MAX = 512 * 1024;  // 单条 > 512KB 的巨卡不缓存
+const EMBED_CACHE_CHUNK = 500;            // 分片保存：每片 500 条
+function getEmbedCacheBase() {
+  try { return path.join(app.getPath('userData'), 'embed_cache'); } catch (e) { return ''; }
+}
+function cacheSetEmbed(key, data) {
+  if (embedCache.has(key)) embedCache.delete(key);
+  embedCache.set(key, data);
+  while (embedCache.size > EMBED_CACHE_MAX) {
+    const oldest = embedCache.keys().next().value;
+    if (oldest === undefined) break;
+    embedCache.delete(oldest);
+  }
+}
+async function loadEmbedCache() {
+  if (embedCacheLoaded) return;
+  embedCacheLoaded = true;
+  const base = getEmbedCacheBase();
+  if (!base) return;
+  try {
+    const dir = path.dirname(base);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter(f => f.startsWith(path.basename(base) + '_') && f.endsWith('.json')); } catch (e) { /* 目录不存在 */ }
+    for (const f of files) {
+      try {
+        // 🚀 异步分片读：缓存文件随 EMBED_CACHE_MAX 提升而变大，同步 readFileSync 会阻塞主进程数秒
+        const raw = JSON.parse(await fs.promises.readFile(path.join(dir, f), 'utf-8'));
+        if (raw && raw.v === 1 && raw.items && typeof raw.items === 'object') {
+          for (const [k, v] of Object.entries(raw.items)) {
+            if (v && typeof v === 'object' && embedCache.size < EMBED_CACHE_MAX) embedCache.set(k, v);
+          }
+        }
+      } catch (e) { /* 单片损坏跳过 */ }
+      await yieldToEventLoop(); // 片间让出事件循环，防大缓存加载阻塞 UI
+    }
+    if (embedCache.size > 0) console.log(`[embed-cache] 已加载 ${embedCache.size} 条 PNG 内嵌缓存`);
+  } catch (e) { /* 缓存损坏/过大时忽略，重新构建 */ }
+}
+function scheduleEmbedCacheSave() {
+  if (embedCacheSaveTimer) return;
+  embedCacheSaveTimer = setTimeout(() => {
+    embedCacheSaveTimer = null;
+    const base = getEmbedCacheBase();
+    if (!base || embedCache.size === 0) return;
+    const dir = path.dirname(base);
+    // 清理旧分片
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith(path.basename(base) + '_') && f.endsWith('.json')) {
+          try { fs.unlinkSync(path.join(dir, f)); } catch (e) { /* 忽略 */ }
+        }
+      }
+    } catch (e) { /* 忽略 */ }
+    // 分片原子写：防单文件 JSON.stringify 超限（RangeError: Invalid string length）
+    const entries = [...embedCache.entries()];
+    for (let i = 0; i < entries.length; i += EMBED_CACHE_CHUNK) {
+      const items = {};
+      for (const [k, v] of entries.slice(i, i + EMBED_CACHE_CHUNK)) items[k] = v;
+      const file = `${base}_${i / EMBED_CACHE_CHUNK}.json`;
+      atomicWriteJson(file, { v: 1, items }).catch(() => { /* 保存失败不影响功能 */ });
+    }
+  }, 3000);
+}
+
+async function flushStatQueue(queue) {
+  if (!queue || queue.length === 0) return;
+  const batch = queue.splice(0, STAT_BATCH);
+  await Promise.all(batch.map(async (item) => {
+    try {
+      const st = await fsp.stat(item.absPath);
+      item.file.mtime = st.mtimeMs || 0;       // 文件修改时间
+      item.file.birthtime = st.birthtimeMs || 0; // 文件创建时间（Windows 支持；可 0，排序时自动回退）
+      item.file.size = st.size || 0;
+      // PNG 空文件（size===0）无内嵌数据，撤销 _needsEmbed 标记
+      if (item.file._needsEmbed && !(item.file.size > 0)) item.file._needsEmbed = false;
+    } catch (e) { /* 文件被占用/删除时忽略 */ }
+  }));
+}
+
+async function walkLibraryDir(dirPath, relPath, files, categories, visitedDirs, statQueue) {
   // 🛡️ v1.8.5：realpath + visited 集合防符号链接/junction 环路（同 wb:scan walk；
   //    指回祖先的链接会让异步递归无限循环、files 数组无限膨胀直至内存耗尽）
   let realDir;
@@ -2971,50 +3907,33 @@ async function walkLibraryDir(dirPath, relPath, files, categories, visitedDirs) 
       if (skipFolders.includes(lowerName)) continue; // node_modules 等海量垃圾目录黑名单
       if (!relPath) categories.add(f.name); // 一级文件夹名 = 物理分组
       const subRel = relPath ? path.join(relPath, f.name) : f.name;
-      await walkLibraryDir(absPath, subRel, files, categories, visitedDirs);
+      await walkLibraryDir(absPath, subRel, files, categories, visitedDirs, statQueue);
     } else if (f.isFile()) {
       const ext = path.extname(f.name).toLowerCase();
       if (ext !== '.png' && ext !== '.webp' && ext !== '.json') continue;
       const isImage = ext === '.png' || ext === '.webp';
-      let mtime = 0;
-      let birthtime = 0;
-      let size = 0;
-      try {
-        const st = await fsp.stat(absPath);
-        mtime = st.mtimeMs || 0;       // 文件修改时间
-        birthtime = st.birthtimeMs || 0; // 文件创建时间（Windows 支持；可 0，排序时自动回退）
-        size = st.size || 0;
-      } catch (e) { /* 文件被占用/删除时忽略 */ }
-      // 🚀 性能优化：扫描时主进程本地提取 PNG 内嵌卡片 JSON（只读文件头 1MB，
-      // chara/ccv3 块位于 IHDR 之后、IDAT 之前），随 files 一起返回，
-      // 前端直接复用，彻底省掉"整张 PNG 跨 IPC 读回渲染端"的最大瓶颈。
-      // 提取失败（异常 iTXt/截断）→ embeddedData=null，前端自动回退完整 readBuffer，绝不漏卡
-      let embeddedData = null;
-      if (ext === '.png' && size > 0) {
-        const headLen = Math.min(1024 * 1024, size);
-        // 🔐 文件句柄 try/finally 防泄漏（代码审查修复 4）
-        let fh = null;
-        try {
-          fh = await fsp.open(absPath, 'r');
-          const head = Buffer.alloc(headLen);
-          await fh.read(head, 0, headLen, 0);
-          embeddedData = readTavernPNGChunk(head) || null;
-        } catch (e) {
-          embeddedData = null;
-        } finally {
-          if (fh) { try { await fh.close(); } catch (e) { /* 关闭失败忽略 */ } }
-        }
-      }
-      files.push({
+      // 🚀 v1.8.6 性能优化：PNG 内嵌 JSON 提取改为「延迟并发批量」——
+      //    旧版在此逐张串行 open/read(1MB)/parse，1 万张卡 = 1 万次串行磁盘 IO，
+      //    扫描耗时数分钟。现仅标记 _needsEmbed，由 scanAndSaveFolder 在遍历完成后
+      //    用 64 路并发批量提取（extractPngEmbedded），万卡库提速一个数量级。
+      // 🚀 v2.2 性能优化：文件元数据 stat 由「逐文件串行」改为「批量并发」——
+      //    旧版在此对每文件 await fsp.stat，1 万张 = 1 万次串行磁盘 IO（扫描耗时占比最大）；
+      //    现仅入队，由 flushStatQueue 按 128 路并发批量 stat。
+      const file = {
         name: f.name,
         path: absPath,
         url: isImage ? 'local-file://img/?path=' + encodeURIComponent(absPath) : null,
-        mtime,
-        birthtime,
+        mtime: 0,
+        birthtime: 0,
+        size: 0,
         subFolder: relPath || '', // 相对库根的文件夹路径（'' = 根目录）
         category: relPath ? relPath.split(path.sep)[0] : '未分类', // 一级文件夹名 = 物理分组
-        embeddedData // 🚀 内嵌 card JSON（无则 null），前端解析优先复用
-      });
+        embeddedData: null, // 由 scanAndSaveFolder 并发提取后回填
+        _needsEmbed: ext === '.png' // 标记待并发提取内嵌 JSON（stat 后 size===0 时撤销）
+      };
+      files.push(file);
+      statQueue.push({ absPath, file });
+      if (statQueue.length >= STAT_BATCH) await flushStatQueue(statQueue);
       // 🫀 让出事件循环：保证扫描期间主进程仍能处理窗口绘制/IPC，杜绝「未响应」
       if (files.length % YIELD_EVERY === 0) await yieldToEventLoop();
     }
@@ -3035,9 +3954,31 @@ async function scanAndSaveFolder(folderPath) {
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
     // 📁 递归扫描库目录：子文件夹名自动识别为物理分组（🚀 异步分片，不再阻塞事件循环）
+    const scanStart = Date.now();
     const files = [];
     const categories = new Set();
-    await walkLibraryDir(folderPath, '', files, categories, new Set());
+    const statQueue = []; // 🚀 v2.2：文件元数据批量并发 stat 队列
+    await walkLibraryDir(folderPath, '', files, categories, new Set(), statQueue);
+    while (statQueue.length > 0) await flushStatQueue(statQueue); // flush 剩余 stat
+
+    // 🦾 v1.9.x 文件级稳定排序：扫描结果按「文件名 → 相对子路径」自然排序（中文拼音+数字），
+    //    默认加载顺序 = 文件系统顺序（与资源管理器一致），彻底杜绝 readdir 顺序不稳定
+    //    导致的列表乱序/排序"飘"（readdir 在 Windows 上不保证稳定顺序）。
+    try {
+        const fileCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'variant' });
+        files.sort((a, b) =>
+            fileCollator.compare(a.name, b.name)
+            || fileCollator.compare(a.subFolder || '', b.subFolder || '')
+            || fileCollator.compare(a.path, b.path));
+    } catch (e) { /* 排序失败不影响功能 */ }
+
+    // 🚀 v2.0 修复：扫描阶段不再回填 embeddedData（旧 extractPngEmbedded 会把万张卡完整
+    //    内嵌 JSON 塞进 files 数组，经 config:load/library:rescan/dialog:openFolder 一次性
+    //    跨 IPC 返回 → 数百 MB~GB 级单条消息 → 序列化卡顿 + 渲染进程 OOM/白屏。
+    //    现 files 只保留轻量元数据，正文改由前端经 files:readTextBatch/files:readEmbeddedBatch
+    //    分批拉取（保留 _needsEmbed 标记供前端识别 PNG 卡类型）。
+    const pngFiles = files.filter(f => f._needsEmbed);
+    console.log(`[scan] 扫描完成: ${files.length} 个文件 (${pngFiles.length} 张 PNG), 耗时 ${Date.now() - scanStart}ms`);
 
     // 🧹 修复「卡片导入/扫描出现空分组」：空文件夹不再产生"幽灵分组"。
     // 物理分组只保留确实包含卡片文件的文件夹；误建/残留的空文件夹（如 123/、555/）不再显示为分组。

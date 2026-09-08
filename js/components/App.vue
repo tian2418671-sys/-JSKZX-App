@@ -26,6 +26,9 @@
 
             <!-- 【右侧】编辑器面板（子组件 EditorPanel） -->
             <editor-panel />
+
+            <!-- 【右侧】插件工作区（子组件 PluginWorkspace，appMode === 'plugins' 时显示） -->
+            <plugin-workspace />
         </div>
 
         <!-- ================= [ 弹窗：单卡添加标签（子组件 SingleTagModal） ] ================= -->
@@ -46,6 +49,18 @@
             @update:model-value="promptInput = $event"
             @confirm="confirmPrompt"
             @cancel="cancelPrompt"
+        />
+
+        <!-- ================= [ 弹窗：通用选项选择（子组件 OptionSelectModal，替代手输名称） ] ================= -->
+        <option-select-modal
+            :show="selectModalVisible"
+            :title="selectModalTitle"
+            :options="selectModalOptions"
+            :default-value="selectModalDefault"
+            :allow-create="selectModalAllowCreate"
+            @select="confirmSelect"
+            @create="confirmSelectCreate"
+            @cancel="cancelSelect"
         />
 
         <!-- ================= [ 弹窗：批量标签（子组件 BatchTagModal） ] ================= -->
@@ -87,6 +102,13 @@
             :fetch-model-status="fetchModelStatus"
             :is-a-i-tagging="isAITagging"
             :ai-tagging-progress="aiTaggingProgress"
+            :use-local-vector="useLocalVector"
+            :vector-threshold="vectorThreshold"
+            :vector-top-k="vectorTopK"
+            :vector-status="vectorStatus"
+            :vector-downloading="vectorDownloading"
+            :vector-download-progress="vectorDownloadProgress"
+            :vector-download-source="vectorDownloadSource"
             @close="showAITagModal = false"
             @remove-ai-candidate-tag="removeAICandidateTag"
             @update:newAICandidateTag="newAICandidateTag = $event"
@@ -106,6 +128,24 @@
             @update:apiModel="apiModel = $event"
             @start-tagging="startAITagging"
             @remove-system-common-tag="removeTagFromGlobalPool"
+            @update:useLocalVector="useLocalVector = $event"
+            @update:vectorThreshold="vectorThreshold = $event"
+            @update:vectorTopK="vectorTopK = $event"
+            @init-vector-engine="initVectorEngine"
+            @delete-vector-cache="deleteVectorCache"
+            @open-auto-tag-rules="showAutoTagRulesModal = true"
+        />
+
+        <!-- ================= [ 📝 自动打标规则表编辑弹窗（v2.1 可配置） ] ================= -->
+        <auto-tag-rules-modal
+            :show="showAutoTagRulesModal"
+            :rules="autoTagRules"
+            :custom-keywords="customKeywords"
+            @close="showAutoTagRulesModal = false"
+            @save="saveAutoTagRules"
+            @reset="resetAutoTagRules"
+            @add-keyword="addCustomKeyword"
+            @remove-keyword="removeCustomKeyword"
         />
 
         <!-- ================= [ 弹窗：关系图谱（子组件 GraphModal） ] ================= -->
@@ -128,7 +168,9 @@
         />
 
         <!-- ================= [ 弹窗：全局资产中心（子组件 GlobalAssetModal） ] ================= -->
+        <!-- v-if 惰性挂载：避免加载/入库期间每次都触发 globalAllWorldbooks/globalAllRegexScripts 两处全库遍历 -->
         <global-asset-modal
+            v-if="showGlobalAssetModal"
             :show="showGlobalAssetModal"
             :asset-tab="globalAssetTab"
             :all-worldbooks="globalAllWorldbooks"
@@ -265,6 +307,24 @@
             @close="showWbDedupeModal = false"
             @open-diff="openDiffDetailModal"
             @resolve-group="resolveWbDedupeGroup"
+        />
+
+        <!-- ================= [ ⚙️ 预设智能查重弹窗（子组件 PresetDedupeModal） ] ================= -->
+        <preset-dedupe-modal
+            :show="showPresetDedupeModal"
+            :groups="presetDuplicateGroups"
+            @close="showPresetDedupeModal = false"
+            @open-diff="openDiffDetailModal"
+            @resolve-group="resolvePresetDedupeGroup"
+        />
+
+        <!-- ================= [ 🧬 内容级跨名称版本查重弹窗（子组件 ContentDedupeModal） ] ================= -->
+        <content-dedupe-modal
+            :show="showContentDedupeModal"
+            :groups="contentDuplicateGroups"
+            @close="showContentDedupeModal = false"
+            @open-diff="openDiffDetailModal"
+            @resolve-group="resolveContentDedupeGroup"
         />
 
         <!-- ================= [ ⚖️ 数据版本差异深度比对 (Diff Inspector)（子组件 DiffModal） ] ================= -->
@@ -412,6 +472,7 @@ import AppLoadingOverlay from './AppLoadingOverlay.vue'; // 启动过渡蒙版
 import ToastContainer from './ToastContainer.vue'; // 全局 Toast 消息容器
 import BatchTagModal from './BatchTagModal.vue'; // 批量设置标签弹窗
 import PromptModal from './PromptModal.vue'; // 通用输入弹窗（替代 prompt）
+import OptionSelectModal from './OptionSelectModal.vue'; // 通用选项选择弹窗（替代手输名称，右键换组等）
 import SingleTagModal from './SingleTagModal.vue'; // 单卡添加标签弹窗
 import DiskScanModal from './DiskScanModal.vue'; // 磁盘扫描进度弹窗
 import UpdateModal from './UpdateModal.vue'; // 版本更新检测弹窗
@@ -423,6 +484,8 @@ import GraphModal from './GraphModal.vue'; // 角色宇宙关系图谱弹窗
 import WbGraphModal from './WbGraphModal.vue'; // 世界书词条逻辑关联图谱弹窗
 import DedupeModal from './DedupeModal.vue'; // 智能版本查重中心弹窗
 import WbDedupeModal from './WbDedupeModal.vue'; // 世界书智能版本对比查重弹窗
+import PresetDedupeModal from './PresetDedupeModal.vue'; // 预设智能查重弹窗
+import ContentDedupeModal from './ContentDedupeModal.vue'; // 🧬 内容级跨名称版本查重弹窗
 import DiffModal from './DiffModal.vue'; // 数据版本差异深度比对弹窗
 import WbMergeModal from './WbMergeModal.vue'; // 多本世界书智能合并弹窗
 import WbImportModal from './WbImportModal.vue'; // 条目级导入合并弹窗
@@ -431,12 +494,14 @@ import WbSnapshotModal from './WbSnapshotModal.vue'; // 🕒 世界书快照历�
 import ContextMenu from './ContextMenu.vue'; // 角色卡右键快捷菜单
 import WbContextMenu from './WbContextMenu.vue'; // 世界书右键快捷菜单
 import AiTagModal from './AITagModal.vue'; // AI 智能批量打标弹窗（⚠️ 注册名须用 AiTagModal，kebab 标签 ai-tag-modal 解析为 AiTagModal 而非 AITagModal）
+import AutoTagRulesModal from './AutoTagRulesModal.vue'; // 📝 自动打标规则表编辑弹窗（v2.1 可配置）
 import HeaderBar from './HeaderBar.vue'; // 顶部菜单栏 + 紧凑工具栏
 import SidebarPanel from './SidebarPanel.vue'; // 左侧资源管理器（角色卡/世界书库）+ 拖拽把手
 import EditorPanel from './EditorPanel.vue'; // 右侧编辑器面板（角色卡编辑 + 世界书 IDE + 日志控制台）
+import PluginWorkspace from './PluginWorkspace.vue'; // 🧩 插件工作区（代码/效果双卡 + 沙箱效果预览）
 import SnapshotModal from './SnapshotModal.vue'; // 📸 历史快照列表与一键恢复弹窗
 import PushModal from './PushModal.vue'; // 🚀 推送目标选择与执行对话框
-import { processFile, extractBookEntries } from '../utils/cardLoader.js';
+import { processFile, extractBookEntries, compileAutoTagRules, defaultAutoTagRules } from '../utils/cardLoader.js';
 // normalizeCardData / isCharacterCardData / autoTagRules（cardLoader）与 parsePNGChunk / deepScanForJSON（pngParser）
 // 已随导入入库域迁移至 useCardCrud 组合式函数，由其自行 import
 import { estimateTokens } from '../utils/tokenEstimate.js'; // Token 估算（与 TextModal 共享）
@@ -448,16 +513,21 @@ import { useStatusbarPreview } from '../composables/useStatusbarPreview.js'; // 
 import { useCardGroups } from '../composables/useCardGroups.js'; // 📁 角色卡分组/分类功能（拆分出的组合式函数）
 import { useDedupe } from '../composables/useDedupe.js'; // 🔍 查重与差异比对功能（拆分出的组合式函数）
 import { useWorldbooks } from '../composables/useWorldbooks.js'; // 🌍 世界书库与分组功能（拆分出的组合式函数）
+import { usePresets } from '../composables/usePresets.js'; // ⚙️ 酒馆预设管理功能
+import { usePlugins } from '../composables/usePlugins.js'; // 🧩 酒馆插件管理功能
 import { useWorldbookEntries } from '../composables/useWorldbookEntries.js'; // 📚 世界书词条深度编辑（Entry IDE）组合式函数
 import { useGlobalEntrySearch } from '../composables/useGlobalEntrySearch.js'; // 🔎 全库词条搜索与反向引用组合式函数
 import { useWorldbookExtras } from '../composables/useWorldbookExtras.js'; // 📤 世界书扩展：提取/JSONL导入/批量导出/快照/统计
 import { useAITools } from '../composables/useAITools.js'; // ✨ AI 打标/翻译/格式升维功能（拆分出的组合式函数）
 import { useTags } from '../composables/useTags.js'; // 🏷️ 标签系统（批量标签/预设标签/系统标签池/中英切换/全局标签库）组合式函数
 import { useChat } from '../composables/useChat.js'; // 💬 聊天测卡（聊天历史/发送/API 设置/模型拉取）组合式函数
-import { useSearch } from '../composables/useSearch.js'; // 🔎 超级搜索引擎（搜索防抖/全字段过滤/分页）组合式函数
+import { useSearch, extractCardSearchableText, extractCardTags } from '../composables/useSearch.js'; // 🔎 超级搜索引擎（搜索防抖/全字段过滤/分页）组合式函数
+import { TAG_CATEGORIES, classifyTagsByVector, setCustomTagState, setBuiltinCatCustom, getBuiltinCategories, normalizeTagName } from '../utils/tagCategories.js'; // 🏷️ 标签大分类：向量模型辅助归类 + 自定义大分类装载 + 内置分类定制
 import { useGraph } from '../composables/useGraph.js'; // 🕸️ 关系图谱（角色宇宙关系图谱生成/渲染）组合式函数
 import { useDiskScan } from '../composables/useDiskScan.js'; // 💽 磁盘卡片扫描（全盘扫描/收编/刷新目录）组合式函数
 import { useBatch } from '../composables/useBatch.js'; // ✅ 批量操作（多选/批量导出/批量删除/批量打标）组合式函数
+import searchIndex from '../utils/searchIndex.js'; // 🚀 高性能搜索索引引擎
+import tokenCache from '../utils/tokenCache.js'; // 🚀 Token 估算缓存
 
 /** 用户可读的错误提示映射 */
 const ERROR_MESSAGES = {
@@ -481,7 +551,7 @@ document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
 export default {
-    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, HeaderBar, SidebarPanel, EditorPanel, SnapshotModal, PushModal },
+    components: { Section, DragOverlay, AppLoadingOverlay, ToastContainer, BatchTagModal, PromptModal, OptionSelectModal, SingleTagModal, DiskScanModal, UpdateModal, TextModal, ImageModal, ApiSettingsModal, GlobalAssetModal, GraphModal, WbGraphModal, DedupeModal, WbDedupeModal, PresetDedupeModal, ContentDedupeModal, DiffModal, WbMergeModal, WbImportModal, GlobalEntrySearchModal, WbSnapshotModal, ContextMenu, WbContextMenu, AiTagModal, AutoTagRulesModal, HeaderBar, SidebarPanel, EditorPanel, PluginWorkspace, SnapshotModal, PushModal },
     setup() {
         // 主题状态（localStorage 在自定义协议下可能不可用，做防御性读取；默认暗夜极客）
         let savedTheme = 'dark';
@@ -508,6 +578,30 @@ export default {
                 const index = toasts.value.findIndex(t => t.id === id);
                 if (index !== -1) toasts.value.splice(index, 1);
             }, duration);
+        };
+
+        // 🦾 排序数据状态提示：切换日期类排序时，若当前库该排序键无法区分卡片
+        //    （全部缺失或全部相同，如库卡无 create_date / 大批同批导入文件时间一致），
+        //    明确提示原因——否则用户会误以为「排序没反应」（其实已按名称稳定排序兜底）。
+        const notifySortDataStatus = (mode) => {
+            try {
+                const cards = filteredLibrary.value || [];
+                if (cards.length < 2) return;
+                let keyFn = null;
+                let label = '';
+                let reason = '';
+                if (mode === 'mtime') { keyFn = (c) => Number(c._mtime) || 0; label = '修改时间'; reason = '当前卡片文件修改时间缺失或相同'; }
+                else if (mode === 'ctime') { keyFn = (c) => Number(c._ctime) || 0; label = '创建时间'; reason = '当前卡片文件创建时间缺失或相同（多为同一批导入）'; }
+                else if (mode === 'importTime') { keyFn = (c) => Number(c._importTime) || Number(c._ctime) || 0; label = '导入最新'; reason = '当前卡片导入时间缺失或相同'; }
+                else if (mode === 'sizeDesc' || mode === 'sizeAsc') { keyFn = (c) => Number(c._size) || 0; label = '大小'; reason = '当前卡片文件大小缺失或相同'; }
+                else if (mode === 'time') { keyFn = (c) => Math.max(Number(c._mtime) || 0, Number(c._ctime) || 0); label = '本地文件最新'; reason = '当前卡片文件时间缺失或相同'; }
+                else return; // name / nameDesc 总有差异，无需提示
+                const set = new Set();
+                cards.forEach(c => { try { set.add(keyFn(c)); } catch (e) { set.add(0); } });
+                if (set.size <= 1) {
+                    showToast(`「${label}」排序：${reason}，已按名称稳定排序`, 'info', 6000);
+                }
+            } catch (e) { /* 忽略 */ }
         };
 
         // 🔧 每次批量操作创建独立进度 Toast 句柄（并发安全，不再共享单例）
@@ -931,16 +1025,37 @@ export default {
             e.target.value = ''; // 允许重复选择同一文件
             let added = 0;
             let skippedExisting = 0;
-            for (const f of files) {
+            // 🚀 性能优化：批量导入推入 staging 暂存数组（每张卡不再触发全库 computed 失效 + 搜索索引全量重建），
+            //    全部解析完成后一次性分批并入 library（每批 500），自动打标落盘转后台低并发执行。
+            const staging = [];
+            const seenPaths = new Set(); // 🚀 v2.0：批量导入 O(1) 去重
+
+            // 🚀 v2.0 修复：第一阶段一次性收集全部真实路径并单次 copyToLibrary ——
+            //    替代旧版循环内每文件一次 copyToLibrary（万张 = 万次 IPC + 万次同步拷贝阻塞主进程）。
+            const realPaths = files.map(f => (window.electronAPI ? window.electronAPI.getPathForFile(f) : null));
+            let copiedPaths = [];
+            if (window.electronAPI && currentFolderPath.value && realPaths.some(p => p)) {
+                const srcs = realPaths.filter(p => p);
+                try {
+                    copiedPaths = await window.electronAPI.copyToLibrary(srcs, currentFolderPath.value);
+                } catch (copyErr) {
+                    console.warn('批量复制到库目录失败', copyErr);
+                    copiedPaths = [];
+                }
+            }
+            // basename → dest 映射（按文件名回填最终库内路径）
+            const copiedByBase = new Map();
+            for (const p of copiedPaths) copiedByBase.set(String(p).split(/[\\/]/).pop(), p);
+
+            for (let idx = 0; idx < files.length; idx++) {
+                const f = files[idx];
                 try {
                     // Electron 33 起 File.path 已移除，经 preload 获取真实绝对路径
-                    const realPath = window.electronAPI ? window.electronAPI.getPathForFile(f) : null;
+                    const realPath = realPaths[idx];
                     const isImage = /\.(png|webp|jpe?g)$/i.test(f.name);
                     const isJson = /\.json$/i.test(f.name);
 
-                    // 🛡️ 破碎图标修复：文件菜单导入的卡片若用 blob URL 做图片地址，
-                    // 应用重启/刷新后 blob URL 立即失效 → 缩略图全变破碎图标。
-                    // 正确做法：先把文件物理复制到当前库目录（与拖拽导入一致），
+                    // 🛡️ 破碎图标修复：先把文件物理复制到当前库目录（与拖拽导入一致），
                     // 再用 local-file:// 永久路径做图片地址 → 重启后图片依然正常显示。
                     let finalPath = realPath || f.name;
                     let finalUrl = null;
@@ -948,21 +1063,14 @@ export default {
                     let rawText = null;
 
                     if (window.electronAPI && realPath && currentFolderPath.value) {
-                        // Electron 环境 + 已设置库目录：复制文件到库，用永久路径
-                        try {
-                            const copied = await window.electronAPI.copyToLibrary([realPath], currentFolderPath.value);
-                            if (copied && copied.length > 0) {
-                                finalPath = copied[0];
-                                finalUrl = isImage ? 'local-file://img/?path=' + encodeURIComponent(copied[0]) : null;
-                            } else {
-                                // 🔧 库内已有同名：跳过本文件并计数，继续处理后续文件
-                                // （切勿 return——那会中止整个批量导入并吞掉汇总提示）
-                                skippedExisting++;
-                                continue;
-                            }
-                        } catch (copyErr) {
-                            console.warn(`复制到库目录失败，跳过该文件: ${f.name}`, copyErr);
-                            continue; // IPC 异常同样只跳过本文件
+                        const dest = copiedByBase.get(f.name);
+                        if (dest) {
+                            finalPath = dest;
+                            finalUrl = isImage ? 'local-file://img/?path=' + encodeURIComponent(dest) : null;
+                        } else {
+                            // 🔧 库内已有同名（或格式不支持被跳过）：计数并继续处理后续文件
+                            skippedExisting++;
+                            continue;
                         }
                     }
 
@@ -1006,7 +1114,7 @@ export default {
                         file.url = URL.createObjectURL(f);
                     }
 
-                    if (await parseAndAddCard(file)) added++;
+                    if (await parseAndAddCard(file, { target: staging, deferAutoTagSave: true, seenPaths })) added++;
                     else if (file._skippedExisting) skippedExisting++;
                     else {
                         // 🔧 解析失败时回收兜底 blob URL（此时无人接管该 URL，
@@ -1017,6 +1125,15 @@ export default {
                 } catch (err) {
                     console.warn(`导入失败 ${f.name}`, err);
                 }
+            }
+            // 🚀 一次性分批并入 library（shallowRef 下 push 不触发响应式，最后统一 triggerRef）
+            for (let i = 0; i < staging.length; i += 500) {
+                library.value.push(...staging.slice(i, i + 500));
+            }
+            triggerRef(library); // shallowRef：手动通知 Vue 列表已变更
+            // 🚀 自动打标物理落盘转后台低并发执行（避免逐卡写盘 I/O 风暴卡死 UI）
+            if (staging.length > 0 && typeof flushDeferredAutoTagSaves === 'function') {
+                flushDeferredAutoTagSaves();
             }
             if (added > 0) {
                 let msg = `成功导入 ${added} 张角色卡！`;
@@ -1120,7 +1237,7 @@ export default {
         const cardData = shallowRef(null); // 【优化】使用浅层响应式，完美解决大卡片切换卡顿
         const imgUrl = ref(null);
         const currentTab = ref('basic');
-        const library = ref([]); // 存放扫描到的角色卡集合
+        const library = shallowRef([]); // 🚀 shallowRef：万卡库避免 Vue 深层 Proxy 化（数十万 Proxy → 内存爆炸/卡顿）
         // ================= 动态分类/分组与多语言系统 =================
         // 全量系统预设分组（中英文对照）
         const allDefaultCategories = [
@@ -1236,13 +1353,8 @@ export default {
                 type: 'openai'
             }
         });
-
-        // 🛡️ isRestoringConfig / syncConfigToDisk / syncConfigToDiskDebounced / saveUiSettingsToDisk
-        //    （统一持久化中枢：收集→加密→原子落盘 + 防抖 + 恢复期禁写 + beforeunload 冲刷）
-        //    已迁至 useConfigPersistence 组合式函数（见下文 setup 中部调用；isRestoringConfig 已 ref 化，赋值须 .value）
-
-        // 📸 历史快照配置 ref
-        // ⚠️ 必须在此顶层定义：snapshotConfig 被下方集中 watch 与 useSnapshots/useConfigPersistence 注入引用。
+        // 📥 卡片导入时间映射 { [path]: timestampMs }（「导入时间」排序持久化；首次入库时刻记录）
+        const cardImportTimes = ref({});
         const snapshotConfig = ref((() => {
             const defaults = { enabled: true, intervalMinutes: 5, maxSnapshots: 10 };
             try {
@@ -1824,6 +1936,9 @@ export default {
             if (_eKeysHandler) window.removeEventListener('keydown', _eKeysHandler);
         });
         onMounted(async () => {
+            // 🩺 启动耗时统计（排查启动缓慢：各阶段耗时一目了然）
+            const _t0 = performance.now();
+            const _stage = (name) => console.log(`[startup] ${name}: ${Math.round(performance.now() - _t0)}ms`);
             // =========================================================
             // 🛡️ 统一持久化中枢装载：从 app_config.json（最高权威）恢复全部全局状态
             // 覆盖 localStorage 初始化值——生产模式 app:// 的 localStorage 不持久，物理文件才是权威。
@@ -1843,6 +1958,17 @@ export default {
                                 const cleanTags = cfg.globalTags.filter(t => typeof t === 'string' && t.trim() !== '');
                                 systemCommonTags.value = Array.from(new Set(cleanTags));
                             }
+                            // 🏷️ 自动打标规则表（v2.1 可配置；合法元素才恢复，空数组 = 默认规则）
+                            if (Array.isArray(cfg.autoTagRules)) {
+                                const cleanRules = cfg.autoTagRules
+                                    .filter(r => r && typeof r.name === 'string' && r.name.trim() && typeof r.regex === 'string' && r.regex.trim())
+                                    .map(r => ({ name: r.name.trim(), regex: r.regex.trim() }));
+                                autoTagRules.value = cleanRules;
+                            }
+                            // ✏️ 自定义关键词库（用户添加的候选词，v2.1）
+                            if (Array.isArray(cfg.customKeywords)) {
+                                customKeywords.value = cfg.customKeywords.filter(w => typeof w === 'string' && w.trim() !== '');
+                            }
                             // 自定义分组（空数组也要覆盖，尊重「全部删除」结果）
                             if (Array.isArray(cfg.customCategories)) {
                                 const clean = cfg.customCategories.filter(c => typeof c === 'string' && c.trim() !== '');
@@ -1860,6 +1986,10 @@ export default {
                             // 卡片属性物理覆盖表（防重扫冲刷的核心数据）
                             if (cfg.cardOverlays && typeof cfg.cardOverlays === 'object') {
                                 appConfig.value.cardOverlays = cfg.cardOverlays;
+                            }
+                            // 📥 卡片导入时间映射（「导入时间」排序跨重启持久化）
+                            if (cfg.cardImportTimes && typeof cfg.cardImportTimes === 'object') {
+                                cardImportTimes.value = { ...cardImportTimes.value, ...cfg.cardImportTimes };
                             }
                             // API 配置（空串也要覆盖，尊重「清空」结果）
                             if (cfg.api && typeof cfg.api === 'object') {
@@ -1893,13 +2023,40 @@ export default {
                                 if (typeof cfg.ui.sidebarWidth === 'number') sidebarWidth.value = cfg.ui.sidebarWidth;
                                 if (cfg.ui.viewMode === 'list' || cfg.ui.viewMode === 'grid') viewMode.value = cfg.ui.viewMode;
                                 if (typeof cfg.ui.isCompactMode === 'boolean') isCompactMode.value = cfg.ui.isCompactMode;
-                                if (['name', 'time', 'tokens'].includes(cfg.ui.sortBy)) sortBy.value = cfg.ui.sortBy;
+                                if (['importTime', 'time', 'name', 'nameDesc', 'mtime', 'ctime', 'sizeDesc', 'sizeAsc', 'tokens'].includes(cfg.ui.sortBy)) sortBy.value = cfg.ui.sortBy;
                                 if (Array.isArray(cfg.ui.systemPromptPresets) && cfg.ui.systemPromptPresets.length) {
                                     systemPromptPresets.value = cfg.ui.systemPromptPresets;
                                 }
                                 if (typeof cfg.ui.lastWorldbookDirPath === 'string') lastWorldbookDirPath.value = cfg.ui.lastWorldbookDirPath;
+                                if (typeof cfg.ui.lastPresetDirPath === 'string') lastPresetDirPath.value = cfg.ui.lastPresetDirPath;
                                 if (cfg.ui.wbCategoryMap && typeof cfg.ui.wbCategoryMap === 'object') {
                                     wbCategoryMap.value = { ...wbCategoryMap.value, ...cfg.ui.wbCategoryMap };
+                                }
+                                // 🛠️ 自定义大分类（分类列表 + 手动标签归属）
+                                if (Array.isArray(cfg.ui.customTagCategories)) {
+                                    customTagCategories.value = cfg.ui.customTagCategories
+                                        .filter(c => c && c.key && c.name)
+                                        .map(c => ({ key: String(c.key), name: String(c.name), icon: String(c.icon || '🏷️') }));
+                                }
+                                if (cfg.ui.customTagAssignments && typeof cfg.ui.customTagAssignments === 'object') {
+                                    const clean = {};
+                                    for (const [k, v] of Object.entries(cfg.ui.customTagAssignments)) {
+                                        if (k && v) clean[String(k).toLowerCase().trim()] = String(v);
+                                    }
+                                    customTagAssignments.value = clean;
+                                }
+                                // 🧩 内置大分类定制（改名 / 隐藏）
+                                if (cfg.ui.builtinCatHidden && typeof cfg.ui.builtinCatHidden === 'object') {
+                                    const cleanH = {};
+                                    for (const k of Object.keys(cfg.ui.builtinCatHidden)) if (k) cleanH[k] = true;
+                                    builtinCatHidden.value = cleanH;
+                                }
+                                if (cfg.ui.builtinCatRenames && typeof cfg.ui.builtinCatRenames === 'object') {
+                                    const cleanR = {};
+                                    for (const [k, v] of Object.entries(cfg.ui.builtinCatRenames)) {
+                                        if (k && typeof v === 'string' && v.trim()) cleanR[k] = String(v).trim();
+                                    }
+                                    builtinCatRenames.value = cleanR;
                                 }
                             }
                         } finally {
@@ -2014,25 +2171,59 @@ export default {
             }
             try {
                 const lastData = await window.electronAPI.loadConfig();
+                _stage('主进程扫描(loadConfig)');
                 if (lastData && lastData.folderPath) {
+                    // 🚀 v2.3 多线程并发解析（Worker 分核）：全量解析完成后一次入库，
+                    //    首屏等待由 Worker 并行大幅压缩（放弃流式，避免加载期 UI 反复重算）
                     await processElectronFiles(lastData);
+                    _stage('渲染端解析卡片');
                 }
             } catch (err) {
                 console.warn('自动加载上次文件夹失败', err);
             }
 
-            // 🌍 自动记忆恢复上次的世界书目录（静默扫描，无需手动选择）
+            // 🌍⚡ 并行恢复世界书库 + 预设目录（互不依赖，原串行 await 改并行省一倍等待）
+            const _secondaryLoads = [];
             if (lastWorldbookDirPath.value) {
-                try {
-                    await scanWorldbookDir(lastWorldbookDirPath.value);
-                    addLog(`📂 自动记忆载入世界书库: ${lastWorldbookDirPath.value}`);
-                } catch (err) {
-                    console.warn('自动加载世界书目录失败', err);
-                }
+                _secondaryLoads.push((async () => {
+                    try {
+                        await scanWorldbookDir(lastWorldbookDirPath.value);
+                        _stage('世界书扫描');
+                        addLog(`📂 自动记忆载入世界书库: ${lastWorldbookDirPath.value}`);
+                    } catch (err) {
+                        console.warn('自动加载世界书目录失败', err);
+                    }
+                })());
+            }
+            if (lastPresetDirPath.value) {
+                _secondaryLoads.push((async () => {
+                    try {
+                        await scanPresetDir(lastPresetDirPath.value);
+                        _stage('预设扫描');
+                        addLog(`📂 自动记忆载入预设目录: ${lastPresetDirPath.value}`);
+                    } catch (err) {
+                        console.warn('自动加载预设目录失败', err);
+                    }
+                })());
+            }
+            if (lastPluginDirPath.value) {
+                _secondaryLoads.push((async () => {
+                    try {
+                        await scanPluginDir(lastPluginDirPath.value);
+                        _stage('插件扫描');
+                        addLog(`📂 自动记忆载入插件目录: ${lastPluginDirPath.value}`);
+                    } catch (err) {
+                        console.warn('自动加载插件目录失败', err);
+                    }
+                })());
+            }
+            if (_secondaryLoads.length > 0) {
+                await Promise.all(_secondaryLoads);
             }
 
             // 数据加载完毕，淡出启动加载蒙版
             isAppLoading.value = false;
+            _stage('蒙版淡出(总耗时)');
 
             // 🚀 后台静默检测更新（延迟 3 秒，不卡首屏；无新版本不打扰）
             setTimeout(() => { silentCheckForUpdates(); }, 3000);
@@ -2184,11 +2375,11 @@ export default {
             try { localStorage.setItem('jsTavernCompactMode', v ? '1' : '0'); } catch (e) { /* 忽略 */ }
         });
 
-        // ✅ [UI 方案1] 列表排序方式：'name' 名称 | 'time' 最新 | 'tokens' Token（localStorage 持久化）
+        // ✅ [UI 方案1] 列表排序方式：'importTime' 导入最新 | 'time' 本地文件最新 | 'name' A-Z正序 | 'nameDesc' A-Z倒序 | 'mtime' 修改时间 | 'ctime' 创建时间 | 'sizeDesc' 大小倒序 | 'sizeAsc' 大小正序 | 'tokens' Token（localStorage 持久化）
         const sortBy = ref((() => {
             try {
                 const s = localStorage.getItem('jsTavernSortBy');
-                return ['name', 'time', 'tokens'].includes(s) ? s : 'name';
+                return ['importTime', 'time', 'name', 'nameDesc', 'mtime', 'ctime', 'sizeDesc', 'sizeAsc', 'tokens'].includes(s) ? s : 'name';
             } catch (e) { return 'name'; }
         })());
         watch(sortBy, (v) => {
@@ -2382,6 +2573,112 @@ export default {
         //    app_config.json 权威加载形成竞态（两个不同文件互相覆盖），是「删除标签重启复发」的根源。
         //    旧文件 globalTags 的迁移已在 main.js sys:loadConfig 首次启动时一次性完成，无需再读取。
 
+        // ================= 🛠️ 自定义大分类（用户自定义标签分组 + 手动标签归属） =================
+        // 持久化于 app_config.json → ui.customTagCategories / ui.customTagAssignments（唯一权威）。
+        // 装载到 tagCategories.js 模块级 ref（groupTagsByCategory / getTagCategory 消费），
+        // 手动归属优先级高于所有自动分类（用户说了算）。
+        const customTagCategories = ref([]);   // [{key, name, icon}]
+        const customTagAssignments = ref({});  // { 小写标签: 分类key }（普通对象，便于 JSON 序列化）
+        watch([customTagCategories, customTagAssignments], () => {
+            setCustomTagState(customTagCategories.value, customTagAssignments.value);
+        }, { deep: true });
+
+        // ================= 🧩 内置大分类定制（改名 / 删除=隐藏） =================
+        // 持久化于 app_config.json → ui.builtinCatRenames / ui.builtinCatHidden。
+        // key 不变仅改显示名（保持归属稳定）；删除=隐藏（可从管理区恢复），其下自动/手动归属回落 other。
+        const builtinCatRenames = ref({});   // { 内置key: 新显示名 }
+        const builtinCatHidden = ref({});    // { 内置key: true }
+        watch([builtinCatRenames, builtinCatHidden], () => {
+            setBuiltinCatCustom(builtinCatRenames.value, builtinCatHidden.value);
+        }, { deep: true });
+
+        // ✏️ 内置分类改名（key 不变）：与其他内置显示名/自定义分类名查重
+        const renameBuiltinCategory = (key, name) => {
+            const trimmed = normalizeTagName(name);
+            const tagCat = TAG_CATEGORIES.find(c => c.key === key);
+            if (!tagCat || key === 'other') { nativeAlert('无效的内置分类', 'warning'); return false; }
+            if (!trimmed) { nativeAlert('分类名称不能为空', 'warning'); return false; }
+            const clash = getBuiltinCategories().some(c => c.key !== key && c.name === trimmed);
+            const customClash = (customTagCategories.value || []).some(c => normalizeTagName(c.name) === trimmed);
+            if (clash || customClash) { nativeAlert(`已存在同名分类「${trimmed}」`, 'warning'); return false; }
+            builtinCatRenames.value = { ...builtinCatRenames.value, [key]: trimmed };
+            syncConfigToDisk();
+            return true;
+        };
+        // 🗑️ 内置分类删除(=隐藏)：确认后解除其下手动归属（回 other），并隐藏分组（可恢复）
+        const hideBuiltinCategory = async (key) => {
+            const tagCat = TAG_CATEGORIES.find(c => c.key === key);
+            if (!tagCat || key === 'other') return false;
+            const n = Object.values(customTagAssignments.value || {}).filter(v => v === key).length;
+            const ok = await confirmDialog(
+                `确认删除(隐藏)内置分类「${builtinCategoryDisplayName(key)}」？\n\n` +
+                `· 该组将从标签云/下拉中隐藏（可在本管理区恢复）\n` +
+                (n > 0 ? `· 其下手动归类的 ${n} 个标签将回归「其他」\n` : '') +
+                `· 仍可能被关键词规则/向量再次归入，命中时显示在「其他」`
+            );
+            if (!ok) return false;
+            if (n > 0) {
+                const as = { ...customTagAssignments.value };
+                for (const [t, k] of Object.entries(as)) if (k === key) delete as[t];
+                customTagAssignments.value = as;
+            }
+            builtinCatHidden.value = { ...builtinCatHidden.value, [key]: true };
+            syncConfigToDisk();
+            return true;
+        };
+        // ♻️ 恢复被删除(隐藏)的内置分类
+        const restoreBuiltinCategory = (key) => {
+            const h = { ...builtinCatHidden.value };
+            if (!h[key]) return false;
+            delete h[key];
+            builtinCatHidden.value = h;
+            syncConfigToDisk();
+            return true;
+        };
+        // 🔎 内置分类当前显示名（含改名；无改名返回原名；TAG_CATEGORIES 为模块全量常量）
+        const builtinCategoryDisplayName = (key) => builtinCatRenames.value[key] || ((TAG_CATEGORIES.find(c => c.key === key) || {}).name) || key;
+
+
+        // ================= 🏷️ 自动打标规则表（v2.1 可扩展 + 用户可配置） =================
+        // 存 [{name, regex}] 数组到 app_config.json（权威）；空数组 = 使用默认规则表。
+        // 编译结果 compiledAutoTagRules 注入 useCardCrud（导入自动分类）与 useAITools（打标第一层）。
+        const autoTagRules = ref([]); // 用户配置的规则表（[{name, regex}]，字符串可序列化）
+        const showAutoTagRulesModal = ref(false); // 规则编辑弹窗显隐
+        const compiledAutoTagRules = computed(() => compileAutoTagRules(autoTagRules.value));
+
+        // 保存规则表（UI 编辑弹窗确认时调用；空数组 = 恢复默认规则）
+        // ⚠️ syncConfigToDisk 定义于 useConfigPersistence（setup 尾部），此处仅声明函数体（用户交互时才执行，闭包安全）
+        const saveAutoTagRules = (list) => {
+            const clean = Array.isArray(list)
+                ? list
+                    .map(r => ({ name: String(r && r.name || '').trim(), regex: String(r && r.regex || '').trim() }))
+                    .filter(r => r.name && r.regex)
+                : [];
+            autoTagRules.value = clean;
+            syncConfigToDisk(); // 立即落盘（不用 debounce，规则即时生效）
+        };
+        // 恢复默认规则表
+        const resetAutoTagRules = () => {
+            autoTagRules.value = [];
+            syncConfigToDisk();
+        };
+
+        // ✏️ 自定义关键词库（用户添加到候选池的词，持久化；供「自定义规则」选词）
+        const customKeywords = ref([]);
+        // 添加自定义关键词（去重 + 立即落盘）
+        const addCustomKeyword = (word) => {
+            const clean = String(word || '').trim();
+            if (clean && !customKeywords.value.includes(clean)) {
+                customKeywords.value.push(clean);
+                syncConfigToDisk();
+            }
+        };
+        // 删除自定义关键词
+        const removeCustomKeyword = (word) => {
+            customKeywords.value = customKeywords.value.filter(w => w !== word);
+            syncConfigToDisk();
+        };
+
         // ================= 标签中英文切换系统 =================
         // 标签语言模式: 'cn' (纯中文), 'en' (纯英文), 'both' (中英双语)
         // 【修复】localStorage 持久化，重启保持上次选择
@@ -2461,12 +2758,27 @@ export default {
         // 🗑️ deleteCard（删除当前打开卡片入回收站）已迁至 useCardCrud 组合式函数（见下文 setup 中部调用）
 
         // 更新名称绑定 (处理 V1 / V2 差异)
+        // 🛡️ 防抖刷新列表（万卡下同步 triggerRef(library) 会随每次击键重算 filteredLibrary
+        //    全量排序/过滤，输入卡顿；停止输入后 150ms 一次刷新，与 flushLibraryReactivity 同思路）
+        let _nameFlushTimer = null;
+        const flushLibraryAfterNameChange = () => {
+            if (_nameFlushTimer) clearTimeout(_nameFlushTimer);
+            _nameFlushTimer = setTimeout(() => {
+                _nameFlushTimer = null;
+                triggerRef(library);
+            }, 150);
+        };
+
         const updateName = (val) => {
             if (!cardData.value) return;
             if (cardData.value.data) cardData.value.data.name = val;
             else cardData.value.name = val;
             const libItem = library.value.find(item => item.data === cardData.value);
             if (libItem) libItem.name = val;
+            // 🛡️ shallowRef 修复：修改 cardData 内部对象不触发响应式（编辑器即时响应，与其他字段 refreshCardData 一致）
+            if (cardData.value) { triggerRef(cardData); cardTokensCache.delete(cardData.value); }
+            // 🛡️ 列表名刷新用防抖（避免每击键触发万卡 filteredLibrary 全量重算）
+            flushLibraryAfterNameChange();
         };
 
         // ================= 单卡标签管理 =================
@@ -2476,9 +2788,18 @@ export default {
         const tagModalTitle = ref('为当前角色添加新标签');
 
         // 获取当前正在编辑的卡片的标签
+        // 🔧 修复：合并 customTags + 原生 data.tags（与侧边栏列表 listTags 口径一致）。
+        //    部分卡（命中 localStorage 手动分类等分支）加载时 customTags 为空但 data.tags
+        //    有标签，此前编辑器只读 customTags → 标签区空白而列表正常显示。
         const activeCardTags = computed(() => {
             const libItem = library.value.find(item => item.data === cardData.value);
-            return libItem ? libItem.customTags : [];
+            if (!libItem) return [];
+            const d = (libItem.data && libItem.data.data) || libItem.data || {};
+            // 🧹 兼容「导入时忽略卡片自带标签」开关：开启时不再合并原生 data.tags
+            //   （否则卡片自带杂乱标签仍显示在编辑器标签区，用户看到开关形同虚设）
+            const native = sanitizeImportedTags.value ? [] : (Array.isArray(d.tags) ? d.tags : []);
+            const arr = [...(libItem.customTags || []), ...native];
+            return Array.from(new Set(arr.filter(t => t && String(t).trim() !== '')));
         });
 
         const addSingleTag = () => {
@@ -2517,7 +2838,7 @@ export default {
                     isModified = true;
                 }
 
-                // 3. 统一持久化中枢：写覆盖层 + 物理落盘（防止内存/PNG 单点失败丢数据）
+                // 3. 统一持久化中枢：写覆盖层 + 物理落盘
                 if (isModified) {
                     await persistCardUpdate(libItem, { tags: libItem.customTags, category: libItem.category });
                 }
@@ -2569,6 +2890,51 @@ export default {
             promptModalResolve = null;
         };
 
+        // ================= 通用选项选择弹窗（替代手输名称，如右键换组/批量移动分组） =================
+        const selectModalVisible = ref(false);
+        const selectModalTitle = ref('');
+        const selectModalOptions = ref([]);   // [{ label, value }]
+        const selectModalDefault = ref('');   // 标记"当前"选项
+        const selectModalAllowCreate = ref(false); // 是否允许新建
+        let selectModalResolve = null; // 保存 promise 回调
+
+        // 打开通用选项选择弹窗，返回 Promise<string|null>（选择返回所选 value；取消返回 null）
+        const appSelect = (title, options, { allowCreate = false, defaultValue = '' } = {}) => {
+            // 🔧 重入保护：上一个弹窗未关闭时先结清其 Promise（按取消处理）
+            if (selectModalResolve) {
+                selectModalResolve(null);
+                selectModalResolve = null;
+            }
+            selectModalTitle.value = title;
+            // 兼容纯字符串数组与 { label, value } 对象数组
+            selectModalOptions.value = (options || []).map(o => (typeof o === 'string' ? { label: o, value: o } : o));
+            selectModalDefault.value = defaultValue || '';
+            selectModalAllowCreate.value = !!allowCreate;
+            selectModalVisible.value = true;
+            return new Promise((resolve) => {
+                selectModalResolve = resolve;
+            });
+        };
+
+        const confirmSelect = (value) => {
+            if (selectModalResolve) selectModalResolve(value);
+            selectModalVisible.value = false;
+            selectModalResolve = null;
+        };
+
+        // 新建分组：同样按所选名称返回（调用方负责移动 + 加入自定义分组）
+        const confirmSelectCreate = (name) => {
+            if (selectModalResolve) selectModalResolve(name);
+            selectModalVisible.value = false;
+            selectModalResolve = null;
+        };
+
+        const cancelSelect = () => {
+            if (selectModalResolve) selectModalResolve(null);
+            selectModalVisible.value = false;
+            selectModalResolve = null;
+        };
+
         // 删除单卡某个标签（内存 customTags + 原生 data.tags 双清，并物理落盘）
         const removeSingleTag = async (tag) => {
             const libItem = library.value.find(item => item.data === cardData.value);
@@ -2613,6 +2979,11 @@ export default {
             try {
                 const res = await window.electronAPI.saveCard(libItem.path, getPlainCardData());
                 if (res.success) {
+                    // 🦾 回写新 mtime/size：保存会改变磁盘上的修改时间与文件体积，
+                    //    不回写则「修改时间/大小」排序继续用扫描时的旧值，
+                    //    用户改完卡切排序列表纹丝不动（观感=排序失效）
+                    if (res.mtime) libItem._mtime = res.mtime;
+                    if (res.size) libItem._size = res.size;
                     // 🛡️ 覆盖保存后同步覆盖层，防止重扫冲刷本次改动
                     const key = (libItem.path || libItem.name || '').toString();
                     if (!appConfig.value.cardOverlays[key]) appConfig.value.cardOverlays[key] = {};
@@ -2621,6 +2992,9 @@ export default {
                         appConfig.value.cardOverlays[key].tags = [...libItem.customTags];
                     }
                     syncConfigToDisk();
+                    // 🛡️ shallowRef 修复：修改 library 内部对象（mtime/size/内容）后手动刷新，
+                    //    让「修改时间/大小」排序与列表描述即时生效（仅回写不 flush 则排序不重算）
+                    triggerRef(library);
                     showToast('角色卡保存成功！', 'success');
                 }
                 else nativeAlert(`保存失败: ${res.error}`, 'error');
@@ -2631,7 +3005,7 @@ export default {
         const exportPackage = async () => {
             if (!cardData.value) return;
             const libItem = library.value.find(item => item.data === cardData.value);
-            if (!libItem) return nativeAlert("未找到原文件路径。");
+            if (!libItem) return nativeAlert("未找到原文件路径。", 'warning');
             
             try {
                 const res = await window.electronAPI.exportPackage(libItem.path, getPlainCardData());
@@ -2649,16 +3023,34 @@ export default {
         // 🌍 世界书管理器状态与逻辑（独立于角色卡库，主视图双引擎模式）
         // =========================================================
 
-        // 视图切换模式：'characters' (角色卡) | 'worldbooks' (世界书)
+        // 视图切换模式：'characters' (角色卡) | 'worldbooks' (世界书) | 'presets' (预设) | 'plugins' (插件)
         const appMode = ref('characters');
 
-        const worldbooks = ref([]);          // 世界书列表
+        const worldbooks = shallowRef([]);   // 🚀 shallowRef：世界书 entries 深层 Proxy 化导致崩溃
         const activeWorldbook = ref(null);   // 当前正在深度编辑的世界书
 
         // 记忆上次打开的世界书目录（localStorage 持久化，重启自动静默恢复）
         const lastWorldbookDirPath = ref((() => {
             try { return localStorage.getItem('jsTavern_lastWbDir') || ''; } catch (e) { return ''; }
         })());
+
+        // ⚙️ 预设管理状态
+        const presets = ref([]);             // 预设列表
+        const activePreset = ref(null);      // 当前正在编辑的预设
+        const lastPresetDirPath = ref((() => {
+            try { return localStorage.getItem('jsTavern_lastPresetDir') || ''; } catch (e) { return ''; }
+        })());
+
+        // 🧩 插件管理状态
+        const plugins = ref([]);             // 插件列表（统一归一化模型）
+        const activePlugin = ref(null);      // 当前正在查看的插件
+        const lastPluginDirPath = ref((() => {
+            try { return localStorage.getItem('jsTavern_lastPluginDir') || ''; } catch (e) { return ''; }
+        })());
+        // 🧩 插件工作区共享状态（供侧边栏树状子条目联动 → 代码页选中文件）
+        const pluginTab = ref('code');           // 插件工作区当前选项卡（code / effect）
+        const pluginSelectedFile = ref(null);    // 代码页当前选中文件 { abs, rel, icon }
+        const pluginSelectedSource = ref('');    // 代码页当前选中文件源码文本
 
         // =========================================================
         // 📟 全局终端控制台与日志状态（角色卡/世界书双模式共用）
@@ -2912,14 +3304,10 @@ export default {
             let count = 0;
             cardWbImportCandidates.value.forEach(c => {
                 if (!cardWbSelectedEntries.value.includes(c._srcUid)) return;
-                // 深拷贝并剔除 _ 前缀临时字段与 uid，防止污染卡片 JSON（与 wb:create 同一清洗口径）
-                const clean = JSON.parse(JSON.stringify(c, (k, v) => (k.startsWith('_') || k === 'uid') ? undefined : v));
-                // 字段转换：世界书库（key/keysecondary/order）→ 角色卡内嵌（keys/secondary_keys/insertion_order）
-                clean.keys = Array.isArray(c.key) ? [...c.key] : (c.key ? [c.key] : []);
-                clean.secondary_keys = Array.isArray(c.keysecondary) ? [...c.keysecondary] : (c.keysecondary ? [c.keysecondary] : []);
-                delete clean.key; delete clean.keysecondary;
-                clean.insertion_order = c.insertion_order ?? c.order ?? 50;
-                clean.uid = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                // 深拷贝并剔除 _ 前缀临时字段（_collapsed/_srcIndex/_srcUid），重新生成前端 uid
+                const clean = JSON.parse(JSON.stringify(c, (k, v) => k.startsWith('_') ? undefined : v));
+                clean.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                clean._collapsed = false;
                 targetEntries.push(clean);
                 count++;
             });
@@ -2928,7 +3316,7 @@ export default {
             refreshCardData();
             const srcName = (cardWbImportSource.value.data && cardWbImportSource.value.data.name) || cardWbImportSource.value.name;
             nativeAlert(`📥 已从《${srcName}》导入 ${count} 个词条到角色卡内嵌世界书。`, 'info');
-            addLog(`📥 从世界书库《${srcName}》导入 ${count} 个词条到角色卡内嵌世界书`, 'success');
+            addLog(`📥 从世界书库《${srcName}》导入 ${count} 个词条`, 'success');
         };
 
         // 搜索过滤后的角色卡世界书词条（触发词/次级词/备注/正文 全字段匹配）
@@ -3094,7 +3482,7 @@ export default {
         // 与此处建立集中 watch：所有相关 ref 已声明完毕（最后一个为 wbCategoryMap），
         // 回调里的 syncConfigToDisk 已内置 isRestoringConfig guard，恢复期触发的写盘会被自动拦截，无需 immediate。
         watch(
-            [theme, appSettings, sanitizeImportedTags, snapshotConfig, sidebarWidth, viewMode, isCompactMode, sortBy, systemPromptPresets, lastWorldbookDirPath, wbCategoryMap],
+            [theme, appSettings, sanitizeImportedTags, snapshotConfig, sidebarWidth, viewMode, isCompactMode, sortBy, systemPromptPresets, lastWorldbookDirPath, lastPresetDirPath, wbCategoryMap, cardImportTimes],
             // 🚀 v1.8.5 性能修复：改走 500ms 防抖落盘。旧版直接调 syncConfigToDisk（全量
             //    序列化 appSettings/cardOverlays/wbCategoryMap + 加密 IPC + 同步写盘），
             //    连续 UI 微调（拖侧栏宽度/切主题等）每次都全量写盘，千卡库 overlays 体积
@@ -3483,7 +3871,7 @@ export default {
                 entries.forEach(e => {
                     if (!e || typeof e !== 'object') return; // 脏数据条目防护
                     // 【加固】key/content 可能是数字/对象等非字符串，直接 .trim() 会崩溃
-                    const keysStr = String(Array.isArray(e.key) ? e.key.map(k => String(k)).join(',') : (e.key || '')).trim().toLowerCase();
+                    const keysStr = String(Array.isArray(e.key) ? e.key.map(k => String(k)).join(',') : (e.key || '').trim().toLowerCase());
                     const contentStr = String(e.content || '').trim().toLowerCase();
                     const signature = `${keysStr}:::${contentStr}`;
 
@@ -3573,7 +3961,7 @@ export default {
                 const clean = JSON.parse(JSON.stringify(c, (k, v) => k.startsWith('_') ? undefined : v));
                 clean.uid = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
                 clean._collapsed = false;
-                activeWorldbook.value.data.entries.push(clean);
+                targetEntries.push(clean);
                 count++;
             });
 
@@ -3695,13 +4083,22 @@ export default {
         } = useConfigPersistence({
             appConfig,
             tagLangMode, customCategories, removedDefaultKeys, systemCommonTags,
+            customTagCategories, customTagAssignments,
+            builtinCatRenames, builtinCatHidden,
+            autoTagRules, customKeywords,
             apiEndpoint, apiKey, apiModel, apiType,
             theme, appSettings, sanitizeImportedTags, snapshotConfig, localCategoryMap,
             sidebarWidth, viewMode, isCompactMode, sortBy,
-            systemPromptPresets, lastWorldbookDirPath, wbCategoryMap
+            systemPromptPresets, lastWorldbookDirPath, lastPresetDirPath, wbCategoryMap,
+            cardImportTimes
         });
 
-        // 🌍 角色卡内嵌世界书编辑：组合式函数注入（条目派生/uid/折叠展开/触发词工具）
+        // �️ 自动打标规则表自动持久化保险（v2.1）：任何修改（保存/恢复默认）都自动落盘，
+        //    不依赖按钮显式调用；syncConfigToDisk 内部已有 isRestoringConfig 闸门防启动期误写。
+        //    ⚠️ 必须放在 useConfigPersistence 之后（引用其返回的 syncConfigToDiskDebounced，闭包安全）。
+        watch(autoTagRules, () => { syncConfigToDiskDebounced(); }, { deep: true });
+
+        // �🌍 角色卡内嵌世界书编辑：组合式函数注入（条目派生/uid/折叠展开/触发词工具）
         // ⚠️ 调用时序：必须晚于 cardTokensCache 的定义（updateEntryKeys 运行时引用）；
         //    必须早于 useGraph（注入 worldbookExpanded）。引用方经解构同名 const，零改动。
         const {
@@ -3712,8 +4109,10 @@ export default {
 
         // 📊 渲染预览器（美化/状态栏）：组合式函数注入（渲染型脚本识别 + 正则模拟替换 + DOMPurify 安全预览
         //    + 外链 GUI 沙箱 iframe + 候选数据源扫描 + 内置模板注入）
-        // ⚠️ 调用时序：依赖正则域（regexScripts/ensureRegexScriptsArray/getRegexUid，定义于 setup 早期）与
-        //    refreshCardData/safeData，均早于此处；chatHistory 经 getter 箭头延迟绑定（useChat 调用时序晚于本函数）。
+        // ⚠️ 调用时序：依赖正则域（regexScripts/ensureRegexScriptsArray/getRegexUid，定义于 setup 早期）、
+        //    refreshCardData/safeData 与 worldbookEntries（useEmbeddedWorldbook 已在前方注入）及
+        //    ensureCharacterBookEntries（角色卡内嵌世界书域，定义于 setup 中部），均早于此处；
+        //    chatHistory 经 getter 箭头延迟绑定（useChat 调用时序晚于本函数）。
         const {
             statusbarInput, statusbarViewMode, resetStatusbarDemo,
             statusbarTemplateMeta, statusbarPromptMeta,
@@ -3721,15 +4120,19 @@ export default {
             showStatusDataPanel, statusDataCandidates, importStatusData, importAllStatusData,
             renderableScripts, toggleStatusbarScript, isScriptEnabled,
             appliedResult, previewHtml, loaderUrls, injectStatusbarTemplate, injectStatusbarPrompt
-        } = useStatusbarPreview({ regexScripts, ensureRegexScriptsArray, getRegexUid, refreshCardData, safeData, worldbookEntries, ensureCharacterBookEntries, getChatHistory: () => chatHistory.value, addLog, nativeAlert, confirmDialog });
+        } = useStatusbarPreview({
+            regexScripts, ensureRegexScriptsArray, getRegexUid, refreshCardData, safeData,
+            worldbookEntries, ensureCharacterBookEntries,
+            // 🔧 getChatHistory 须返回消息数组（chatHistory 为 ref，取值须 .value；延迟绑定避免 TDZ）
+            getChatHistory: () => chatHistory.value,
+            addLog, nativeAlert, confirmDialog
+        });
 
-        // 📸 历史快照功能：组合式函数注入（依赖 App.vue 共享状态；行为与原内联实现一致）
-        // ⚠️ snapshotConfig 由 App.vue 顶层定义并注入（syncConfigToDisk/集中 watch 需早期引用，防 TDZ）
+        // 📸 历史快照：组合式函数注入（快照配置由 App.vue 顶层持有）
         const {
-            saveSnapshotSettings, triggerManualSnapshot,
             showSnapshotModal, snapshotList, snapshotCardName, snapshotCardPath,
             openSnapshotModal, restoreSnapshot, openSnapshotFolder, closeSnapshotModal, deleteSnapshot,
-            cleanAllSnapshots, cleanOrphanSnapshots
+            cleanAllSnapshots, cleanOrphanSnapshots, saveSnapshotSettings, triggerManualSnapshot
         } = useSnapshots({ snapshotConfig, library, cardData, currentFolderPath, nativeAlert, confirmDialog, addLog, showToast, refreshCardData });
 
         // 🃏 卡片 CRUD：组合式函数注入（导入入库/删除回收/持久化保存/导出重命名，从 App.vue 拆分）
@@ -3741,7 +4144,7 @@ export default {
         //     箭头函数体运行时才求值（deleteCardItem 仅在用户交互时执行），无 TDZ。
         const {
             persistCardCategory, persistCardUpdate, deleteCardOverlays,
-            parseAndAddCard, processElectronFiles,
+            parseAndAddCard, processElectronFiles, flushDeferredAutoTagSaves,
             handleDrop, importCards, downloadCardFromUrl,
             deleteCardItem, deleteCard,
             exportCard, renameCard
@@ -3750,11 +4153,14 @@ export default {
             library, cardData, currentFolderPath, appConfig,
             customCategories, allCategories, isCategoryKnown,
             importedConfig, localCategoryMap, sanitizeImportedTags,
+            autoTagRules: compiledAutoTagRules,
             isDragging, dragCounter, importFileInput,
             // 横切服务
             nativeAlert, showToast, appPrompt, safeData,
             // 配置中枢
             syncConfigToDisk, syncConfigToDiskDebounced,
+            // 卡片导入时间映射（「导入时间」排序数据源）
+            cardImportTimes,
             // 跨域回调（UI 域 / 分组域）
             reset, openFromLibrary,
             cleanupEmptyCategories: (...args) => cleanupEmptyCategories(...args)
@@ -3771,15 +4177,56 @@ export default {
             searchQueryInput, searchQuery,
             filteredLibrary, totalPages, paginatedLibrary,
             changePage
-        } = useSearch({ library, currentCategoryKey, allCategories, sortBy, currentPage, itemsPerPage, lastSelectedIndex, estimateCardTokens });
+        } = useSearch({ library, currentCategoryKey, allCategories, sortBy, currentPage, itemsPerPage, lastSelectedIndex, estimateCardTokens, sanitizeImportedTags });
 
-        // 📁 角色卡分组/分类：组合式函数注入（状态仍在 App.vue，此处仅注入操作逻辑）
+        // 🚀 性能优化：搜索索引构建与 Token 缓存预热（异步分片，不阻塞 UI）
+        // 监听 library 变化，分片异步构建索引（每 50 张卡 yield 一次主线程）
+        let buildTaskId = 0;
+        let pendingRebuild = false;
+        const rebuildSearchIndex = (newLibrary) => {
+            if (!newLibrary || newLibrary.length === 0) {
+                searchIndex.clear();
+                tokenCache.clear();
+                return;
+            }
+            const taskId = ++buildTaskId;
+            const runTask = async () => {
+                try {
+                    // 异步分片构建索引（🚀 v2.2 提速：分片 50 → 100，万卡索引构建更快完成）
+                    // 🧹 标签索引同样尊重「导入时忽略卡片自带标签」开关：开启时原生 data.tags 不入索引
+                    const indexTagsFn = (item) => extractCardTags(item, { ignoreNative: sanitizeImportedTags.value });
+                    const stats = await searchIndex.buildAsync(newLibrary, extractCardSearchableText, indexTagsFn, 100);
+                    if (taskId !== buildTaskId) return; // 被新的 watch 触发取消
+                    console.log('⚡ 搜索索引构建完成:', stats);
+
+                    // 异步分片预热 Token 缓存（🚀 v2.2 提速：分片 50 → 100）
+                    await tokenCache.warmupAsync(newLibrary, 100);
+                    if (taskId !== buildTaskId) return;
+                    console.log('⚡ Token 缓存预热完成:', tokenCache.getStats());
+                } catch (e) {
+                    console.error('⚠️ 搜索索引构建失败:', e);
+                }
+            };
+            // 🛡️ 启动卡顿优化：索引/预热不抢「蒙版淡出 + 首屏卡片渲染」的主线程。
+            //    首次加载触发时，等 isAppLoading 置 false（蒙版已淡出、首帧绘出）再开跑；
+            //    轮询本身用 setTimeout(120ms) 让出主线程，不阻塞 UI。
+            //    ⏱️ 超时保险：最多等 5s（防加载蒙版异常永不消失导致索引永远不建）。
+            const waitAppReady = (waitedMs) => {
+                if (!isAppLoading.value || waitedMs >= 5000) { runTask(); return; }
+                setTimeout(() => waitAppReady(waitedMs + 120), 120);
+            };
+            setTimeout(() => waitAppReady(0), 40);
+        };
+        // 🛡️ 打标期间跳过搜索索引全量重建的 watch 已移动到 useAITools 解构之后
+        //    （原因：watch(isAITagging) 在 useAITools 解构前引用 isAITagging 会触发 TDZ：
+        //     Cannot access 'Ms' before initialization —— vite build 不报错，运行时崩溃）
+        // �📁 角色卡分组/分类：组合式函数注入（状态仍在 App.vue，此处仅注入操作逻辑）
         const {
             addNewCategory, currentCategoryDeletable, currentCategoryRenamable,
             deleteCustomCategory, renameCurrentCategory,
             currentCardCategory, handleCardCategoryChange, migrateOverlayKey, moveCardToGroup,
             quickMoveGroup, batchChangeCategory, batchChangeCategoryModal, cleanupEmptyCategories
-        } = useCardGroups({ library, cardData, currentFolderPath, appConfig, selectedIds, customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown, nativeAlert, confirmDialog, appPrompt, addLog, persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk });
+        } = useCardGroups({ library, cardData, currentFolderPath, appConfig, selectedIds, customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown, nativeAlert, confirmDialog, appPrompt, appSelect, getCategoryDisplayName, addLog, persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk });
 
         // ✅ 批量操作：组合式函数注入（共享状态 selectedIds/lastSelectedIndex 与工具 clearSelection/cleanupEmptyCategories/paginatedLibrary 等保留或来自其他组合式函数）
         const {
@@ -3821,6 +4268,8 @@ export default {
                 if (cardData.value && item.data === cardData.value) {
                     imgUrl.value = item.avatar;
                 }
+                // 🛡️ shallowRef 修复：修改 library 内部对象不触发响应式，手动刷新（列表头像/文件名）
+                triggerRef(library);
                 nativeAlert(res.message || '换卡图成功', 'info');
             } else {
                 nativeAlert(`换卡图失败: ${(res && res.error) || '未知错误'}`, 'error');
@@ -3831,8 +4280,11 @@ export default {
         const {
             showDedupeModal, duplicateGroups, startDedupeScan, resolveDedupeGroup,
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
+            showPresetDedupeModal, presetDuplicateGroups, startPresetDedupeScan, resolvePresetDedupeGroup,
+            showContentDedupeModal, contentDuplicateGroups, startContentDedupeScan, resolveContentDedupeGroup,
+            startSmartDedupe,
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal
-        } = useDedupe({ library, worldbooks, activeWorldbook, cardData, estimateCardTokens, nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories, deleteCardOverlays });
+        } = useDedupe({ library, worldbooks, activeWorldbook, cardData, presets, activePreset, appMode, estimateCardTokens, nativeAlert, confirmDialog, addLog, reset, cleanupEmptyCategories, deleteCardOverlays });
 
         // 🌍 世界书库与分组：组合式函数注入（共享状态 worldbooks/wbCategoryMap 等保留在 App.vue）
         const {
@@ -3867,6 +4319,32 @@ export default {
             wbStats
         } = useWorldbookExtras({ worldbooks, activeWorldbook, lastWorldbookDirPath, nativeAlert, addLog, confirmDialog });
 
+        // ⚙️ 预设管理：组合式函数注入
+        const {
+            presetSearchQuery, isImportingPreset, importPresetUrl,
+            loadPresets, scanPresetDir, filteredPresets,
+            saveActivePreset, renamePreset, deletePreset, duplicatePreset,
+            openPresetContextMenu, openPresetInFolder,
+            importPresetFromUrl, exportPresetsBatch,
+            listPresetSnapshots, restorePresetSnapshot, deletePresetSnapshot
+        } = usePresets({
+            presets, activePreset, lastPresetDirPath,
+            nativeAlert, confirmDialog, addLog, appPrompt,
+            contextMenu, closeContextMenu, appMode
+        });
+
+        // 🧩 插件管理：组合式函数注入
+        const {
+            pluginSearchQuery,
+            loadPlugins, scanPluginDir, filteredPlugins,
+            deletePlugin,
+            openPluginContextMenu, openPluginInFolder, readPluginSource
+        } = usePlugins({
+            plugins, activePlugin, lastPluginDirPath,
+            nativeAlert, confirmDialog, addLog, appPrompt,
+            contextMenu, closeContextMenu, appMode
+        });
+
         // ✨ AI 打标 / 翻译 / 格式升维：组合式函数注入（共享状态与 API 配置保留在 App.vue）
         const {
             showAITagModal, aiCandidateTags, aiCustomPrompt, aiTaggingProgress, isAITagging, openAITagModal, startAITagging,
@@ -3875,10 +4353,41 @@ export default {
             activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset,
             saveSystemPromptsToStorage, getCurrentSystemPromptContent, buildTaggingSystemPrompt,
             useJailbreak, jailbreakPrompt, jailbreakPresets,
-            isTranslating, translateCardContent, isRefactoring, refactorCardFormat
-        } = useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey, apiType, resolveApiModel, extractReplyContent, persistCardUpdate, refreshCardData, nativeAlert, confirmDialog, showToast, systemPromptPresets });
+            isTranslating, translateCardContent, isRefactoring, refactorCardFormat,
+            // 🧠 本地向量引擎（三层漏斗第二层）
+            useLocalVector, vectorThreshold, vectorTopK,
+            vectorStatus, vectorDownloading, vectorDownloadProgress, vectorDownloadSource, vectorBatchProgress,
+            initVectorEngine, deleteVectorCache
+        } = useAITools({ selectedIds, library, cardData, apiEndpoint, apiKey, apiType, resolveApiModel, extractReplyContent, persistCardUpdate, refreshCardData, nativeAlert, confirmDialog, showToast, systemPromptPresets, autoTagRules: compiledAutoTagRules, syncConfigToDisk });
 
-        // 💬 聊天测卡：组合式函数注入（共享状态 apiEndpoint/apiKey/apiModel/apiType 与工具 resolveApiModel/extractReplyContent 保留在 App.vue）
+        // �️ 打标期间跳过搜索索引全量重建（必须在 useAITools 解构 isAITagging 之后注册）：
+        //    打标每改一张卡都会 triggerRef(library)，若此时重建索引 + Token 预热
+        //    （几千张卡全量正则/分词），渲染进程 CPU/内存持续峰值 → native 崩溃
+        //    （render-process-gone exitCode -36861）。改为标记 pending，打标结束后补建一次。
+        //    ⚠️ 若移到 useAITools 解构之前，watch(isAITagging) 会触发 TDZ：
+        //    Cannot access 'Ms' before initialization（vite build 不报错，运行时崩溃）
+        watch(library, (newLibrary) => {
+            if (isAITagging.value) {
+                pendingRebuild = true;
+                buildTaskId++; // 取消在途重建任务
+                return;
+            }
+            pendingRebuild = false;
+            rebuildSearchIndex(newLibrary);
+        }, { deep: false }); // 只监听数组引用变化，不深监听卡片属性
+        // 🛡️ 打标结束（isAITagging false）补建一次索引；延迟 250ms 防与末尾 triggerRef 重复
+        watch(isAITagging, (tagging) => {
+            if (!tagging && pendingRebuild) {
+                setTimeout(() => {
+                    if (pendingRebuild) {
+                        pendingRebuild = false;
+                        rebuildSearchIndex(library.value);
+                    }
+                }, 250);
+            }
+        });
+
+        // �💬 聊天测卡：组合式函数注入（共享状态 apiEndpoint/apiKey/apiModel/apiType 与工具 resolveApiModel/extractReplyContent 保留在 App.vue）
         const {
             chatHistory, chatInput, isChatting, chatContainer,
             saveApiConfig, handleApiTypeChange,
@@ -3910,9 +4419,22 @@ export default {
             toggleTagLangMode, getPresetTagText, displayTagText,
             togglePresetTag, executeBatchTagSave,
             globalAvailableTags, newGlobalTagInput, addTagToGlobalPool,
-            removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags,
-            appendTagToSearch, isEditingSystemTags, addGlobalTag
-        } = useTags({ systemCommonTags, tagLangMode, library, sanitizeImportedTags, confirmDialog, nativeAlert, persistCardUpdate, cardData, searchQueryInput, selectedIds, clearSelection, syncConfigToDisk, createProgressToast });
+            removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags, cleanForeignTagsFromLibrary,
+            appendTagToSearch, isEditingSystemTags, addGlobalTag,
+            // 🛠️ 自定义大分类管理
+            addCustomTagCategory, renameCustomTagCategory,
+            removeCustomTagCategory, mergeDuplicateTagCategories, ensureUniqueCustomCategoryKeys, assignTagToCategory, assignTagsToCategory
+        } = useTags({ systemCommonTags, tagLangMode, library, sanitizeImportedTags, confirmDialog, nativeAlert, persistCardUpdate, cardData, searchQueryInput, selectedIds, clearSelection, syncConfigToDisk, createProgressToast, customTagCategories, customTagAssignments, compiledAutoTagRules, customKeywords });
+
+        // 🧠 标签大分类：向量模型辅助归类（三级策略②层——规则未命中的标签与分类描述语义匹配）
+        //    vectorStatus.ready 后全量跑一次；标签池变化时增量跑。静默后台执行，
+        //    失败/模型未就绪自动回退关键词规则兑底，不影响 UI 交互。
+        watch(() => vectorStatus.value.ready, (ready) => {
+            if (ready) classifyTagsByVector(globalAvailableTags.value, window.electronAPI);
+        });
+        watch(globalAvailableTags, (tags) => {
+            if (vectorStatus.value.ready) classifyTagsByVector(tags, window.electronAPI);
+        });
 
         // ===== SFC 化：构建全局上下文对象（provide 给 HeaderBar/SidebarPanel/EditorPanel 子组件共享） =====
         const ctx = {
@@ -3967,12 +4489,29 @@ export default {
             addAICandidateTag, addAICandidateTagManual, removeAICandidateTag,
             isTranslating, translateCardContent,
             isRefactoring, refactorCardFormat,
-            toasts, showToast,
+            // 🧠 本地向量引擎（三层漏斗第二层）
+            useLocalVector, vectorThreshold, vectorTopK,
+            vectorStatus, vectorDownloading, vectorDownloadProgress, vectorDownloadSource, vectorBatchProgress,
+            initVectorEngine, deleteVectorCache,
+            toasts, showToast, notifySortDataStatus,
+            nativeAlert, confirmDialog,
+            // 🤖 AI 分类弹窗复用：模型解析 + 响应文本提取
+            resolveApiModel, extractReplyContent,
             systemPromptPresets, activeSystemPromptId, addSystemPromptPreset, deleteSystemPromptPreset, saveSystemPromptsToStorage, getCurrentSystemPromptContent, buildTaggingSystemPrompt,
             // 🚨 破限 (Jailbreak) 状态（对抗模型拒答/道德审查；localStorage 持久化）
             useJailbreak, jailbreakPrompt, jailbreakPresets,
-            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags, appendTagToSearch,
+            // 🏷️ 自动打标规则表（v2.1 可配置）
+            showAutoTagRulesModal, autoTagRules, saveAutoTagRules, resetAutoTagRules,
+            // ✏️ 自定义关键词库（候选词池，可增删）
+            customKeywords, addCustomKeyword, removeCustomKeyword,
+            globalAvailableTags, newGlobalTagInput, addTagToGlobalPool, removeTagFromGlobalPool, clearAllTagsFromPool, batchRemoveTags, cleanForeignTagsFromLibrary, appendTagToSearch,
             isEditingSystemTags, addGlobalTag,
+            // 🛠️ 自定义大分类（标签云自定义分组 + 手动标签归属）
+            customTagCategories, customTagAssignments,
+            addCustomTagCategory, renameCustomTagCategory, removeCustomTagCategory, mergeDuplicateTagCategories, ensureUniqueCustomCategoryKeys, assignTagToCategory, assignTagsToCategory,
+            // 🧩 内置大分类定制（改名 / 删除隐藏 / 恢复）
+            builtinCatRenames, builtinCatHidden, builtinCategoryDisplayName,
+            renameBuiltinCategory, hideBuiltinCategory, restoreBuiltinCategory,
             chatHistory, chatInput, isChatting, apiEndpoint, apiKey, apiModel, apiType, saveApiConfig, handleApiTypeChange, chatContainer,
             rebindTavernPath,
             availableModels, isFetchingModels, fetchModelStatus, fetchAvailableModels,
@@ -3992,9 +4531,25 @@ export default {
             confirmSingleTag, closeSingleTagModal,
             promptModalVisible, promptModalTitle, promptInput,
             confirmPrompt, cancelPrompt,
+            selectModalVisible, selectModalTitle, selectModalOptions, selectModalDefault, selectModalAllowCreate,
+            appSelect, confirmSelect, confirmSelectCreate, cancelSelect,
             // 🌍 世界书双引擎模式
             appMode, worldbooks, activeWorldbook, lastWorldbookDirPath, editorLogs, showEditorLogs, addLog,
             loadWorldbooks, scanWorldbookDir, saveActiveWorldbook, exportActiveWorldbook, exportFilteredWorldbook, saveCurrentAsset,
+            // ⚙️ 预设管理
+            presets, activePreset, lastPresetDirPath,
+            presetSearchQuery, isImportingPreset, importPresetUrl,
+            loadPresets, scanPresetDir, filteredPresets,
+            saveActivePreset, renamePreset, deletePreset, duplicatePreset,
+            openPresetContextMenu, openPresetInFolder, importPresetFromUrl, exportPresetsBatch,
+            listPresetSnapshots, restorePresetSnapshot, deletePresetSnapshot,
+            // 🧩 插件管理
+            plugins, activePlugin, lastPluginDirPath,
+            pluginSearchQuery,
+            loadPlugins, scanPluginDir, filteredPlugins,
+            deletePlugin,
+            openPluginContextMenu, openPluginInFolder, readPluginSource,
+            pluginTab, pluginSelectedFile, pluginSelectedSource,
             // 🌍 世界书网址导入与重命名
             importUrl, isImportingWb, importWorldbookFromUrl, renameWorldbook,
             // 🌍 世界书文件夹导入 + 删除/克隆 + 专属右键菜单
@@ -4037,6 +4592,10 @@ export default {
             // 🌍 世界书库筛选与对比查重
             wbSearchQuery, wbFilterType, filteredWorldbooks,
             showWbDedupeModal, wbDuplicateGroups, startWorldbookDedupeScan, resolveWbDedupeGroup,
+            // ⚙️ 预设查重 + 🧬 内容级版本查重 + 🎯 智能查重统一入口（按当前视图自动分发）
+            showPresetDedupeModal, presetDuplicateGroups, startPresetDedupeScan, resolvePresetDedupeGroup,
+            showContentDedupeModal, contentDuplicateGroups, startContentDedupeScan, resolveContentDedupeGroup,
+            startSmartDedupe,
             // ⚖️ 双屏差异比对器 (Diff Inspector)
             showDiffDetailModal, diffMasterItem, diffCompareItem, diffFieldResults, openDiffDetailModal,
             // 🌐 世界书关系图谱 v2（过滤/搜索/布局/统计/导出）+ 🔗 多书合并 + 🔀 条目导入

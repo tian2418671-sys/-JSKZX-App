@@ -10,7 +10,7 @@ export function useCardGroups({
     library, cardData, currentFolderPath, appConfig, selectedIds,
     customCategories, defaultCategories, removedDefaultKeys, currentCategoryKey, allCategories, isCategoryKnown,
     // 工具方法
-    nativeAlert, confirmDialog, appPrompt, addLog,
+    nativeAlert, confirmDialog, appPrompt, appSelect, getCategoryDisplayName, addLog,
     persistCardCategory, refreshLibrary, clearSelection, syncConfigToDisk
 }) {
     // 新增自定义分组（用自建弹窗替代 Electron 不支持的 prompt；Electron 环境创建物理子文件夹）
@@ -169,6 +169,23 @@ export function useCardGroups({
 
         // 📁 物理重命名成功：刷新整个库，让所有卡片的物理路径/子文件夹自动同步（文件位置是事实依据）
         if (physicalRenamed) {
+            // 🔧 修复 BUG：物理重命名分组文件夹后，子卡片的 path 前缀变化
+            // （...\旧组名\xxx.png → ...\新组名\xxx.png），但覆盖层 key 仍是旧路径，
+            //   刷新库后按新 path 找不到覆盖层 → 子文件夹卡的 customTags（AI 打标/手动标签）
+            //   全部丢失。与 moveCardToGroup 的 migrateOverlayKey 同理，此处批量迁移该分组下
+            //   所有卡的覆盖层 key（旧目录前缀 → 新目录前缀），确保重启/刷新后标签完整恢复。
+            const overlays = appConfig.value.cardOverlays || {};
+            const oldPrefix = `${currentFolderPath.value}\\${oldName}`;
+            const newPrefix = `${currentFolderPath.value}\\${cleanNewName}`;
+            let migrated = false;
+            for (const key of Object.keys(overlays)) {
+                if (key === oldPrefix || key.startsWith(oldPrefix + '\\')) {
+                    overlays[newPrefix + key.slice(oldPrefix.length)] = overlays[key];
+                    delete overlays[key];
+                    migrated = true;
+                }
+            }
+            if (migrated) syncConfigToDisk();
             await refreshLibrary();
         } else {
             nativeAlert(`分组已成功重命名为：「${cleanNewName}」`, 'info');
@@ -195,11 +212,14 @@ export function useCardGroups({
     });
 
     // 当在右侧面板更改卡片分组时触发（同步左侧列表里的卡片归属 + 物理移动文件）
-    const handleCardCategoryChange = async () => {
+    // 🔧 修复：library 为 shallowRef，setter 修改内部 item.category 不触发 computed 重算，
+    //    handleCardCategoryChange 若再读 currentCardCategory 会拿到缓存旧值 → 移回/移到错误分组（下拉回滚）。
+    //    改为由 @change 直接传入用户选中的目标值 targetKey，不依赖 getter 缓存。
+    const handleCardCategoryChange = async (targetKey) => {
         if (!cardData.value) return;
         const libItem = library.value.find(item => item.data === cardData.value);
         if (!libItem) return;
-        const targetKey = currentCardCategory.value;
+        if (!targetKey) targetKey = currentCardCategory.value; // 兼容无参调用（防御）
         const preset = defaultCategories.value.find(c => c.key === targetKey);
         const targetName = preset ? preset.cn : targetKey;
         const oldCat = libItem.category;
@@ -258,11 +278,23 @@ export function useCardGroups({
         return false;
     };
 
-    // 右键菜单：快速移动单个卡片分组（用自建弹窗替代 prompt）
+    // 📁 组装分组选项列表（供换组/批量移动选择）：预设分组以中文名作为移动目标，自定义分组直接用名称；排除「全部」视图
+    const buildGroupOptions = () => {
+        return allCategories.value
+            .filter(c => c.key !== 'all')
+            .map(c => {
+                const preset = defaultCategories.value.find(d => d.key === c.key);
+                const label = getCategoryDisplayName ? getCategoryDisplayName(c) : (c.cn || c.key);
+                const value = preset ? preset.cn : (c.cn || c.key);
+                return { label, value };
+            });
+    };
+
+    // 右键菜单：快速移动单个卡片分组（选项选择弹窗：从已有分组选择，避免手输名称与物理文件夹不一致导致换组失败；底部可新建）
     const quickMoveGroup = async (item) => {
-        const newCat = await appPrompt(`将卡片 [${item.name}] 移动到分组:`, item.category || '未分类');
-        if (newCat && newCat.trim() !== '') {
-            const cleanCat = newCat.trim();
+        const chosen = await appSelect(`将卡片 [${item.name}] 移动到分组:`, buildGroupOptions(), { allowCreate: true, defaultValue: item.category || '' });
+        if (chosen && chosen.trim() !== '') {
+            const cleanCat = chosen.trim();
             // 📁 物理移动（目标分组文件夹不存在时主进程自动创建）
             const ok = await moveCardToGroup(item, cleanCat);
             if (ok) {
@@ -301,14 +333,13 @@ export function useCardGroups({
         }
     };
 
-    // 批量移动到指定分组（展示现有分组列表，用自建弹窗替代 prompt）
+    // 批量移动到指定分组（选项选择弹窗：从已有分组选择 / 新建，与右键换组交互一致）
     const batchChangeCategoryModal = async () => {
         if (selectedIds.value.length === 0) return;
-        const catNames = allCategories.value.filter(c => c.key !== 'all').map(c => c.cn).join(', ');
-        const newCat = await appPrompt(`将选中的 ${selectedIds.value.length} 张卡片移动到分组:\n(现有分组: ${catNames})`, '未分类');
+        const chosen = await appSelect(`将选中的 ${selectedIds.value.length} 张卡片移动到分组:`, buildGroupOptions(), { allowCreate: true });
         
-        if (newCat && newCat.trim() !== '') {
-            const cleanCat = newCat.trim();
+        if (chosen && chosen.trim() !== '') {
+            const cleanCat = chosen.trim();
             // 📁 批量物理移动（逐张移动并统计成功数）
             let successCount = 0;
             for (const item of library.value) {

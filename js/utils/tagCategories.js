@@ -325,6 +325,44 @@ export function setCustomTagState(categories, assignments) {
     customTagAssignments.value = m;
 }
 
+// 🛠️ 内置大分类定制（v2.2.1+：用户可对内置 18 分类改名 / 删除(=隐藏)）
+//   renames: { 内置key: 新显示名 }；hidden: { 内置key: true }
+export const builtinCatCustom = ref({ renames: {}, hidden: {} });
+
+/**
+ * App.vue 装载内置分类定制（重命名/隐藏），恢复配置时调用
+ * @param {object} renames { 内置key: 新显示名 }
+ * @param {object} hidden { 内置key: true }
+ */
+export function setBuiltinCatCustom(renames, hidden) {
+    const norm = (o) => (o && typeof o === 'object' ? o : {});
+    const renamesOut = {};
+    const hiddenOut = {};
+    for (const [k, v] of Object.entries(norm(renames))) {
+        if (TAG_CATEGORIES.some(c => c.key === k && c.key !== 'other')) {
+            const n = normalizeTagName(v);
+            if (n) renamesOut[k] = n;
+        }
+    }
+    for (const k of Object.keys(norm(hidden))) {
+        if (TAG_CATEGORIES.some(c => c.key === k && c.key !== 'other')) hiddenOut[k] = true;
+    }
+    builtinCatCustom.value = { renames: renamesOut, hidden: hiddenOut };
+}
+
+/** 内置 key 是否已被用户删除(隐藏) */
+export function isBuiltinCatHidden(key) {
+    return !!(builtinCatCustom.value.hidden && builtinCatCustom.value.hidden[key]);
+}
+
+/** 当前生效的内置分类列表（剔除被删除项、应用改名）——各分组/下拉/AI 提示词统一来源 */
+export function getBuiltinCategories() {
+    const { renames = {}, hidden = {} } = builtinCatCustom.value;
+    return TAG_CATEGORIES
+        .filter(c => c.key !== 'other' && !hidden[c.key])
+        .map(c => (renames[c.key] ? { ...c, name: renames[c.key] } : c));
+}
+
 // 分类描述 → key 的映射表（batchMatch 返回 labelPool 原始字符串，需反查）
 const descToKey = new Map(
     TAG_CATEGORIES.filter(c => c.key !== 'other').map(c => [CATEGORY_DESCRIPTIONS[c.key], c.key])
@@ -357,7 +395,7 @@ function classifyByRulesMemo(t) {
  * 获取单个标签所属的大分类 key：
  *   ① 斜杠复合词首段优先 ② 关键词规则 ③ 向量缓存 ④ 'other'
  */
-export function getTagCategory(tag) {
+function __tagCategoryCore(tag) {
     const t = String(tag || '').toLowerCase().trim();
     if (!t) return 'other';
     // ⓪ 用户手动归属（最高优先级：用户说了算，覆盖所有自动分类）
@@ -394,11 +432,20 @@ export function getTagCategory(tag) {
 }
 
 /**
+ * 🔧 删除(隐藏)的内置分类：任何自动/手动归类命中其 key 一律回落 other（统一出口）
+ *  —— 原 __tagCategoryCore 内部逻辑不变，仅在外层做“隐藏类归一 other”
+ */
+export function getTagCategory(tag) {
+    const key = __tagCategoryCore(tag);
+    return (key !== 'other' && isBuiltinCatHidden(key)) ? 'other' : key;
+}
+
+/**
  * 按大分类分组标签数组 → [{key, name, icon, custom?:boolean, tags:[...]}]（空分类自动剔除）
  * 分组顺序：内置分类（其他除外）→ 用户自定义分类 → 其他
  */
 export function groupTagsByCategory(tags) {
-    const builtIn = TAG_CATEGORIES.filter(c => c.key !== 'other');
+    const builtIn = getBuiltinCategories(); // 剔除用户已删除项 + 应用改名
     const allCats = [
         ...builtIn.map(c => ({ ...c, custom: false, tags: [] })),
         ...customTagCategories.value.map(c => ({ ...c, custom: true, tags: [] })),
@@ -421,7 +468,7 @@ export function groupTagsByCategory(tags) {
  */
 export async function classifyTagsByVector(labels, electronAPI, { threshold = 0.32 } = {}) {
     if (!electronAPI || !electronAPI.vectorEngine || typeof electronAPI.vectorEngine.batchMatch !== 'function') return 0;
-    const descs = TAG_CATEGORIES.filter(c => c.key !== 'other').map(c => CATEGORY_DESCRIPTIONS[c.key]);
+    const descs = getBuiltinCategories().map(c => CATEGORY_DESCRIPTIONS[c.key]);
     // 只分类「规则未命中 + 尚无缓存」的标签
     const unknown = [...new Set(Array.isArray(labels) ? labels : [])].filter(l => {
         const t = String(l || '').toLowerCase().trim();
@@ -465,8 +512,7 @@ export function buildTagClassificationSystemPrompt(customCats = []) {
     L.push('你需要把其中每一个标签归入下面给出的「大分类」之一。');
     L.push('');
     L.push('可用大分类（key 用于输出）：');
-    for (const c of TAG_CATEGORIES) {
-        if (c.key === 'other') continue;
+    for (const c of getBuiltinCategories()) {
         L.push(`- ${c.key}（${c.name}）：${CATEGORY_DESCRIPTIONS[c.key]}`);
     }
     const customs = (Array.isArray(customCats) ? customCats : []).filter(c => c && c.key && c.name);
@@ -505,16 +551,7 @@ export function buildTagClassificationUserPrompt(labels = []) {
 // 其余通过合理性过滤后 → 视为「待新建的自定义大分类名」（isNew=true），
 // 由 TagCategoryModal 在应用时自动 addCustomTagCategory 创建并承接标签。
 // =========================================================
-const BUILTIN_TARGETS = (() => {
-    const keys = new Set();
-    const names = new Map(); // 中文名(规范化) → key
-    for (const c of TAG_CATEGORIES) {
-        if (c.key === 'other') continue;
-        keys.add(c.key);
-        names.set(normalizeTagName(c.name).toLowerCase(), c.key);
-    }
-    return { keys, names };
-})();
+const BUILTIN_KEYS = new Set(TAG_CATEGORIES.filter(c => c.key !== 'other').map(c => c.key));
 
 /**
  * 🔤 分类名/标签名规范化（用于判重）：
@@ -541,9 +578,20 @@ export function resolveTagCategoryTarget(value, customCats = []) {
     if (!raw) return { key: 'other', isNew: false };
     const low = raw.toLowerCase();
     if (low === 'other') return { key: 'other', isNew: false };
-    // ① 命中现有内置分类（key 或中文名）
-    if (BUILTIN_TARGETS.keys.has(low)) return { key: low, isNew: false };
-    if (BUILTIN_TARGETS.names.has(low)) return { key: BUILTIN_TARGETS.names.get(low), isNew: false };
+    // ① 命中现有内置分类（key / 显示名；已被用户删除(隐藏)的分类视为不存在 → other）
+    if (BUILTIN_KEYS.has(low)) {
+        return isBuiltinCatHidden(low)
+            ? { key: 'other', isNew: false }
+            : { key: low, isNew: false };
+    }
+    // 中文名匹配（含改名后的名字；被删除(隐藏)内置的 原名/改名 也识别 → other，避免误新建同名分类）
+    const fullNameHit = TAG_CATEGORIES.filter(c => c.key !== 'other')
+        .find(c => normalizeTagName(((builtinCatCustom.value.renames || {})[c.key]) || c.name).toLowerCase() === low);
+    if (fullNameHit) {
+        return isBuiltinCatHidden(fullNameHit.key)
+            ? { key: 'other', isNew: false }
+            : { key: fullNameHit.key, isNew: false };
+    }
     // ② 命中现有自定义分类（key 或 name，规范化比较）
     const customs = Array.isArray(customCats) ? customCats : [];
     const c = customs.find(x => x && x.key && (String(x.key).trim().toLowerCase() === low || normalizeTagName(x.name).toLowerCase() === low));

@@ -36,3 +36,6 @@ Thumbs.db
 
 # OpenSquilla 内部工作目录（APK 逆向解析产物等，勿提交）
 .opensquilla/
+
+# 插件样例工程（大体积 zip + 解压目录，勿提交；真实插件样例见 资料库/*.json 与 资料库/脚本/）
+资料库/_git_samples/

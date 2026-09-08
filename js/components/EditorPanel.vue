@@ -4,7 +4,7 @@
       ref="chatContainer" 写回父级 ref（sendMessage 滚动依赖）
 -->
 <template>
-    <main class="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
+    <main v-show="appMode !== 'plugins'" class="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
 
         <!-- 🎴 引擎 A：角色卡编辑工作区 -->
         <div v-show="appMode === 'characters'" class="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -43,7 +43,7 @@
             <div class="px-3 py-1.5 border-b border-zinc-800 bg-zinc-900 flex flex-wrap gap-x-3 gap-y-1 items-center shrink-0">
                 <div class="flex items-center gap-1.5 shrink-0">
                     <span class="text-[11px] text-zinc-400 font-medium whitespace-nowrap">分组:</span>
-                    <select v-model="currentCardCategory" @change="handleCardCategoryChange" class="bg-zinc-800 border border-zinc-700 text-[11px] rounded px-1.5 py-0.5 outline-none focus:border-blue-500 font-medium text-zinc-300">
+                    <select :value="currentCardCategory" @change="handleCardCategoryChange($event.target.value)" class="bg-zinc-800 border border-zinc-700 text-[11px] rounded px-1.5 py-0.5 outline-none focus:border-blue-500 font-medium text-zinc-300">
                         <option v-for="cat in allCategories.filter(c => c.key !== 'all')" :key="cat.key" :value="cat.key">
                             📁 {{ getCategoryDisplayName(cat) }}
                         </option>
@@ -79,23 +79,35 @@
                     <button @click="isBatchDeleteTags = !isBatchDeleteTags; if (!isBatchDeleteTags) batchSelectedTags = new Set()"
                             :class="isBatchDeleteTags ? 'bg-red-600 text-white border-red-600' : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'"
                             class="px-3 py-1 text-[11px] rounded transition shadow-sm font-bold whitespace-nowrap border" title="进入批量模式，勾选多个标签后一键删除">☑️ 批量删除</button>
+                    <button @click="openTagCategoryModal"
+                            class="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] rounded transition shadow-sm font-bold whitespace-nowrap border"
+                            title="自定义标签大分类：新增自定义分类 + 把未归类标签手动归属到分类">🛠️ 分类</button>
                 </div>
 
-                <div class="flex flex-wrap gap-1 p-1.5 bg-zinc-800/60 rounded border border-zinc-700 overflow-y-auto custom-scrollbar max-h-40">
-                    <span v-for="tag in globalAvailableTags" :key="tag"
-                          :class="isBatchDeleteTags
-                              ? (batchSelectedTags.has(tag) ? 'bg-red-600 text-white border-red-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')
-                              : (activeCardTags.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')"
-                          class="text-[10px] px-2 py-0.5 rounded transition shadow-sm border flex items-center gap-1 group cursor-pointer"
-                          @click="isBatchDeleteTags ? toggleBatchTagSelect(tag) : addGlobalTag(tag)">
-                        <template v-if="isBatchDeleteTags">
-                            <span>{{ batchSelectedTags.has(tag) ? '☑' : '☐' }} {{ tag }}</span>
-                        </template>
-                        <template v-else>
-                            <span>+ {{ tag }}</span>
-                            <span @click.stop="removeTagFromGlobalPool(tag)" class="text-zinc-500 group-hover:text-red-400 hover:bg-red-500/20 hover:text-red-400 rounded-full w-3 h-3 flex items-center justify-center transition-colors font-bold ml-1" title="彻底删除此标签">×</span>
-                        </template>
-                    </span>
+                <div class="p-1.5 bg-zinc-800/60 rounded border border-zinc-700 overflow-y-auto custom-scrollbar max-h-56">
+                    <template v-for="group in groupedGlobalTags" :key="group.key">
+                        <div class="flex items-baseline gap-1 mb-1 mt-1.5 first:mt-0 cursor-pointer select-none" @click="toggleTagGroup(group.key)" :title="collapsedTagGroups.has(group.key) ? '点击展开' : '点击折叠'">
+                            <span class="text-[9px] text-zinc-600">{{ collapsedTagGroups.has(group.key) ? '▸' : '▾' }}</span>
+                            <span class="text-[10px] font-bold text-zinc-400">{{ group.icon }} {{ group.name }}</span>
+                            <span class="text-[9px] text-zinc-600">({{ group.tags.length }})</span>
+                        </div>
+                        <div v-show="!collapsedTagGroups.has(group.key)" class="flex flex-wrap gap-1">
+                            <span v-for="tag in group.tags" :key="tag"
+                                  :class="isBatchDeleteTags
+                                      ? (batchSelectedTags.has(tag) ? 'bg-red-600 text-white border-red-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')
+                                      : (activeCardTags.includes(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700')"
+                                  class="text-[10px] px-2 py-0.5 rounded transition shadow-sm border flex items-center gap-1 group cursor-pointer"
+                                  @click="isBatchDeleteTags ? toggleBatchTagSelect(tag) : addGlobalTag(tag)">
+                                <template v-if="isBatchDeleteTags">
+                                    <span>{{ batchSelectedTags.has(tag) ? '☑' : '☐' }} {{ tag }}</span>
+                                </template>
+                                <template v-else>
+                                    <span>+ {{ tag }}</span>
+                                    <span @click.stop="removeTagFromGlobalPool(tag)" class="text-zinc-500 group-hover:text-red-400 hover:bg-red-500/20 hover:text-red-400 rounded-full w-3 h-3 flex items-center justify-center transition-colors font-bold ml-1" title="彻底删除此标签">×</span>
+                                </template>
+                            </span>
+                        </div>
+                    </template>
                     <div v-if="globalAvailableTags.length === 0" class="text-xs text-zinc-500 py-1">暂无可选标签，请输入后添加</div>
                 </div>
 
@@ -406,56 +418,52 @@
                             </div>
                         </div>
 
-                        <!-- 📚 状态栏模板库：15 套风格始终可点选注入（可折叠） -->
-                        <div class="mb-4 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.03] p-3">
+                        <!-- 🧩 状态栏模板库：📚 渲染模板 / 📜 世界书指令 双选项卡合并（可折叠） -->
+                        <div class="mb-4 rounded-lg border border-zinc-700/60 bg-zinc-500/[0.02] p-3">
                             <div class="flex items-center justify-between mb-2">
-                                <span class="text-[11px] font-bold text-emerald-400">📚 状态栏模板库（点击卡片注入正则脚本）</span>
+                                <div class="flex rounded overflow-hidden border border-zinc-700 text-xs">
+                                    <button @click="statusLibTab = 'render'" :class="statusLibTab === 'render' ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'" class="px-3 py-1 transition">📚 渲染模板（正则脚本）</button>
+                                    <button @click="statusLibTab = 'prompt'" :class="statusLibTab === 'prompt' ? 'bg-amber-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'" class="px-3 py-1 transition">📜 世界书指令</button>
+                                </div>
                                 <div class="flex items-center gap-2">
-                                    <span class="text-[10px] text-zinc-500">{{ statusbarTemplateMeta.length }} 套风格 · 注入后可在「正则脚本」Tab 微调</span>
-                                    <button @click="statusTemplateLibCollapsed = !statusTemplateLibCollapsed" :title="statusTemplateLibCollapsed ? '展开模板库' : '收起模板库'"
+                                    <span class="text-[10px] text-zinc-500">{{ statusLibTab === 'render' ? statusbarTemplateMeta.length + ' 套风格' : statusbarPromptMeta.length + ' 套指令' }}</span>
+                                    <button @click="statusLibCollapsed = !statusLibCollapsed" :title="statusLibCollapsed ? '展开模板库' : '收起模板库'"
                                         class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">
-                                        {{ statusTemplateLibCollapsed ? '▸ 展开' : '▾ 收起' }}
+                                        {{ statusLibCollapsed ? '▸ 展开' : '▾ 收起' }}
                                     </button>
                                 </div>
                             </div>
-                            <div v-show="!statusTemplateLibCollapsed" class="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                <button v-for="tpl in statusbarTemplateMeta" :key="tpl.key" @click="injectStatusbarTemplate(tpl.key)"
-                                    class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-emerald-500/50 rounded-lg p-2.5 transition group">
-                                    <div class="flex items-center gap-1.5 mb-1">
-                                        <span class="text-base leading-none">{{ tpl.icon }}</span>
-                                        <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                            <div v-show="!statusLibCollapsed">
+                                <template v-if="statusLibTab === 'render'">
+                                    <p class="text-[10px] text-zinc-500 leading-snug mb-2">点击卡片注入正则脚本（渲染 AI 输出的状态文本），注入后可在「正则脚本」Tab 微调。</p>
+                                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <button v-for="tpl in statusbarTemplateMeta" :key="tpl.key" @click="injectStatusbarTemplate(tpl.key)"
+                                            class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-emerald-500/50 rounded-lg p-2.5 transition group">
+                                            <div class="flex items-center gap-1.5 mb-1">
+                                                <span class="text-base leading-none">{{ tpl.icon }}</span>
+                                                <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                                            </div>
+                                            <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
+                                            <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
+                                            <p class="text-[9px] text-emerald-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此模板</p>
+                                        </button>
                                     </div>
-                                    <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
-                                    <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
-                                    <p class="text-[9px] text-emerald-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此模板</p>
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- 📜 世界书指令模板库：11 套 AI 输出约束，注入为内嵌世界书常驻条目（可折叠） -->
-                        <div class="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/[0.03] p-3">
-                            <div class="flex items-center justify-between mb-2">
-                                <span class="text-[11px] font-bold text-amber-400">📜 世界书指令模板（AI 输出 &lt;Status&gt; 文本）</span>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-[10px] text-zinc-500">{{ statusbarPromptMeta.length }} 套 · 注入为内嵌世界书常驻条目 · 与上方渲染模板配合使用</span>
-                                    <button @click="statusPromptLibCollapsed = !statusPromptLibCollapsed" :title="statusPromptLibCollapsed ? '展开指令库' : '收起指令库'"
-                                        class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-300 transition">
-                                        {{ statusPromptLibCollapsed ? '▸ 展开' : '▾ 收起' }}
-                                    </button>
-                                </div>
-                            </div>
-                            <p v-show="!statusPromptLibCollapsed" class="text-[10px] text-zinc-500 leading-snug mb-2">指导 AI 在回复末尾按规则输出 &lt;Status&gt;...&lt;/Status&gt; 文本状态栏（含数值映射 / 趋势箭头 / 变化原因 / 严格格式）；渲染模板把该文本渲染成面板。</p>
-                            <div v-show="!statusPromptLibCollapsed" class="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                <button v-for="tpl in statusbarPromptMeta" :key="tpl.key" @click="injectStatusbarPrompt(tpl.key)"
-                                    class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-amber-500/50 rounded-lg p-2.5 transition group">
-                                    <div class="flex items-center gap-1.5 mb-1">
-                                        <span class="text-base leading-none">{{ tpl.icon }}</span>
-                                        <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                                </template>
+                                <template v-else>
+                                    <p class="text-[10px] text-zinc-500 leading-snug mb-2">指导 AI 在回复末尾按规则输出 &lt;Status&gt;...&lt;/Status&gt; 文本状态栏（含数值映射 / 趋势箭头 / 变化原因 / 严格格式）；注入后会在世界书中自动生成对应条目。</p>
+                                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <button v-for="tpl in statusbarPromptMeta" :key="tpl.key" @click="injectStatusbarPrompt(tpl.key)"
+                                            class="text-left bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-700/70 hover:border-amber-500/50 rounded-lg p-2.5 transition group">
+                                            <div class="flex items-center gap-1.5 mb-1">
+                                                <span class="text-base leading-none">{{ tpl.icon }}</span>
+                                                <span class="text-xs font-bold text-zinc-200 truncate">{{ tpl.name }}</span>
+                                            </div>
+                                            <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
+                                            <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
+                                            <p class="text-[9px] text-amber-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此指令</p>
+                                        </button>
                                     </div>
-                                    <p class="text-[10px] text-zinc-500 leading-snug mb-1 line-clamp-2">{{ tpl.desc }}</p>
-                                    <p class="text-[9px] text-zinc-600 font-mono truncate">📊 {{ tpl.fields }}</p>
-                                    <p class="text-[9px] text-amber-500/70 mt-1 opacity-0 group-hover:opacity-100 transition">⚡ 点击注入此指令</p>
-                                </button>
+                                </template>
                             </div>
                         </div>
 
@@ -641,6 +649,208 @@
         <div v-else class="flex flex-col items-center justify-center h-full text-zinc-500 bg-zinc-950">
             <p class="text-sm font-medium">在左侧选择角色卡进行编辑</p>
         </div>
+        </div>
+
+        <!-- ⚙️ 预设编辑工作区 -->
+        <div v-show="appMode === 'presets'" class="flex-1 flex flex-col h-full overflow-hidden relative bg-zinc-950">
+            <!-- 空状态：保持与世界书编辑器一致的视觉层级 -->
+            <div v-if="!activePreset" class="flex-1 flex items-center justify-center text-zinc-500 flex-col gap-4">
+                <div class="w-20 h-20 rounded-2xl flex items-center justify-center bg-sky-500/10 border border-sky-500/20 shadow-inner">
+                    <span class="text-4xl opacity-70">⚙️</span>
+                </div>
+                <div class="text-center">
+                    <p class="text-sm tracking-widest text-zinc-300">请在左侧选择一个预设进行编辑</p>
+                    <p class="text-[11px] text-zinc-600 mt-1">预设内容将在这里集中管理</p>
+                </div>
+            </div>
+            <template v-else>
+                <!-- 预设 IDE 顶部控制栏 -->
+                <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/90 shrink-0 shadow-sm">
+                    <div class="flex items-center justify-between gap-3 min-w-0">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-9 h-9 rounded-xl flex items-center justify-center bg-sky-500/15 border border-sky-500/30 text-lg shrink-0">⚙️</div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <h2 class="text-sm font-bold text-zinc-100 truncate">{{ activePreset.data.name || activePreset.name }}</h2>
+                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium text-sky-300 bg-sky-500/10 border border-sky-500/20 shrink-0">预设</span>
+                                </div>
+                                <p class="text-[10px] text-zinc-500 truncate mt-0.5" :title="activePreset.path">{{ activePreset.name }}</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <button @click="openPresetInFolder(activePreset)" class="px-2.5 py-1.5 theme-element hover:border-sky-500/60 border rounded-lg text-[11px] transition" title="在资源管理器中定位预设">📂 定位</button>
+                            <button @click="renamePreset(activePreset)" class="px-2.5 py-1.5 theme-element hover:border-sky-500/60 border rounded-lg text-[11px] transition">✏️ 重命名</button>
+                            <button @click="saveActivePreset" class="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold rounded-lg shadow-lg shadow-sky-900/20 transition">💾 保存</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 mt-3 pt-2.5 border-t border-zinc-800/80 text-[10px] text-zinc-500">
+                        <span class="text-sky-400">● 已加载</span>
+                        <span class="text-zinc-700">|</span>
+                        <span>JSON 编辑模式</span>
+                        <span class="ml-auto">修改内容后离开编辑区前请点击保存</span>
+                    </div>
+                </div>
+
+                <!-- 预设内容编辑卡片 -->
+                <div class="flex-1 overflow-auto p-4 md:p-6 custom-scrollbar">
+                    <div class="flex items-center justify-between mb-4 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1.5">
+                        <span class="px-2 text-[11px] text-zinc-500">编辑视图</span>
+                        <div class="flex items-center gap-1 flex-wrap justify-end">
+                            <button @click="presetEditorMode = 'visual'" :class="presetEditorMode === 'visual' ? 'bg-sky-600 text-white' : 'text-zinc-500 hover:text-zinc-200'" class="px-3 py-1.5 rounded-md text-[11px] transition">⚙️ 基础参数</button>
+                            <button @click="presetEditorMode = 'scripts'" :class="presetEditorMode === 'scripts' ? 'bg-violet-600 text-white' : 'text-zinc-500 hover:text-zinc-200'" class="px-3 py-1.5 rounded-md text-[11px] transition">📜 脚本 ({{ presetScripts.length }})</button>
+                            <button @click="presetEditorMode = 'regex'" :class="presetEditorMode === 'regex' ? 'bg-amber-600 text-white' : 'text-zinc-500 hover:text-zinc-200'" class="px-3 py-1.5 rounded-md text-[11px] transition">⚡ 正则 ({{ presetRegexScripts.length }})</button>
+                            <button @click="presetEditorMode = 'json'" :class="presetEditorMode === 'json' ? 'bg-sky-600 text-white' : 'text-zinc-500 hover:text-zinc-200'" class="px-3 py-1.5 rounded-md text-[11px] transition">原始 JSON</button>
+                        </div>
+                    </div>
+                    <template v-if="presetEditorMode === 'visual'">
+                    <!-- 第一批常用参数：仅映射已存在的 JSON 字段，不改变预设数据结构 -->
+                    <section class="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-xl shadow-black/10 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/80 flex items-center justify-between">
+                            <div>
+                                <h3 class="text-xs font-bold text-zinc-200">基础参数</h3>
+                                <p class="text-[10px] text-zinc-500 mt-0.5">常用生成参数 · 修改后会同步到下方 JSON</p>
+                            </div>
+                            <span class="text-[10px] text-zinc-600">第 1 / 4 步</span>
+                        </div>
+                        <div class="grid grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+                            <label v-for="param in presetBasicParams" :key="param.key" class="block">
+                                <span class="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5">
+                                    <span>{{ param.label }}</span>
+                                    <span class="text-[10px] text-zinc-600 font-mono">{{ param.key }}</span>
+                                </span>
+                                <input :value="getPresetParam(param.key)" @change="updatePresetParam(param.key, $event.target.value, param.type)" :type="param.type" :step="param.step" :min="param.min" :max="param.max" :placeholder="param.placeholder" class="w-full px-2.5 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-200 outline-none transition focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20">
+                            </label>
+                        </div>
+                    </section>
+
+                    <!-- 第三批：高级生成参数 -->
+                    <section class="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-xl shadow-black/10 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/80 flex items-center justify-between">
+                            <div>
+                                <h3 class="text-xs font-bold text-zinc-200">高级参数</h3>
+                                <p class="text-[10px] text-zinc-500 mt-0.5">不同模型支持的字段可能不同，未识别字段请使用原始 JSON 编辑</p>
+                            </div>
+                            <span class="text-[10px] text-zinc-600">第 3 / 4 步</span>
+                        </div>
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4">
+                            <label v-for="param in presetAdvancedParams" :key="param.key" class="block">
+                                <span class="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5">
+                                    <span>{{ param.label }}</span><span class="text-[10px] text-zinc-600 font-mono">{{ param.key }}</span>
+                                </span>
+                                <input :value="getPresetParam(param.key)" @change="updatePresetParam(param.key, $event.target.value, param.type)" :type="param.type" :step="param.step" :min="param.min" :max="param.max" :placeholder="param.placeholder" class="w-full px-2.5 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-200 outline-none transition focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20">
+                            </label>
+                        </div>
+                    </section>
+
+                    <!-- 第二批：Prompt 顺序与内容编辑 -->
+                    <section class="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-xl shadow-black/10 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/80 flex items-center justify-between">
+                            <div>
+                                <h3 class="text-xs font-bold text-zinc-200">Prompt 列表</h3>
+                                <p class="text-[10px] text-zinc-500 mt-0.5">调整提示词顺序、启用状态与正文内容</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button @click="toggleAllPresetPrompts" class="px-2 py-1 rounded-md border border-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 hover:border-sky-500 transition">{{ allPresetPromptsExpanded ? '全部收起' : '全部展开' }}</button>
+                                <span class="text-[10px] text-zinc-600">{{ presetPrompts.length }} 条</span>
+                                <button @click="addPresetPrompt" class="px-2.5 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[10px] font-bold transition">＋ 添加 Prompt</button>
+                            </div>
+                        </div>
+                        <div v-if="presetPrompts.length" class="p-3 space-y-2">
+                            <article v-for="(prompt, index) in presetPrompts" :key="prompt.__editorId" draggable="true" @dragstart="startPromptDrag(index, $event)" @dragover.prevent @drop="dropPrompt(index, $event)" @dragend="endPromptDrag" :class="promptDragIndex === index ? 'border-sky-500/70 bg-sky-500/5' : 'border-zinc-800 bg-zinc-950/70'" class="rounded-lg border overflow-hidden transition-colors">
+                                <div class="flex items-center gap-2 px-3 py-2">
+                                    <button @click="togglePresetPrompt(index)" class="w-5 h-5 rounded text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-sky-400 transition" :title="prompt.expanded ? '收起 Prompt' : '展开 Prompt'">{{ prompt.expanded ? '▼' : '▶' }}</button>
+                                    <span class="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-sky-400" title="拖拽调整顺序">⠿</span>
+                                    <span class="w-6 h-6 rounded-md bg-zinc-800 text-zinc-500 text-[10px] flex items-center justify-center font-mono">{{ index + 1 }}</span>
+                                    <input v-model="prompt.name" @change="syncPresetJson" class="flex-1 min-w-0 bg-transparent text-xs font-medium text-zinc-200 outline-none border-b border-transparent focus:border-sky-500" placeholder="Prompt 名称">
+                                    <span class="hidden md:block max-w-[35%] truncate text-[10px] text-zinc-600">{{ prompt.content || '暂无内容' }}</span>
+                                    <label class="flex items-center gap-1.5 text-[10px] text-zinc-500 cursor-pointer">
+                                        <input type="checkbox" v-model="prompt.enabled" @change="syncPresetJson" class="accent-sky-500"> 启用
+                                    </label>
+                                    <button @click="movePresetPrompt(index, -1)" :disabled="index === 0" class="px-1.5 py-1 rounded text-[11px] text-zinc-400 hover:bg-zinc-800 disabled:opacity-25">↑</button>
+                                    <button @click="movePresetPrompt(index, 1)" :disabled="index === presetPrompts.length - 1" class="px-1.5 py-1 rounded text-[11px] text-zinc-400 hover:bg-zinc-800 disabled:opacity-25">↓</button>
+                                    <button @click="removePresetPrompt(index)" class="px-1.5 py-1 rounded text-[11px] text-red-400 hover:bg-red-500/10">删除</button>
+                                </div>
+                                <div v-if="prompt.expanded" class="grid grid-cols-1 md:grid-cols-3 gap-2 p-3 border-t border-zinc-800/80">
+                                    <input v-model="prompt.role" @change="syncPresetJson" class="px-2.5 py-2 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 outline-none focus:border-sky-500" placeholder="角色 role，例如 system">
+                                    <input v-model="prompt.identifier" @change="syncPresetJson" class="px-2.5 py-2 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 outline-none focus:border-sky-500" placeholder="唯一标识 identifier">
+                                    <input v-model="prompt.injection_depth" @change="syncPresetJson" type="number" min="0" step="1" class="px-2.5 py-2 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 outline-none focus:border-sky-500" placeholder="注入深度 depth">
+                                    <select v-model="prompt.injection_position" @change="syncPresetJson" class="px-2.5 py-2 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 outline-none focus:border-sky-500">
+                                        <option :value="undefined">默认注入位置</option>
+                                        <option :value="0">相对底部</option>
+                                        <option :value="1">相对顶部</option>
+                                    </select>
+                                    <label class="flex items-center gap-2 px-2.5 py-2 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-400 cursor-pointer">
+                                        <input type="checkbox" v-model="prompt.forbid_overrides" @change="syncPresetJson" class="accent-sky-500"> 禁止覆盖
+                                    </label>
+                                </div>
+                                <textarea v-if="prompt.expanded" v-model="prompt.content" @change="syncPresetJson" class="mx-3 mb-3 w-[calc(100%-1.5rem)] min-h-[96px] resize-y px-3 py-2 rounded-md bg-[#181818] border border-zinc-800 text-[11px] leading-relaxed text-zinc-300 outline-none focus:border-sky-500" placeholder="Prompt 内容"></textarea>
+                            </article>
+                        </div>
+                        <div v-else class="px-4 py-8 text-center text-[11px] text-zinc-600">当前预设没有 prompts 数组，点击右上角添加第一条 Prompt。</div>
+                    </section>
+
+                    </template>
+                    <section v-if="presetEditorMode === 'scripts'" class="rounded-xl border-[color:var(--border-color)] bg-[color:var(--bg-surface)] shadow-xl overflow-hidden">
+                        <div class="px-4 py-3 border-b border-[color:var(--border-color)] flex items-center justify-between">
+                            <div><h3 class="text-xs font-bold text-violet-400">📜 脚本</h3><p class="text-[10px] text-[color:var(--text-sub)] mt-0.5">编辑当前预设附加的脚本</p></div>
+                            <button @click="addPresetScript" class="px-2.5 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold">＋ 添加脚本</button>
+                        </div>
+                        <div v-if="presetScripts.length" class="p-3 space-y-3">
+                            <article v-for="(script, index) in presetScripts" :key="index" class="rounded-lg border-[color:var(--border-color)] bg-[color:var(--bg-element)] p-3 space-y-2">
+                                <!-- 头部：折叠按钮 + 名称 + 标记 + 操作 -->
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <button @click="togglePresetScriptCollapse(index)" class="text-[color:var(--text-sub)] hover:text-[color:var(--text-main)] text-xs shrink-0 w-4 text-center" :title="presetScriptCollapsed[getScriptPreviewKey(script, index)] ? '展开脚本' : '折叠脚本'">{{ presetScriptCollapsed[getScriptPreviewKey(script, index)] ? '▸' : '▾' }}</button>
+                                    <input v-model="script.name" @input="syncPresetResources('scripts')" class="flex-1 min-w-[120px] bg-transparent border-b border-[color:var(--border-color)] text-xs text-[color:var(--text-main)] px-1 py-1 outline-none focus:border-violet-500" :placeholder="`脚本 ${index + 1} 名称`">
+                                    <span v-if="isRenderScript(script)" class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 whitespace-nowrap" title="脚本含 DOM 渲染逻辑，识别为渲染脚本，可预览渲染效果">✨ 渲染脚本</span>
+                                    <label class="text-[10px] text-[color:var(--text-sub)] whitespace-nowrap"><input type="checkbox" v-model="script.enabled" @change="syncPresetResources('scripts')" class="accent-violet-500"> 启用</label>
+                                    <button @click="togglePresetScriptPreview(index)" class="text-[10px] text-emerald-400 hover:text-emerald-300 whitespace-nowrap" :title="presetScriptPreviews[getScriptPreviewKey(script, index)]?.open ? '收起渲染预览' : '在沙箱 iframe 中预览脚本渲染效果'">✨ {{ presetScriptPreviews[getScriptPreviewKey(script, index)]?.open ? '收起预览' : '渲染预览' }}</button>
+                                    <button @click="removePresetScript(index)" class="text-red-400 text-xs">删除</button>
+                                </div>
+                                <!-- 主体：折叠时隐藏（代码 / 渲染预览 / 说明） -->
+                                <template v-if="!presetScriptCollapsed[getScriptPreviewKey(script, index)]">
+                                    <!-- ✨ 渲染脚本预览区（沙箱 iframe 隔离，脚本运行于无权限环境） -->
+                                    <div v-if="isRenderScript(script) && presetScriptPreviews[getScriptPreviewKey(script, index)]?.open" class="rounded-md border border-emerald-800/50 overflow-hidden bg-[color:var(--bg-surface)]">
+                                        <div v-if="presetScriptPreviews[getScriptPreviewKey(script, index)]?.url" class="relative">
+                                            <div class="px-2 py-1 bg-[color:var(--bg-element)] border-b border-[color:var(--border-color)] flex items-center justify-between">
+                                                <span class="text-[9px] text-emerald-400">✨ 渲染效果（沙箱隔离预览 · 依赖酒馆环境的 API 可能无法运行）</span>
+                                                <button @click="buildPresetScriptPreview(index)" class="text-[9px] text-[color:var(--text-sub)] hover:text-[color:var(--text-main)]">🔄 重新渲染</button>
+                                            </div>
+                                            <iframe :src="presetScriptPreviews[getScriptPreviewKey(script, index)]?.url" sandbox="allow-scripts" class="w-full h-[260px] bg-[#18181b] border-0" title="渲染脚本预览"></iframe>
+                                        </div>
+                                        <div v-else class="p-3 text-[10px] text-red-400">{{ presetScriptPreviews[getScriptPreviewKey(script, index)]?.error || '无法预览' }}</div>
+                                    </div>
+                                    <textarea v-model="script.content" @input="syncPresetResources('scripts')" class="w-full min-h-[180px] resize-y rounded-md bg-[color:var(--bg-element)] border border-[color:var(--border-color)] p-3 font-mono text-[11px] leading-relaxed text-[color:var(--text-main)] outline-none focus:border-violet-500" placeholder="脚本内容"></textarea>
+                                    <input v-if="script.info !== undefined" v-model="script.info" @input="syncPresetResources('scripts')" class="w-full bg-[color:var(--bg-element)] border border-[color:var(--border-color)] rounded-md px-2 py-1 text-[10px] text-[color:var(--text-sub)]" placeholder="脚本说明">
+                                </template>
+                            </article>
+                        </div>
+                        <div v-else class="p-10 text-center text-xs text-[color:var(--text-sub)]">当前预设没有脚本，点击右上角添加。</div>
+                    </section>
+                    <section v-if="presetEditorMode === 'regex'" class="rounded-xl border-[color:var(--border-color)] bg-[color:var(--bg-surface)] shadow-xl overflow-hidden">
+                        <div class="px-4 py-3 border-b border-[color:var(--border-color)] flex items-center justify-between"><div><h3 class="text-xs font-bold text-amber-400">⚡ 正则脚本</h3><p class="text-[10px] text-[color:var(--text-sub)] mt-0.5">编辑当前预设附加的正则脚本</p></div><button @click="addPresetRegex" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold">＋ 添加正则</button></div>
+                        <div v-if="presetRegexScripts.length" class="p-3 space-y-3">
+                            <article v-for="(regex, index) in presetRegexScripts" :key="index" class="rounded-lg border-[color:var(--border-color)] bg-[color:var(--bg-element)] p-3 space-y-2">
+                                <div class="flex items-center gap-2"><input v-model="regex.scriptName" @input="syncPresetResources('regex')" class="flex-1 bg-transparent border-b border-[color:var(--border-color)] text-xs text-[color:var(--text-main)] px-1 py-1 outline-none focus:border-amber-500" :placeholder="`正则 ${index + 1} 名称`"><label class="text-[10px] text-[color:var(--text-sub)] whitespace-nowrap"><input type="checkbox" :checked="!regex.disabled" @change="regex.disabled = !$event.target.checked; syncPresetResources('regex')" class="accent-amber-500"> 启用</label><button @click="removePresetRegex(index)" class="text-red-400 text-xs">删除</button></div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2"><label class="text-[10px] text-[color:var(--text-sub)]">匹配表达式<textarea v-model="regex.findRegex" @input="syncPresetResources('regex')" class="mt-1 w-full min-h-[100px] resize-y rounded-md bg-[color:var(--bg-element)] border border-[color:var(--border-color)] p-2 font-mono text-[11px] text-amber-400 outline-none focus:border-amber-500"></textarea></label><label class="text-[10px] text-[color:var(--text-sub)]">替换文本<textarea v-model="regex.replaceString" @input="syncPresetResources('regex')" class="mt-1 w-full min-h-[100px] resize-y rounded-md bg-[color:var(--bg-element)] border border-[color:var(--border-color)] p-2 font-mono text-[11px] text-emerald-400 outline-none focus:border-amber-500"></textarea></label></div>
+                                <div v-if="regex.trimStrings !== undefined" class="grid grid-cols-1 md:grid-cols-3 gap-2"><label class="text-[10px] text-[color:var(--text-sub)]">去除字符串<textarea v-model="regex.trimStrings" @input="syncPresetResources('regex')" class="mt-1 w-full min-h-[60px] resize-y rounded-md bg-[color:var(--bg-element)] border border-[color:var(--border-color)] p-2 font-mono text-[10px] text-[color:var(--text-main)] outline-none focus:border-amber-500"></textarea></label><label class="text-[10px] text-[color:var(--text-sub)]">应用位置<textarea v-model="regex.placement" @input="syncPresetResources('regex')" class="mt-1 w-full min-h-[60px] resize-y rounded-md bg-[color:var(--bg-element)] border border-[color:var(--border-color)] p-2 font-mono text-[10px] text-[color:var(--text-main)] outline-none focus:border-amber-500"></textarea></label><label class="text-[10px] text-[color:var(--text-sub)]">深度范围<input v-model="regex.minDepth" @input="syncPresetResources('regex')" class="mt-1 w-full bg-[color:var(--bg-element)] border border-[color:var(--border-color)] rounded-md px-2 py-1 text-[10px] text-[color:var(--text-main)]"></label></div>
+                            </article>
+                        </div>
+                        <div v-else class="p-10 text-center text-xs text-[color:var(--text-sub)]">当前预设没有正则脚本，点击右上角添加。</div>
+                    </section>
+                    <section v-if="presetEditorMode === 'json'" class="min-h-[460px] flex flex-col rounded-xl border-[color:var(--border-color)] bg-[color:var(--bg-surface)] shadow-2xl shadow-black/20 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-[color:var(--border-color)] bg-[color:var(--bg-surface)] flex items-center justify-between gap-2 shrink-0">
+                            <div>
+                                <h3 class="text-xs font-bold text-[color:var(--text-main)]">预设内容</h3>
+                                <p class="text-[10px] text-[color:var(--text-sub)] mt-0.5">直接编辑 JSON，支持酒馆不同版本的预设字段</p>
+                            </div>
+                            <span class="px-2 py-1 rounded-md text-[10px] font-mono text-[color:var(--text-sub)] bg-[color:var(--bg-element)] border border-[color:var(--border-color)]">JSON</span>
+                        </div>
+                        <div class="flex-1 p-3 bg-[color:var(--bg-element)]">
+                            <textarea v-model="presetJsonText" @change="applyPresetJson" class="w-full h-full min-h-[400px] resize-none bg-[color:var(--bg-element)] text-[color:var(--text-main)] p-4 rounded-lg border border-[color:var(--border-color)] font-mono text-xs leading-relaxed focus:outline-none focus:border-sky-500/70 focus:ring-1 focus:ring-sky-500/30 transition" spellcheck="false"></textarea>
+                        </div>
+                    </section>
+                </div>
+            </template>
         </div>
 
         <!-- 🌍 引擎 B：世界书深度编辑工作区 (Entry IDE) -->
@@ -908,14 +1118,22 @@
             </div>
         </div>
     </Teleport>
+
+    <!-- 🛠️ 自定义标签大分类管理弹窗 -->
+    <TagCategoryModal v-if="showTagCategoryModal" @close="showTagCategoryModal = false" />
 </template>
 
 <script>
 import { inject, ref, computed, watch } from 'vue';
 import { estimateTokens } from '../utils/tokenEstimate.js';
+import { groupTagsByCategory } from '../utils/tagCategories.js';
+import TagCategoryModal from './TagCategoryModal.vue';
 
 export default {
     name: 'EditorPanel',
+    // ⚠️ Options API 组件注册：模板里 <TagCategoryModal> 首字母大写走 resolveComponent 查组件注册表，
+    //    setup() return 的组件变量不会进入注册表（会被当成未知原生元素空渲染）→ 必须在此显式注册。
+    components: { TagCategoryModal },
     setup() {
         const ctx = inject('appCtx');
 
@@ -937,6 +1155,21 @@ export default {
         const isBatchDeleteTags = ref(false); // 是否处于批量删除标签模式
         const batchSelectedTags = ref(new Set()); // 批量模式下选中的标签集合
 
+        // 🏷️ [标签大分类] 全局标签池按大分类分组（人物关系/角色设定/外貌身材...），标签云更好找
+        const groupedGlobalTags = computed(() => groupTagsByCategory(ctx.globalAvailableTags?.value || []));
+        // 🛠️ [自定义大分类] 分类管理弹窗（新增/重命名/删除自定义分类 + 未归类标签手动归属）
+        const showTagCategoryModal = ref(false);
+        const openTagCategoryModal = () => {
+            showTagCategoryModal.value = true;
+        };
+        // 🏷️ [大分类折叠] 记录被折叠的分类 key（点击分组标题折叠/展开）
+        const collapsedTagGroups = ref(new Set());
+        const toggleTagGroup = (key) => {
+            const next = new Set(collapsedTagGroups.value);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            collapsedTagGroups.value = next;
+        };
+
         // ✅ [状态栏预览] 源码视图折叠（超长源码默认折叠，避免一坨压缩 JS 刷屏）
         const statusSourceExpanded = ref(false);
         const SOURCE_PREVIEW_LIMIT = 800; // 超过此长度默认折叠
@@ -957,7 +1190,7 @@ export default {
             batchSelectedTags.value = s;
         };
         const selectAllBatchTags = () => {
-            batchSelectedTags.value = new Set(ctx.globalAvailableTags.value || []);
+            batchSelectedTags.value = new Set(ctx.globalAvailableTags?.value || []);
         };
         const exitBatchDeleteTags = () => {
             isBatchDeleteTags.value = false;
@@ -976,7 +1209,7 @@ export default {
         const currentEntry = ref(null);
         // 【修复】切换世界书时清空当前选中词条（防旧书词条残留，详情面板 v-model 误改旧书对象）
         watch(
-            () => (ctx.activeWorldbook ? ctx.activeWorldbook.value : null),
+            () => (ctx.activeWorldbook?.value || null),
             () => { currentEntry.value = null; }
         );
         const selectEntry = (entry) => {
@@ -1018,10 +1251,246 @@ export default {
                 currentEntry.value.keysecondary = val.split(',').map(k => k.trim()).filter(k => k !== '');
             }
         });
+
+        // ⚙️ 预设编辑模式与参数配置
+        const presetEditorMode = ref('visual');
+        // 预设编辑器内部 Tab：只针对当前 activePreset，不与角色卡 currentTab 混用
+        const presetScripts = ref([]);
+        const presetRegexScripts = ref([]);
+        const resourceKeys = {
+            scripts: ['scripts', 'script', 'custom_scripts', 'customScripts'],
+            regex: ['regex_scripts', 'regexScripts', 'regex', 'regexes']
+        };
+        // 酒馆预设的资源并不统一放在顶层：酒馆助手脚本实际存于
+        // extensions.tavern_helper.scripts（嵌套对象），旧版误用路径式键名
+        // extensions["tavern_helper/scripts"] 永远匹配不到 → 预设脚本读不出来（v1.8.6 修复）。
+        // 正则也可能位于 SPreset.RegexBinding.regexes。
+        const resourceSource = (data, type) => {
+            const extensions = data?.extensions;
+            const candidates = type === 'scripts'
+                ? [
+                    [extensions?.tavern_helper, 'scripts'], // 🔧 修复：嵌套对象，酒馆助手脚本真实位置
+                    [extensions, 'tavern_helper/scripts'],
+                    [extensions, 'tavern_helper\u002fscripts'],
+                    [data, 'scripts'], [data, 'script'],
+                    [extensions, 'scripts'], [extensions, 'script'],
+                    [data, 'custom_scripts'], [data, 'customScripts']
+                ]
+                : [
+                    [data, 'regex_scripts'], [data, 'regexScripts'],
+                    [extensions, 'regex_scripts'], [extensions, 'regexScripts'],
+                    [extensions?.SPreset?.RegexBinding, 'regexes'],
+                    [data, 'regex'], [data, 'regexes']
+                ];
+            const found = candidates.find(([container, key]) => container && container[key] !== undefined);
+            return found ? { container: found[0], key: found[1] } : { container: data, key: resourceKeys[type][0] };
+        };
+        const normalizeResourceList = value => {
+            if (Array.isArray(value)) return value;
+            if (value && typeof value === 'object') return Object.values(value);
+            if (typeof value === 'string' && value.trim()) return [{ content: value }];
+            return [];
+        };
+        const refreshPresetResources = data => {
+            if (!data || typeof data !== 'object') {
+                presetScripts.value = [];
+                presetRegexScripts.value = [];
+                return;
+            }
+            const scriptSource = resourceSource(data, 'scripts');
+            const regexSource = resourceSource(data, 'regex');
+            presetScripts.value = normalizeResourceList(scriptSource.container[scriptSource.key]).map(item =>
+                item && typeof item === 'object' ? item : { content: String(item ?? '') });
+            presetRegexScripts.value = normalizeResourceList(regexSource.container[regexSource.key]).map(item =>
+                item && typeof item === 'object' ? item : { findRegex: String(item ?? ''), replaceString: '' });
+        };
+        const syncPresetResources = type => {
+            const data = ctx.activePreset?.value?.data;
+            if (!data) return;
+            const source = resourceSource(data, type);
+            source.container[source.key] = type === 'scripts' ? presetScripts.value : presetRegexScripts.value;
+            presetJsonText.value = JSON.stringify(data, null, 4);
+        };
+        const addPresetScript = () => {
+            presetScripts.value.push({ name: `脚本 ${presetScripts.value.length + 1}`, content: '', enabled: true, type: 'script' });
+            syncPresetResources('scripts');
+        };
+        const removePresetScript = index => { presetScripts.value.splice(index, 1); syncPresetResources('scripts'); };
+
+        // =========================================================
+        // ✨ 预设「渲染脚本」识别与预览（v1.8.6 新增）
+        //   酒馆助手（tavern_helper）脚本的 content 是向聊天 DOM 注入 UI 的 JS 代码
+        //   （悬浮窗/状态栏/面板等），读出来不应只是代码文本 —— 识别为「渲染脚本」
+        //   并在脚本工作区提供沙箱 iframe 预览渲染效果（所见即所得）。
+        // =========================================================
+        const isRenderScript = (script) => {
+            const c = String(script?.content || '');
+            if (!c) return false;
+            // 渲染特征：DOM 注入 / HTML 模板 / 外链加载
+            return /\x3C(?:\/?\s*(?:body|div|span|table|iframe|style|link)\b)|innerHTML|insertAdjacentHTML|createElement|document\.write|\.load\(\s*['"]|srcdoc/i.test(c);
+        };
+        // 每个脚本的预览状态（open 展开 / url 沙箱地址 / error 构建失败信息）
+        const presetScriptPreviews = ref({});
+        // 🔧 v1.8.6 脚本卡片折叠状态（独立 ref map，不写回预设数据，避免污染 JSON）
+        const presetScriptCollapsed = ref({});
+        const getScriptPreviewKey = (script, index) => script?.id || `idx_${index}`;
+        const togglePresetScriptCollapse = (index) => {
+            const script = presetScripts.value[index];
+            if (!script) return;
+            const key = getScriptPreviewKey(script, index);
+            presetScriptCollapsed.value[key] = !presetScriptCollapsed.value[key];
+        };
+        // 构建沙箱 iframe srcdoc：注入最小兼容环境（$ / jQuery / errorCatched 占位），执行脚本 content
+        const buildPresetScriptPreview = (index) => {
+            const script = presetScripts.value[index];
+            if (!script) return;
+            const key = getScriptPreviewKey(script, index);
+            const state = presetScriptPreviews.value[key] || (presetScriptPreviews.value[key] = { open: false, url: null, error: null });
+            try {
+                const content = String(script.content || '');
+                if (!content) { state.error = '脚本内容为空，无法预览。'; state.url = null; return; }
+                // 🔒 安全：data: URL + iframe sandbox（无 allow-same-origin），脚本运行于隔离环境，无法访问应用
+                // ⚠️ 所有 HTML 标签的尖括号用 \x3C 十六进制转义（\x3C → 左尖括号）：源码不含
+                //    script 与 style 标签序列，Vue SFC 解析器不会把 script 块内的 HTML 字符串
+                //    误当成标签 tokenize（否则报 Invalid end tag）；运行时 \x3C 还原为左尖括号，
+                //    HTML 输出完全正常。content 内 script 闭合标签替换为带反斜杠形式防提前终止。
+                const html = [
+                    '\x3C!DOCTYPE html>\x3Chtml>\x3Chead>\x3Cmeta charset="utf-8">',
+                    '\x3Cstyle>html,body{width:100%;height:100%;margin:0;background:#18181b;color:#e4e4e7;font-family:system-ui,sans-serif;overflow:auto}\x3C/style>',
+                    '\x3C/head>\x3Cbody>',
+                    '\x3Cscript>',
+                    "window.errorCatched = (fn) => function(...a){ try { return fn.apply(this, a); } catch (e) { try{console.error('脚本异常:', e);}catch(_){} } };",
+                    "window.$ = window.jQuery = (fn) => { const obj = { ready:(cb)=>{try{cb&&cb();}catch(e){}}, on:()=>obj, off:()=>obj, load:()=>obj, css:()=>obj, html:(v)=>v===undefined?null:obj, text:(v)=>v===undefined?'':obj, append:()=>obj, prepend:()=>obj, remove:()=>obj, show:()=>obj, hide:()=>obj, toggle:()=>obj, attr:()=>obj, addClass:()=>obj, removeClass:()=>obj, val:(v)=>v===undefined?'':obj, find:()=>[], each:(cb)=>{try{cb&&cb(0,obj);}catch(e){}} }; if (typeof fn === 'function') { try { fn(); } catch (e) { try{console.error(e);}catch(_){} } } return obj; };",
+                    "window.jQuery.ajax = () => ({ done: (cb)=>{try{cb&&cb({});}catch(e){}} , fail: (cb)=>{try{cb&&cb();}catch(e){}} });",
+                    '\x3C/script>\x3Cscript>' + content.replace(/<\/script>/gi, '<\\/script>') + '\x3C/script>',
+                    '\x3C/body>\x3C/html>'
+                ].join('\n');
+                state.url = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+                state.error = null;
+            } catch (e) {
+                state.url = null;
+                state.error = '渲染预览构建失败: ' + e.message;
+            }
+        };
+        const togglePresetScriptPreview = (index) => {
+            const script = presetScripts.value[index];
+            if (!script) return;
+            const key = getScriptPreviewKey(script, index);
+            const state = presetScriptPreviews.value[key] || (presetScriptPreviews.value[key] = { open: false, url: null, error: null });
+            state.open = !state.open;
+            if (state.open) buildPresetScriptPreview(index);
+        };
+        const addPresetRegex = () => {
+            presetRegexScripts.value.push({ scriptName: `正则 ${presetRegexScripts.value.length + 1}`, findRegex: '', replaceString: '', disabled: false });
+            syncPresetResources('regex');
+        };
+        const removePresetRegex = index => { presetRegexScripts.value.splice(index, 1); syncPresetResources('regex'); };
+        const presetAdvancedParams = [
+            { key: 'seed', label: '随机种子', type: 'number', step: '1', min: '0', placeholder: '留空表示随机' },
+            { key: 'min_p', label: 'Min P', type: 'number', step: '0.01', min: '0', max: '1', placeholder: '例如 0.05' },
+            { key: 'repetition_penalty', label: '重复惩罚', type: 'number', step: '0.05', min: '0', max: '3', placeholder: '例如 1.0' },
+            { key: 'stop', label: '停止序列', type: 'text', placeholder: '多个值用逗号分隔' }
+        ];
+        const presetBasicParams = [
+            { key: 'temperature', label: 'Temperature', type: 'number', step: '0.1', min: '0', max: '2', placeholder: '例如 1.0' },
+            { key: 'top_p', label: 'Top P', type: 'number', step: '0.05', min: '0', max: '1', placeholder: '例如 1.0' },
+            { key: 'top_k', label: 'Top K', type: 'number', step: '1', min: '0', max: '200', placeholder: '例如 40' },
+            { key: 'max_tokens', label: '最大回复长度', type: 'number', step: '1', min: '1', max: '200000', placeholder: '例如 4096' },
+            { key: 'frequency_penalty', label: 'Frequency Penalty', type: 'number', step: '0.1', min: '-2', max: '2', placeholder: '例如 0' },
+            { key: 'presence_penalty', label: 'Presence Penalty', type: 'number', step: '0.1', min: '-2', max: '2', placeholder: '例如 0' }
+        ];
+        const presetPrompts = ref([]);
+        const refreshPresetPrompts = (data) => {
+            const prompts = data && Array.isArray(data.prompts) ? data.prompts : [];
+            presetPrompts.value = prompts.map((prompt, index) => ({
+                __editorId: prompt.__editorId || `${Date.now()}-${index}-${Math.random()}`,
+                ...prompt,
+                name: prompt.name || prompt.identifier || `Prompt ${index + 1}`,
+                role: prompt.role || 'system',
+                content: prompt.content || '',
+                enabled: prompt.enabled !== false,
+                expanded: false
+            }));
+        };
+        const allPresetPromptsExpanded = computed(() => presetPrompts.value.length > 0 && presetPrompts.value.every(prompt => prompt.expanded));
+        const togglePresetPrompt = (index) => {
+            const prompt = presetPrompts.value[index];
+            if (prompt) prompt.expanded = !prompt.expanded;
+        };
+        const toggleAllPresetPrompts = () => {
+            const expanded = !allPresetPromptsExpanded.value;
+            presetPrompts.value.forEach(prompt => { prompt.expanded = expanded; });
+        };
+        const syncPresetJson = () => {
+            if (!ctx.activePreset?.value?.data) return;
+            ctx.activePreset.value.data.prompts = presetPrompts.value.map(({ __editorId, expanded, ...prompt }) => prompt);
+            presetJsonText.value = JSON.stringify(ctx.activePreset.value.data, null, 4);
+        };
+        const addPresetPrompt = () => {
+            presetPrompts.value.push({ __editorId: `${Date.now()}-${Math.random()}`, name: `Prompt ${presetPrompts.value.length + 1}`, role: 'system', identifier: '', content: '', enabled: true, expanded: true });
+            syncPresetJson();
+        };
+        const removePresetPrompt = (index) => {
+            presetPrompts.value.splice(index, 1);
+            syncPresetJson();
+        };
+        const movePresetPrompt = (index, offset) => {
+            const target = index + offset;
+            if (target < 0 || target >= presetPrompts.value.length) return;
+            const [prompt] = presetPrompts.value.splice(index, 1);
+            presetPrompts.value.splice(target, 0, prompt);
+            syncPresetJson();
+        };
+        const promptDragIndex = ref(null);
+        const startPromptDrag = (index, event) => {
+            promptDragIndex.value = index;
+            if (event?.dataTransfer) {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', String(index));
+            }
+        };
+        const dropPrompt = (targetIndex, event) => {
+            const sourceIndex = Number(event?.dataTransfer?.getData('text/plain'));
+            if (!Number.isInteger(sourceIndex) || sourceIndex === targetIndex) return;
+            const [prompt] = presetPrompts.value.splice(sourceIndex, 1);
+            presetPrompts.value.splice(sourceIndex < targetIndex ? targetIndex - 1 : targetIndex, 0, prompt);
+            syncPresetJson();
+        };
+        const endPromptDrag = () => { promptDragIndex.value = null; };
+        const getPresetParam = (key) => {
+            const data = ctx.activePreset?.value?.data;
+            return data && data[key] !== undefined && data[key] !== null ? data[key] : '';
+        };
+        const updatePresetParam = (key, value, type) => {
+            if (!ctx.activePreset?.value?.data || value === '') return;
+            ctx.activePreset.value.data[key] = type === 'number' ? Number(value) : value;
+            presetJsonText.value = JSON.stringify(ctx.activePreset.value.data, null, 4);
+        };
+
+        // ⚙️ 预设 JSON 编辑器：文本编辑便于兼容不同酒馆预设格式
+        const presetJsonText = ref('');
+        watch(() => ctx.activePreset && ctx.activePreset.value, (preset) => {
+            presetJsonText.value = preset ? JSON.stringify(preset.data || {}, null, 4) : '';
+            refreshPresetPrompts(preset && preset.data);
+            refreshPresetResources(preset && preset.data);
+        }, { immediate: true });
+        const applyPresetJson = () => {
+            if (!ctx.activePreset || !ctx.activePreset.value) return;
+            try {
+                const parsed = JSON.parse(presetJsonText.value);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('预设必须是 JSON 对象');
+                ctx.activePreset.value.data = parsed;
+                refreshPresetPrompts(parsed);
+                refreshPresetResources(parsed);
+            } catch (err) {
+                ctx.nativeAlert(`预设 JSON 格式错误: ${err.message}`, 'error');
+                presetJsonText.value = JSON.stringify(ctx.activePreset.value.data || {}, null, 4);
+            }
+        };
         return {
-            // ✅ [状态栏预览] 模板库折叠（📚 渲染模板库 / 📜 世界书指令模板库 各自可折叠收起）
-            statusTemplateLibCollapsed: ref(false),
-            statusPromptLibCollapsed: ref(false),
+            // ✅ [状态栏预览] 模板库合并：📚 渲染模板 / 📜 世界书指令 双选项卡 + 整体折叠
+            statusLibTab: ref('render'),
+            statusLibCollapsed: ref(false),
             isWbSidebarCollapsed,
             isToolbarMenuOpen,
             toolbarMenuBtn,
@@ -1036,6 +1505,42 @@ export default {
             formatKeys,
             primaryKeysStr,
             secondaryKeysStr,
+            presetEditorMode,
+            presetScripts,
+            presetRegexScripts,
+            addPresetScript,
+            removePresetScript,
+            addPresetRegex,
+            removePresetRegex,
+            isRenderScript,
+            presetScriptPreviews,
+            presetScriptCollapsed,
+            getScriptPreviewKey,
+            togglePresetScriptPreview,
+            buildPresetScriptPreview,
+            togglePresetScriptCollapse,
+            presetBasicParams,
+            presetAdvancedParams,
+            getPresetParam,
+            updatePresetParam,
+            presetPrompts,
+            allPresetPromptsExpanded,
+            togglePresetPrompt,
+            toggleAllPresetPrompts,
+            addPresetPrompt,
+            removePresetPrompt,
+            movePresetPrompt,
+            promptDragIndex,
+            startPromptDrag,
+            dropPrompt,
+            endPromptDrag,
+            syncPresetJson,
+            presetJsonText,
+            applyPresetJson,
+            activePreset: ctx.activePreset,
+            saveActivePreset: ctx.saveActivePreset,
+            renamePreset: ctx.renamePreset,
+            openPresetInFolder: ctx.openPresetInFolder,
             appMode: ctx.appMode,
             cardData: ctx.cardData,
             imgUrl: ctx.imgUrl,
@@ -1067,6 +1572,12 @@ export default {
             addSingleTag: ctx.addSingleTag,
             isEditingSystemTags: ctx.isEditingSystemTags,
             globalAvailableTags: ctx.globalAvailableTags,
+            groupedGlobalTags,
+            collapsedTagGroups,
+            toggleTagGroup,
+            // 🛠️ [自定义大分类] 分类管理弹窗
+            showTagCategoryModal,
+            openTagCategoryModal,
             newGlobalTagInput: ctx.newGlobalTagInput,
             addTagToGlobalPool: ctx.addTagToGlobalPool,
             removeTagFromGlobalPool: ctx.removeTagFromGlobalPool,

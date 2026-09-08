@@ -49,8 +49,11 @@
                         <button @click="batchChangeCategoryModal" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">📂 批量修改分类分组</button>
                         <button @click="cleanGlobalTagsPrompt" class="px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white">🧹 清理无效全局标签</button>
                         <div class="h-px bg-zinc-700 my-1"></div>
-                        <button @click="startDedupeScan" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex items-center justify-between text-amber-400">
-                            <span>🔍 智能查重与版本清理...</span>
+                        <button @click="startSmartDedupe" class="px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex items-center justify-between text-amber-400">
+                            <span>🔍 同名查重与版本清理（{{ dedupeTargetLabel }}）...</span>
+                        </button>
+                        <button @click="startContentDedupeScan" class="px-3 py-1.5 text-left hover:bg-purple-600 hover:text-white flex items-center justify-between text-purple-400">
+                            <span>🧬 版本查重：跨名称识别相似内容（{{ dedupeTargetLabel }}）...</span>
                         </button>
                     </div>
                 </div>
@@ -127,7 +130,14 @@
                                           class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"></span>
                                 </button>
                             </div>
-                            <span class="block text-[10px] text-zinc-500 mt-1">开启后，新导入的卡片不采用其自带的杂乱标签，防止污染全局标签池</span>
+                            <span class="block text-[10px] text-zinc-500 mt-1">仅对新导入的卡片生效；历史残留请用下方「清洗历史外来标签」</span>
+                        </div>
+                        <div class="px-3 py-2 border-b border-zinc-700/50">
+                            <button @click="cleanForeignTagsFromLibrary()" class="w-full px-2 py-1.5 text-left rounded hover:bg-amber-600 hover:text-white flex items-center justify-between gap-2">
+                                <span>🧹 清洗历史外来标签</span>
+                                <span class="text-[10px] text-zinc-500 group-hover:text-amber-100">执行</span>
+                            </button>
+                            <span class="block text-[10px] text-zinc-500 mt-1">清除开关开启前已收编进卡片的外来标签（保留系统标签库/自动规则/已归类标签），物理落盘</span>
                         </div>
                         <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between mb-1">
@@ -172,16 +182,16 @@
                         <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between text-zinc-300 mb-1">
                                 <span>🖼️ 界面 UI 字号</span>
-                                <span class="text-indigo-400 font-mono font-bold">{{ appSettings.uiFontSize }}px</span>
+                                <span class="text-indigo-400 font-mono font-bold">{{ uiFontSizeDraft }}px</span>
                             </div>
-                            <input type="range" v-model.number="appSettings.uiFontSize" min="10" max="28" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                            <input type="range" v-model.number="uiFontSizeDraft" min="10" max="28" step="1" @change="commitUiFontSize" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
                         </div>
                         <div class="px-3 py-2 border-b border-zinc-700/50">
                             <div class="flex items-center justify-between text-zinc-300 mb-1">
                                 <span>📝 工作区编辑字号</span>
-                                <span class="text-amber-400 font-mono font-bold">{{ appSettings.fontSize }}px</span>
+                                <span class="text-amber-400 font-mono font-bold">{{ fontSizeDraft }}px</span>
                             </div>
-                            <input type="range" v-model.number="appSettings.fontSize" min="10" max="36" step="1" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
+                            <input type="range" v-model.number="fontSizeDraft" min="10" max="36" step="1" @change="commitFontSize" class="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
                         </div>
                         <button @click="resetPersonalizationSettings" class="px-3 py-1.5 text-left hover:bg-zinc-700 text-zinc-300 mt-1">🎨 重置界面外观与字号</button>
                         <button @click="resetApiSettings" class="px-3 py-1.5 text-left hover:bg-rose-600 hover:text-white text-rose-400">🔄 重置 API 接口参数</button>
@@ -238,12 +248,32 @@
 </template>
 
 <script>
-import { inject } from 'vue';
+import { inject, computed, ref, watch } from 'vue';
 
 export default {
     name: 'HeaderBar',
     setup() {
         const ctx = inject('appCtx');
+        // 🎯 智能查重目标标签：随当前视图（角色卡/世界书/预设）动态变化
+        const dedupeTargetLabel = computed(() => {
+            if (ctx.appMode.value === 'worldbooks') return '世界书';
+            if (ctx.appMode.value === 'presets') return '预设';
+            return '角色卡';
+        });
+
+        // 🔧 字号滑块性能修复：滑块绑定本地草稿值（拖动只更新旁边数字，零全局副作用），
+        //    松手(@change)才提交到全局 appSettings——避免拖动期间每帧触发全局 CSS 变量
+        //    变更 + localStorage 写入 + 全页面 reflow/repaint 导致的卡顿。
+        const uiFontSizeDraft = ref(ctx.appSettings.value.uiFontSize ?? 13);
+        const fontSizeDraft = ref(ctx.appSettings.value.fontSize ?? 14);
+        // 外部变更（如「重置外观与字号」按钮）时同步草稿值
+        watch(() => [ctx.appSettings.value.uiFontSize, ctx.appSettings.value.fontSize], ([u, f]) => {
+            uiFontSizeDraft.value = u;
+            fontSizeDraft.value = f;
+        });
+        // 松手一次性提交 → 全局字号生效 + 持久化各只触发一次
+        const commitUiFontSize = () => { ctx.appSettings.value.uiFontSize = uiFontSizeDraft.value; };
+        const commitFontSize = () => { ctx.appSettings.value.fontSize = fontSizeDraft.value; };
         return {
             importFileInput: ctx.importFileInput,
             handleImportFiles: ctx.handleImportFiles,
@@ -263,9 +293,12 @@ export default {
             openAITagModal: ctx.openAITagModal,
             batchChangeCategoryModal: ctx.batchChangeCategoryModal,
             cleanGlobalTagsPrompt: ctx.cleanGlobalTagsPrompt,
-            startDedupeScan: ctx.startDedupeScan,
+            startSmartDedupe: ctx.startSmartDedupe,
+            startContentDedupeScan: ctx.startContentDedupeScan,
+            dedupeTargetLabel,
             viewOptions: ctx.viewOptions,
             sanitizeImportedTags: ctx.sanitizeImportedTags,
+            cleanForeignTagsFromLibrary: ctx.cleanForeignTagsFromLibrary,
             snapshotConfig: ctx.snapshotConfig,
             cleanAllSnapshots: ctx.cleanAllSnapshots,
             cleanOrphanSnapshots: ctx.cleanOrphanSnapshots,
@@ -273,6 +306,10 @@ export default {
             setTheme: ctx.setTheme,
             theme: ctx.theme,
             appSettings: ctx.appSettings,
+            uiFontSizeDraft,
+            fontSizeDraft,
+            commitUiFontSize,
+            commitFontSize,
             resetPersonalizationSettings: ctx.resetPersonalizationSettings,
             resetApiSettings: ctx.resetApiSettings,
             checkForUpdatesManual: ctx.checkForUpdatesManual,

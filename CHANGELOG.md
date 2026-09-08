@@ -1,7 +1,252 @@
-# SillyTavern 角色卡管理器 · v1.6.2 → v1.8.9 更新汇总
+# SillyTavern 角色卡管理器 · v1.6.2 → v2.2.4 更新汇总
 
-> 更新周期：2026-08-15 ~ 2026-08-23
+> 更新周期：2026-08-15 ~ 2026-09-07
 > 技术栈：Electron + Vue3 + Tailwind + ECharts
+
+---
+
+## 🧩 v2.2.4 —— 插件效果预览（实验标注）+ 预览渲染链路修复
+
+> 背景：收尾插件「效果」预览的三类问题——①预览内联脚本被生产 CSP 拦截全部静默不执行；②部分插件空白（宿主 DOM 缺官方挂载点，插件 jQuery 空对象 `.append()` 静默失败）；③预览内 HTML 净化不彻底（消息/模板中的 `<style>`/事件属性等污染）。同时按用户要求把「效果」预览标注为实验性（沙箱仅实现部分酒馆接口，复杂插件可能空白，对外如实说明）。
+
+### ✨ UI：效果预览标注实验性
+- 「效果」页签加琥珀色「实验」徽标；顶栏如实提示：沙箱仅模拟部分酒馆接口，依赖完整酒馆 API/DOM 的插件可能空白/不完整
+- 对外文案按双版规范：用户可看版（简、如实、不吹）见 `RELEASE_NOTES.md`；本文件为内部详细版
+
+### 🧱 CSP 拦截预览脚本（改用独立 `app://` 内存路由）
+- 根因：生产 CSP `script-src 'self' app:` 无 unsafe-inline，`srcdoc`/`data:`/`blob:` iframe 继承父页 CSP → 预览全部内联脚本被拦
+- `main.js`：新增 `previewStore`（Map，上限 32 份/5MB）+ `setPluginPreview`；`registerAppProtocol` 增加 `/__jsk_preview__/` 前缀内存路由（命中直接返回 HTML，不落盘）；`onHeadersReceived` 对预览路径跳过 CSP 注入
+- `preload.js`：暴露 `setPluginPreview(html)` IPC；`PluginWorkspace.vue`：`previewState` 由 `html`(srcdoc) 改为 `url`(src)，生成 HTML 后经 IPC 换独立 `app://` URL
+
+### 🧩 插件空白（补齐宿主 DOM 官方挂载点）
+- 根因：`buildHostDom()` 缺 SillyTavern 官方挂载容器，`$('#token_counter_wand_container')` 等 `append()` 落到空 jQuery 对象 → 静默失败 → 空白
+- 对齐官方 `public/index.html` + `templates/wandMenu.html` 补齐：`#extensionsMenu` 内 15 个 `*_wand_container`；`#extensions_settings`(16) + `#extensions_settings2`(16) 个 `*_container`（memory→`#summarize_container`、tts→`#tts_container`、translate→`#translation_container`）；新增 `#leftSendForm`、`#zoomed_avatar_template`（memory doPopout 复用）
+
+### 🔒 内容净化管线（对齐官方 chats.js / templates.js）
+- `escapeHtml` 补五字符 `& < > " '`（此前漏 `'`，对齐 utils.js）
+- `renderExtensionTemplate`：渲染后默认 `DOMPurify.sanitize`（可显式传 `false` 关闭）
+- `messageFormatting`：补全 `makeHtml → encodeStyleTags → DOMPurify.sanitize(MESSAGE_SANITIZE + ADD_TAGS:['custom-style']) → decodeStyleTags`；新增 `encodeStyleTags`/`decodeStyleTags`（`hostStubPure.js` 纯函数，字符串级等价实现：去 `@import`/含 `://` 声明、类名加 `custom-` 前缀、普通选择器加 `.mes_text` 前缀）
+- 内联真实 DOMPurify UMD（`purify.min.js?raw`）作为净化引擎
+
+### 🧪 测试
+- 新增 6 组纯逻辑单测（escapeHtml 五字符 / encodeStyleTags / decodeStyleTags 还原+前缀+去外部资源），全量 128 用例通过
+
+---
+
+## 🧩 v2.2.3 —— 插件工作区 + 内置大分类定制 + 效果页渲染修复
+
+> 背景：新增「插件」Tab，支持把 SillyTavern 插件（酒馆助手 JSON 脚本 / 用户脚本 / SlashRunner 命令 / 扩展工程）纳入工具统一管理，并在工具内模拟酒馆运行、预览插件效果，无需导入真实酒馆。同时开放内置 18 大分类的自定义（改名/删除/恢复），并修复「效果」页沙箱预览的渲染失败问题。
+
+### 🧩 侧边栏新增「插件」Tab
+- 预设 Tab 后新增「🧩 插件」Tab（violet 配色），计数徽标实时显示插件数
+- 接入方式：`📂 打开插件目录`（本地扫描）；原「Git 仓库链接导入」已剥离封存（详见 `docs/history/git-import-archive.md`）
+- 插件列表：类型徽标（酒馆助手/用户脚本/命令/扩展）、来源标注、简介摘要、右键菜单（定位/删除）
+
+### 🧬 插件形态归一（`js/utils/pluginScanner.js` 纯逻辑，可单测）
+- 识别四类来源：酒馆助手 JSON 脚本（`{id,name,info,content,buttons[]}`）、带 `==UserScript==` 头的注入脚本、`SlashRunner.registerCommand` 命令脚本、扩展工程（`manifest.json` + `dist/*.bundle.js`）
+- 内容形态判别 `detectScriptKind`：A=jQuery 注入 / B=userscript 头 / C=SlashRunner 命令
+- `manifest.json` 入口解析 `resolveManifestEntries`：兼容 `entry/main/js/index/css` 与原生 `extensions[]` 多字段命名
+- 预览资源挑选 `resolvePreviewAssets`：从文件树去重挑出 js/css
+- 新增 9 组单测（detectScriptKind / isPluginJson / isExtensionManifest / normalize* / resolve* 等），全量 90 用例绿
+
+### 📄 / ✨ 工作区双选项卡（`js/components/PluginWorkspace.vue`）
+- `📄 代码`：散落脚本/酒馆助手直出源码；扩展工程展示文件树 + 源码只读查看器
+- `✨ 效果`：沙箱 iframe（`sandbox="allow-scripts"`，无 `allow-same-origin`）内模拟酒馆运行，渲染插件注入的悬浮球/按钮/面板
+
+### 🧪 酒馆宿主桩（`js/plugins/hostStub.js`）
+- 迷你 jQuery 兼容层（`$`/`jQuery` 的 DOM 增删查改、事件、ajax stub）
+- `eventSource` / `SlashRunner` / `extension_settings` / `saveSettingsDebounced` 等常用全局 stub
+- `GM_*` userscript 空实现 + 内存 localStorage（data: URL 沙箱下原生 localStorage 不可用）
+- 宿主 DOM 骨架（`#chat` / `#options` / `#right-nav-panel`），达基线「悬浮球出现 → 点击弹面板」
+
+### 🔒 安全与 IPC（`main.js` / `preload.js`）
+- 新增 `plugin:scan` / `plugin:readFile` 两个 IPC
+- 路径白名单校验（`isPathAllowed`）、文本类型限制、脚本 2MB 体积上限
+
+### 🔄 启停与记忆
+- `localStorage` 记忆上次插件目录，启动自动静默恢复扫描
+
+### 🛠️ 内置 18 大分类自定义（改名 / 删除(隐藏) / 恢复）
+- `tagCategories.js` / `TagCategoryModal.vue`：内置大分类开放改名、删除（=隐藏，非物理删）、一键恢复默认
+- `useConfigPersistence.js`：内置分类定制持久化（`app_config.json`），重启不丢
+- 新增独立 Electron CDP 端到端脚本 `scripts/builtin-cat-test.mjs`（改名/删除/恢复/清理全链路）
+
+### 🔧 效果页沙箱预览渲染修复（`Unexpected token ':'` 根因消除）
+- **路径分隔符匹配 bug**（`pluginScanner.js`）：`manifest.js` 声明正斜杠 `dist/index.js`，而 `collectExtensionFiles` 生成反斜杠路径，`endsWith` 失配 → bundle 读不到、回退相对路径。统一 `/` 归一后再比较
+- **宿主桩补齐全局 API**（`hostStub.js`）：`getPresetManager` / `reloadMarkdownProcessor` / `characters`（数组） / `#send_form` 节点——消除扩展 bundle 顶层立即执行时的运行时崩溃
+- 三种插件形态（真实扩展 bundle / 样例 bundle / SlashRunner 散落脚本）经独立 Electron 复现全部 0 错误、正常渲染
+
+---
+
+## 🧹 v2.2.1 —— 历史外来标签一键清洗（Bug 修复版）
+
+> 背景：`导入时忽略卡片自带标签` 开关只对「新导入」生效。开关开启前导入的历史卡，其外来标签已被旧逻辑收编进 `customTags` 并永久写回 PNG（`persistCardUpdate` union 回写），且全局标签池无条件聚合 `customTags` → 表现为「开关似乎无效」的体感残留。
+
+### 🧹 新增「清洗历史外来标签」一键工具（设置菜单，`useTags.cleanForeignTagsFromLibrary`）
+- 全库扫描词表外的外来标签（`customTags` 与原生 `data.tags` 双清，兼容 V1 字符串形 tags）
+- 白名单 = 系统/常用标签库 + 自动打标规则标签 + 用户手动归类过的标签 + 自定义关键词库（大小写不敏感，兼容手动归属存小写键）
+- 确认前预览将清除标签数与受影响卡片数；确认后逐张物理落盘（复用批量进度 Toast 与 `runWithProgress`）
+- 保留策略：如需保留个别词表外标签，先将其加入「系统/常用标签库」再执行本清洗
+
+### 📝 开关文案澄清
+- 设置菜单开关副文字改为「仅对新导入的卡片生效；历史残留请用下方清洗工具」，消除「开关无效」误解
+
+### 🤖 AI 归类转正 + 自动建类增强（原「实验」标记移除）
+- 背景：AI 归类原只允许输出现有分类 key，模型给出的「不在现有分组」的分类名会被强制回 other 丢弃（`TagCategoryModal` 345 行）
+- `resolveTagCategoryTarget`（tagCategories.js）：归一 AI 返回值——命中内置 key/中文名、自定义 key/name → 用现有；其余经合理性过滤（限 12 字内、拒绝纯符号数字）→ 标记为新分类候选
+- 判定纪律改「按语义成组自拟」：多个作品/IP/专名可聚成同一自拟简洁中文类名（如多个游戏→「游戏角色」、多部动画→「番剧动画」）统一承接；孤立专名/散杂标签仍 other，绝不单标签自造类
+- 建议视图：未命中的行标「🆕 新建」徽标 + 高亮，下拉新增「🆕 将自动新建」分组可改；应用时自动 `addCustomTagCategory` 建类并把标签归入（建失败回退现有或保留 other）
+- 移除 `TagCategoryModal` 全部 4 处「实验」标记，AI 归类转正
+
+### 🔧 修复：自定义分类 key 碰撞 + 同名规范化（★ 相似 BUG 全查）
+- 根因：`addCustomTagCategory` key = `Date.now().toString(36)`，同一毫秒连续建多个分类（AI 一次应用连建必触发）→ key 碰撞、不同名分类共用 key、标签归属错乱/UI 重复条目
+- 修复：key 追加随机段；`normalizeTagName`（零宽/全角空格/NBSP 折叠）判重；`addCustomTagCategory` 幂等（同名返回已有 key）；`mergeDuplicateTagCategories` 合并同名变体并迁移归属；`ensureUniqueCustomCategoryKeys` 修复历史同 key 条目
+- 相似 BUG 全仓扫描：其余所有时间戳 key/uid 生成均已带随机段，无同类隐患
+- 测试：新增 key 唯一/规范化/幂等/合并用例（全量 78 用例绿）
+
+---
+
+## 🏷️ v2.2.0 —— 标签大分类体系 + 自定义大分类 + 实验·AI 归类（功能版）
+
+### 🗂️ 标签大分类体系（18 大分类 + 折叠 + 向量辅助）
+- 标签云按 18 大分类分组（人物关系/身份职业/性格特质/角色设定/外貌身材/情境场所/时代背景/力量体系/题材世界观/种族物种/情感基调/故事剧情/内容分级/性玩法/玩法类型/卡片功能/文风语言/其他），分类可点击折叠
+- 四级归类策略：精确特例 → 斜杠复合词首段 → 关键词规则 → 向量语义兜底（阈值 0.35）
+- 单字词精确特例防子串误伤（ai→卡片、sm→性、jk→学生、cot→提示链等）
+- 🔧 规则层记忆化缓存：大库标签反复分组从「扫上千关键词」降到 O(1)
+- 万卡库（11186 张）1520 个真实标签 7 轮深度收编：「其他」1037 → 236（约 78% 覆盖率）
+
+### 🛠️ 自定义大分类 + 手动批量归属（`TagCategoryModal.vue` 新弹窗）
+- 分类弹窗：新增/重命名/删除自定义分类；删除自动清其下标签归属；重启持久化（`app_config.json`）
+- 目标分类驱动批量勾选：先选目标分类 → 勾选/子串全选 → 一次批量归入，落盘一次不卡
+- 手动归属优先级最高，覆盖自动/向量分类；分组展示插在「其他」之前
+
+### 🧪 实验 · AI 大模型归类（规则即提示词）
+- 把 18 分类语义 + 自定义分类 + 判定纪律编译成 System Prompt，分批（120/批）调用已配置大模型给「其他」标签归类
+- 结果逐条下拉核对后应用（不盲信模型）；作品/IP/人名等专名强制归「其他」
+- ⚠️ 实验特性：依赖本地 API 中转可用性；主进程请求加 120s 超时保护（防黑洞挂死）
+
+### ⚡ 性能与修复
+- 启动后索引/Token 预热等蒙版淡出后再执行，不再抢首屏（拖动跟手）
+- `package.json` build:web 修复：`web` 目录不存在时 `&&` 短路导致 vite 不构建
+
+---
+
+## 🔧 v2.1.3 —— 标签持久化 / 向量模型 / 漏斗协同 / UI 性能修复（Bug 修复版）
+
+### 🐛 标签持久化彻底修复（重启不丢失）
+- **子文件夹卡标签重启丢失**（`useCardCrud.js` `processAutoTagsAndCategory`）：`subFolder` 分支直接 `return` 跳过覆盖层恢复 → 位于分组文件夹的卡 customTags 重启后丢失。修复：物理文件夹只管分类，标签仍按覆盖层恢复（与根目录分支同口径）；实测 `app_config.json` 覆盖层有 66 条标签数据，此前只是加载时不恢复
+- **分组重命名标签丢失**（`useCardGroups.js` `renameCurrentCategory`）：物理重命名文件夹后子卡 path 前缀变化，覆盖层 key 未随路径迁移（`migrateOverlayKey` 只在单卡移动时调用）。修复：重命名后、`refreshLibrary` 前批量迁移该分组下所有卡的覆盖层 key（旧目录前缀 → 新目录前缀）+ 立即落盘
+- **落盘加固**：① `persistCardUpdate` 物理写盘失败时立即强制 `syncConfigToDisk()`（不走 500ms 防抖）；② `useAITools` AI 打标全部完成后强制立即落盘一次（不依赖防抖 + beforeunload）
+
+### 🏷️ sanitizeImportedTags 开关全链路修复（4 处绕过）
+- 开关此前只在导入路径生效；显示/搜索/索引层无条件合并原生 `data.tags` → 开关"失效"
+- 修复：`SidebarPanel.vue listTags` / `App.vue activeCardTags` / `useSearch.js extractCardTags(ignoreNative)` / `App.vue rebuildSearchIndex` 全部接入开关
+
+### 🧠 向量模型有效化（`main/vectorManager.js` + `useAITools.js` + `AITagModal.vue`）
+- 阈值 0.65 → 0.35（三处对齐）；标签展开为描述句「这是一个关于X的故事」再嵌入（展开文本作缓存 hash 输入，模板变自动重建缓存）
+- 实测：长文 vs 短标签命中率 0% → 80%，误报基线最高 0.307（0.35 安全）
+
+### 🔄 三层漏斗协同（`useAITools.js` `startAITagging`）
+- 规则命中卡 `ruleHitIds` 不再跳过向量层：`vectorTargetIds = [...rulePassedIds, ...ruleHitIds]` 全部进向量语义补充；规则+向量都未命中才交 LLM
+- 关键契约：`batchMatch` 对每张传入卡都返回 result（未命中 `tags: []`），前端按 results 重建 `llmTargetIds` 不丢卡
+
+### ⚡ UI 性能（`HeaderBar.vue`）
+- 字号滑块改「草稿值 + 松手提交」：拖动只更新滑块+数字，松手才写全局 `appSettings` → 不再每帧触发 `--ui-fs/--workspace-fs` 全页面 reflow + localStorage 写入
+
+### 🧪 测试基建
+- `package.json` test 脚本限定 `test/**/*.test.mjs`（`node --test` 默认会把 `scripts/live-vector-test.cjs` Electron 脚本误收集）
+- `cardCrud.test.mjs` 优先级链①断言更新：subFolder 卡分类取文件夹名，但标签恢复 overlay（匹配修复后新行为）
+
+---
+
+## 🔧 v2.1.1 —— 换组/标签/列表刷新修复（Bug 修复版）
+
+### 🐛 换组修复
+- **右键换组改为已有分组选项选择弹窗**（`OptionSelectModal.vue` 新组件）：从预设 + 自定义分组下拉选择，避免手输名称与物理文件夹不一致导致换组失败；底部保留新建分组；批量移动分组同步升级（`useCardGroups.js` `buildGroupOptions` 组装分组选项，预设用中文名、自定义用原名）
+- **编辑器分组下拉回滚修复**（`EditorPanel.vue` + `useCardGroups.js`）：library 为 shallowRef，setter 修改内部 category 不触发 computed 重算，`handleCardCategoryChange` 读 getter 缓存旧值 → 移回旧分组（下拉回滚）。改为 `@change` 直接传目标值，不依赖 getter 缓存；失败回滚保留真实原分类
+
+### 🧬 同类 shallowRef 未 flush bug（3 处，`App.vue`）
+- `updateName`（重命名）：修改 `libItem.name` 后未 flush → 列表卡片名不刷新 → 加 `triggerRef(cardData)` + `triggerRef(library)`
+- `replaceCardImage`（换卡图）：修改 `path/avatar` 后未 flush → 列表头像/文件名不刷新 → 加 `triggerRef(library)`
+- `saveToLocalDisk`（保存）：回写 `_mtime/_size` 后未 flush → 「修改时间/大小」排序不刷新 → 加 `triggerRef(library)`
+
+### 🏷️ 标签一致性修复
+- **编辑器标签区合并原生 data.tags**（`App.vue` `activeCardTags`）：此前只读 `customTags`，而部分卡（命中 localStorage 手动分类等分支）加载时 `customTags` 为空但 `data.tags` 有标签 → 编辑器标签区空白而列表正常（实测 34/73 卡受影响）。改为合并 `customTags + data.tags`（与列表 `listTags` 口径一致）
+- 排查确认：AI 打标 `applyAutoTags` / 手动 / 批量 / 全局标签全部双写（customTags+data.tags）；`persistCardUpdate` 以 customTags 为权威列表同步删除且不误删原生 data.tags；搜索索引 `extractCardTags` 三源合并；加载覆盖层命中时 `data.tags ∪ overlay.tags` 合并不丢
+
+### 🎨 侧边栏标签展示（增强，`SidebarPanel.vue`）
+- 列表头部新增「🏷️ 标签」显示开关（localStorage 持久化，可关掉节省空间）
+- 列表项「+N」展开显示全部标签（indigo chips），「▲收起」收起
+- 选中态标签高对比配色：选中（`bg-blue-600`）时标签 chips 改深蓝底白字（`bg-blue-900/70 text-white`），解决蓝色选中背景看不清字体
+
+### 🚀 性能
+- `updateName` 列表刷新改 150ms 防抖（`flushLibraryAfterNameChange`）：避免万卡下每击键同步重算 `filteredLibrary` 全量排序造成输入卡顿；`rebuildSearchIndex` 本身有 100ms 防抖 + `buildTaskId` 取消合并
+
+---
+
+## ✨ v2.1.0 —— 可配置规则 + 智能查重 + 万卡性能优化（覆盖发布）
+
+> 内部详细版（对外精简版见 RELEASE_NOTES.md v2.1.0）
+
+### 🎛️ 自动打标规则可配置化（全新）
+- `cardLoader.js`：`defaultAutoTagRules` 38 条系统预设（世界观/题材、种族/物种、人物类型、性格/关系 4 组）+ `compileAutoTagRules(custom)` 编译 = 系统预设全部 + 用户自定义（同名覆盖）+ `autoTagKeywordCandidates` 关键词候选库
+- `AutoTagRulesModal.vue`（新组件）：「系统预设 / 自定义」双 Tab —— 系统预设按组分开展示（默认全部生效）；自定义规则增删改（名称 + 正则实时生效）；自定义关键词库管理（添加/移除/去重）
+- 入口：`AITagModal.vue` 向量引擎区底部「📝 管理规则表」（系统预设已内置，可自定义）
+- 持久化：`autoTagRules` / `customKeywords` 落盘 `app_config.json`（useConfigPersistence payload 增加）
+- 消费：`useAITools`（AI 打标三层漏斗第一层）/ `useCardCrud`（导入自动分类）由 App.vue 注入编译结果
+### 🧠 小型本地向量引擎（全新 · 三层漏斗第二层：免费离线语义匹配）
+- 模型：`Xenova/paraphrase-multilingual-MiniLM-L12-v2`（多语言语义向量，支持中文，量化版约 113MB，完全本地离线推理）
+- 定位：AI 打标三层漏斗 **① 规则 → ② 本地向量语义匹配 → ③ LLM API**，规则未命中但语义相似的卡片由向量层免费打标，**不消耗 Token**
+- 推理架构：`main/vectorManager.js` 调度 `main/vectorWorker.js`（worker_threads）执行 ONNX 推理（onnxruntime-node），主进程零阻塞
+- **标签向量索引持久化**：`vector_index_cache.json`（模型版本 + 标签池 sha256 双校验），重启不重算；批量匹配 500 卡/块 + 32 条/批推理防序列化瓶颈
+- **三源下载自动切换**：hf-mirror 国内镜像 → HuggingFace 官方 → GitHub 仓库分片兜底（onnx 113MB 切 8 片 + gh-proxy/ghfast 代理加速），注入浏览器 UA 绕过 hf-mirror 连接重置，断点续传 + 超时保护
+- UI（`AITagModal.vue`）：启用开关、模型状态（就绪/缓存大小）、下载进度（多源标识）、相似度阈值滑条（默认 0.65）、每卡 TopK（默认 3）、一键删除缓存；向量阶段进度合并进打标进度条
+### 🧬 智能查重全面升级（同名 + 内容级 + 预设）
+- `useDedupe.js` 重构扩展：同名查重按名称聚类 + 批量 `getFileStats`（空安全保护）+ 一键清理移回收站（失败回滚提示）
+- `ContentDedupeModal.vue`（新组件）：**内容级版本查重** —— 跨名称识别改名/复制的相似内容（内容指纹，与名称无关）
+- `PresetDedupeModal.vue`（新组件）：**预设查重** —— 按预设名聚类 + 采样参数指纹（`prompts` 数字键升序规范化，避免字典序 "10"<"2" 误判）+ 提示词正文比对 + 推荐保留排序（提示词更全/参数更丰富/更新）+ 一键移回收站
+- `DiffModal.vue`：差异对比类型图标支持（世界书 📖 / 预设 ⚙️ / 角色卡 🃏）
+- `HeaderBar.vue`：智能查重入口「🔍 同名查重与版本清理」/「🧬 版本查重：跨名称识别相似内容」，目标标签随当前视图（角色卡/世界书/预设）动态变化
+- `SidebarPanel.vue`：更多工具折叠整理
+
+### 🚀 万卡性能优化（v2.2/v2.3，真实 11.5GB / 11186 张实测）
+- 主进程扫描：`walkLibraryDir` 文件元数据 stat 由逐文件串行改为 **128 路批量并发**（STAT_BATCH + flushStatQueue，万卡扫描 1.5s）
+- **PNG 内嵌提取缓存**：按 path+mtime+size 缓存提取结果到 `embed_cache_N.json`（LRU 上限 + 单条>512KB 跳过 + 分片原子写防 JSON 超限），二次启动免重读 PNG 头部
+- 批量读取 IPC：READ_BATCH 64→128（主进程）/ 256（渲染层），解析并发 8→16
+- **拉取-解析流水线预取**：批量拉取（IO）与并发解析（CPU）重叠执行
+- **Web Worker 多线程解析**（`cardParseWorker.js` 新）：JSON.parse + 血统鉴定 + 规范化搬到 Worker 线程，与主线程组装双线程并行（Worker 不可用自动回退）
+- `normalizeCardData(noClone)`：批量加载路径原地规范化，省 1 万次 structuredClone 深拷贝
+- **自动打标写盘降噪**：仅「真正新增的标签」才落盘（已存在标签不重写 PNG，首启后二次启动零写盘）
+- 实测：渲染解析 46.7s → 31.4s，蒙版淡出 46.7s → 33.2s
+
+### 🐛 Bug 修复
+- **中文搜索完全失效**（searchIndex.js）：`_tokenize` 中文字符判断 `\/\u4e00-\u9fff\/` 缺少方括号 → 中文 token 全部丢弃 → 中文搜索返回全库（v2.0.0 引入）。修复为 `/[/\u4e00-\u9fff/]`，修复后「赛博」检索 10000→371 正确命中
+- `test/cardCrud.test.mjs`：补充 `autoTagRules` mock（`compileAutoTagRules(null)` 系统预设），46/46 全绿
+
+---
+
+## ✨ v2.0.0 —— 预设管理 + 九种排序 + 千库扫描提速（覆盖发布）
+
+> 内部详细版（对外精简版见 RELEASE_NOTES.md v2.0.0）
+
+### ⚙️ 预设管理引擎（全新）
+- `usePresets.js` + main.js（`preset:scan` 异步扫描 / `preset:save` / 回收站）+ preload 4 API + App.vue / EditorPanel / SidebarPanel 全新「预设」页签
+- 预设深度编辑器：脚本 / 正则分区编辑（`presetScripts` / `presetRegexScripts`，启用开关、折叠、说明字段、增删），渲染型脚本沙箱 iframe 渲染预览（`sandbox="allow-scripts"` 隔离）
+- 预设管理操作：重命名 / 复制副本 / 移入回收站 / 批量导出
+
+### 🔀 排序功能全面升级（9 种排序方式，`useSearch.js` sortList 重构）
+- 排序选项：importTime 导入最新 / time 本地文件最新（mtime+ctime 取较新）/ name A-Z 正序 / nameDesc A-Z 倒序 / mtime 修改时间 / ctime 创建时间 / sizeDesc 大小倒序 / sizeAsc 大小正序 / tokens Token
+- 排序键：`_mtime`（物理 mtime）/ `_ctime`（物理 birthtime）/ `_size`（物理字节数）/ `_importTime`（首次入库持久化）/ 全部纯本地文件级
+- `Intl.Collator('zh-Hans-CN', {numeric:true, sensitivity:'variant'})` 拼音 + 数字自然排序；稳定链 `路径→文件名→id` 兜底，重扫/重启/升级顺序完全确定
+- 导入时间持久化：`cardImportTimes` 映射落盘 `app_config.json`（useConfigPersistence payload 增加）；A-Z 倒序整体取反（含稳定链翻转，互为精确逆序）
+- Token 排序：`tokenCache.js`（WeakMap 缓存 + stats）+ Schwartzian transform 预计算
+
+### ⚡ 搜索性能升级（`searchIndex.js`）
+- 高性能倒排索引：`buildAsync` 异步分片构建（requestIdleCallback / setTimeout yield），倒排 Map + WeakMap 文本/标签缓存
+
+### 🚀 扫描性能大幅提速（main.js）
+- 世界书 / 预设扫描：`scan_cache.json` 增量缓存（mtime 未变且已知无效则跳过）+ 32 路并发 JSON 解析 + >512KB 先读头 64KB 关键字预检 + 深度限制（世界书 5 层 / 预设 2 层）+ `skipFolders` 黑名单目录剪枝
+- PNG 内嵌提取：`extractPngEmbedded` 64 路并发批量提取（EMBED_BATCH=64，批间让出事件循环），walkLibraryDir 只标记 `_needsEmbed` 不再串行逐张解析
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-card-manager",
-  "version": "1.10.1",
+  "version": "1.10.2",
   "description": "SillyTavern 角色卡高级解析中心 - 本地桌面版（Vue 3 + Tailwind CSS + Electron）",
   "main": "main.js",
   "author": {
@@ -15,7 +15,7 @@
     "build:android": "npm run sync:android && cd android && gradlew.bat assembleDebug",
     "start": "npm run build:web && electron .",
     "build": "npm run build:web && electron-builder -w",
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "devDependencies": {
     "@capacitor/android": "^8.5.0",
@@ -25,7 +25,9 @@
     "echarts": "^6.1.0",
     "electron": "^43.4.1",
     "electron-builder": "^26.15.3",
+    "handlebars": "^4.7.9",
     "postcss": "^8.5.26",
+    "showdown": "^2.1.0",
     "tailwindcss": "^3.4.19",
     "vite": "^8.2.1",
     "vite-plugin-vue-devtools": "^8.2.1",
@@ -47,8 +49,13 @@
     "files": [
       "web/**/*",
       "main.js",
+      "main/**/*",
       "preload.js",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@xenova/transformers/**",
+      "node_modules/onnxruntime-node/**"
     ],
     "win": {
       "target": [
@@ -66,8 +73,10 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",
+    "@xenova/transformers": "^2.17.2",
     "dompurify": "3.4.13",
     "electron-updater": "6.8.9",
+    "jquery": "^3.7.1",
     "sharp": "0.35.3",
     "vant": "^4.10.0",
     "vue-router": "^5.2.0"

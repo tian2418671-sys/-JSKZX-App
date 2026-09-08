@@ -37,19 +37,89 @@
                                     class="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 text-white rounded text-xs transition shrink-0">＋ 添加</button>
                         </div>
 
-                        <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签（✕ 可彻底删除）：</div>
-                        <div class="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 custom-scrollbar">
-                            <div v-for="tag in systemCommonTags" :key="tag" class="group flex items-center shadow-sm rounded">
-                                <button @click="$emit('add-ai-candidate-tag', tag)"
-                                        :disabled="isAITagging || aiCandidateTags.includes(tag)"
-                                        :class="['px-2 py-0.5 text-[11px] border transition-colors rounded-l',
-                                                 aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
-                                    + {{ tag }}
+                        <div class="text-[11px] text-gray-500 mb-1">💡 快速点击添加系统/常用标签（按大分类分组，✕ 可彻底删除）：</div>
+                        <div class="max-h-44 overflow-y-auto p-1 custom-scrollbar">
+                            <template v-for="group in groupedSystemTags" :key="group.key">
+                                <div class="flex items-baseline gap-1 mb-1 mt-1.5 first:mt-0 cursor-pointer select-none" @click="toggleTagGroup(group.key)" :title="collapsedTagGroups[group.key] ? '点击展开' : '点击折叠'">
+                                    <span class="text-[10px] text-gray-400">{{ collapsedTagGroups[group.key] ? '▸' : '▾' }}</span>
+                                    <span class="text-[11px] font-bold text-gray-700">{{ group.icon }} {{ group.name }}</span>
+                                    <span class="text-[9px] text-gray-400">({{ group.tags.length }})</span>
+                                </div>
+                                <div v-show="!collapsedTagGroups[group.key]" class="flex flex-wrap gap-1.5">
+                                    <div v-for="tag in group.tags" :key="tag" class="group flex items-center shadow-sm rounded">
+                                        <button @click="$emit('add-ai-candidate-tag', tag)"
+                                                :disabled="isAITagging || aiCandidateTags.includes(tag)"
+                                                :class="['px-2 py-0.5 text-[11px] border transition-colors rounded-l',
+                                                         aiCandidateTags.includes(tag) ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-600 hover:border-blue-500 hover:text-white']">
+                                            + {{ tag }}
+                                        </button>
+                                        <button @click.stop="$emit('remove-system-common-tag', tag)" :disabled="isAITagging"
+                                                class="px-1.5 py-0.5 text-[11px] border border-l-0 border-gray-300 bg-gray-100 text-gray-400 hover:bg-red-500 hover:text-white hover:border-red-500 rounded-r transition-colors" title="从全局系统库中彻底删除此标签">
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- 🧠 1.5 本地向量引擎（三层漏斗第二层：免费离线语义匹配） -->
+                    <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                        <label class="flex items-center gap-2 font-bold text-gray-700 mb-2 cursor-pointer">
+                            <input type="checkbox" :checked="useLocalVector"
+                                   @change="$emit('update:useLocalVector', $event.target.checked)" :disabled="isAITagging"
+                                   class="w-4 h-4 text-purple-600 bg-white border-gray-300 rounded focus:ring-purple-600">
+                            🧠 启用本地向量匹配 <span class="text-[10px] font-normal text-gray-500">(免费·离线·不消耗 Token)</span>
+                        </label>
+
+                        <div v-if="useLocalVector" class="space-y-2 ml-6">
+                            <!-- 状态行 -->
+                            <div class="flex items-center gap-3 text-[11px]">
+                                <span v-if="vectorStatus.ready" class="text-green-600">✅ 模型已就绪 ({{ vectorStatus.cacheSizeMB }}MB)</span>
+                                <span v-else-if="vectorDownloading" class="text-blue-600">⏳ 下载中... {{ Math.round(vectorDownloadProgress.progress || 0) }}%<span v-if="vectorDownloadSource.label" class="text-gray-400"> ({{ vectorDownloadSource.label }}{{ vectorDownloadSource.total > 1 ? ' · 源 ' + vectorDownloadSource.attempt + '/' + vectorDownloadSource.total : '' }})</span></span>
+                                <span v-else-if="vectorStatus.cacheExists" class="text-amber-600">📦 缓存已存在，点击加载</span>
+                                <span v-else class="text-gray-500">未下载 (约 120MB)</span>
+
+                                <button v-if="!vectorStatus.ready && !vectorDownloading"
+                                        @click="$emit('init-vector-engine')"
+                                        class="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-[11px] transition">
+                                    📥 下载模型
                                 </button>
-                                <button @click.stop="$emit('remove-system-common-tag', tag)" :disabled="isAITagging"
-                                        class="px-1.5 py-0.5 text-[11px] border border-l-0 border-gray-300 bg-gray-100 text-gray-400 hover:bg-red-500 hover:text-white hover:border-red-500 rounded-r transition-colors" title="从全局系统库中彻底删除此标签">
-                                    ✕
+                                <button v-if="vectorStatus.cacheExists"
+                                        @click="$emit('delete-vector-cache')" :disabled="isAITagging"
+                                        class="px-2 py-0.5 bg-gray-300 hover:bg-red-500 hover:text-white text-gray-600 rounded text-[11px] transition">
+                                    🗑️ 删除缓存
                                 </button>
+                            </div>
+
+                            <!-- 下载进度条 -->
+                            <div v-if="vectorDownloading" class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                <div class="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                                     :style="{ width: Math.min(100, Math.round(vectorDownloadProgress.progress || 0)) + '%' }"></div>
+                            </div>
+
+                            <!-- 阈值与 TopK -->
+                            <div class="flex gap-4 items-center">
+                                <label class="text-[11px] text-gray-600 flex items-center gap-1">
+                                    相似度阈值:
+                                    <input type="range" min="0.3" max="0.9" step="0.05"
+                                           :value="vectorThreshold" :disabled="isAITagging"
+                                           @input="$emit('update:vectorThreshold', parseFloat($event.target.value))"
+                                           class="w-20 accent-purple-600">
+                                    {{ Number(vectorThreshold).toFixed(2) }}
+                                </label>
+                                <label class="text-[11px] text-gray-600 flex items-center gap-1">
+                                    Top-K:
+                                    <input type="number" min="1" max="10" :value="vectorTopK" :disabled="isAITagging"
+                                           @input="$emit('update:vectorTopK', parseInt($event.target.value))"
+                                           class="w-12 border border-gray-300 rounded px-1 text-xs">
+                                </label>
+                            </div>
+                            <p class="text-[10px] text-gray-500">阈值越高越精确（漏标多），越低越宽泛（误标多）。建议 0.30-0.45。规则 + 向量配合使用：规则精确命中，向量从候选池补充语义标签，两者都未命中才调用 LLM。</p>
+                            <!-- 📝 规则层入口（第一层规则 + 第二层向量配合，未命中才进第三层 LLM） -->
+                            <div class="flex items-center justify-between pt-2 border-t border-gray-200">
+                                <span class="text-[10px] text-gray-500">① 第一层：规则匹配（系统预设已内置，可自定义）</span>
+                                <button @click="$emit('open-auto-tag-rules')" class="px-2 py-1 bg-purple-600/10 hover:bg-purple-600 hover:text-white border border-purple-300 text-purple-700 rounded text-[11px] transition" title="编辑自动打标规则表（导入自动分类 / AI 打标第一层共用）">📝 管理规则表</button>
                             </div>
                         </div>
                     </div>
@@ -200,6 +270,8 @@
 </template>
 
 <script>
+import { groupTagsByCategory } from '../utils/tagCategories.js';
+
 export default {
     name: 'AITagModal',
     props: {
@@ -222,7 +294,15 @@ export default {
         isFetchingModels: { type: Boolean, default: false },
         fetchModelStatus: { type: String, default: '' },
         isAITagging: { type: Boolean, default: false },
-        aiTaggingProgress: { type: Object, default: () => ({ current: 0, total: 0, status: '' }) }
+        aiTaggingProgress: { type: Object, default: () => ({ current: 0, total: 0, status: '' }) },
+        // 🧠 本地向量引擎
+        useLocalVector: { type: Boolean, default: false },
+        vectorThreshold: { type: Number, default: 0.35 }, // 与 useAITools / vectorManager 默认值对齐（0.65 命中率≈0）
+        vectorTopK: { type: Number, default: 3 },
+        vectorStatus: { type: Object, default: () => ({ ready: false, cacheExists: false, cacheSizeMB: 0, cachePath: '' }) },
+        vectorDownloading: { type: Boolean, default: false },
+        vectorDownloadProgress: { type: Object, default: () => ({ status: '', file: '', progress: 0 }) },
+        vectorDownloadSource: { type: Object, default: () => ({ source: '', attempt: 0, total: 0, label: '' }) }
     },
     emits: [
         'close', 'remove-ai-candidate-tag', 'update:newAICandidateTag', 'add-ai-candidate-tag-manual',
@@ -230,7 +310,27 @@ export default {
         'update:useJailbreak', 'update:jailbreakPrompt',
         'add-system-prompt-preset', 'update:activeSystemPromptId', 'save-system-prompts',
         'delete-system-prompt-preset', 'fetch-available-models', 'update:apiEndpoint',
-        'update:apiKey', 'update:apiModel', 'start-tagging', 'remove-system-common-tag'
-    ]
+        'update:apiKey', 'update:apiModel', 'start-tagging', 'remove-system-common-tag',
+        // 🧠 本地向量引擎
+        'update:useLocalVector', 'update:vectorThreshold', 'update:vectorTopK',
+        'init-vector-engine', 'delete-vector-cache',
+        // 📝 自动打标规则表管理
+        'open-auto-tag-rules'
+    ],
+    // 🏷️ [标签大分类] 系统标签池按大分类分组（人物关系/角色设定/外貌身材...），候选标签更好找
+    computed: {
+        groupedSystemTags() {
+            return groupTagsByCategory(this.systemCommonTags || []);
+        }
+    },
+    // 🏷️ [大分类折叠] 记录被折叠的分类 key（点击分组标题折叠/展开）
+    data() {
+        return { collapsedTagGroups: {} };
+    },
+    methods: {
+        toggleTagGroup(key) {
+            this.collapsedTagGroups[key] = !this.collapsedTagGroups[key];
+        }
+    }
 };
 </script>
