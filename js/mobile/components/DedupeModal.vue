@@ -3,6 +3,8 @@
         :show="modelValue"
         position="center"
         round
+        close-on-click-overlay
+        closeable
         class="ddm-popup"
         @update:show="(v) => emit('update:modelValue', v)"
     >
@@ -77,7 +79,7 @@
 <script>
 import { ref, watch } from 'vue';
 import { showToast } from 'vant';
-import { mobileLibrary, loadCardFullData } from '../useMobileLibrary';
+import { mobileLibrary, loadCardFullData, loadCardsFullDataBatch } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import DiffModal from './DiffModal.vue';
 
@@ -178,23 +180,21 @@ export default {
             const items = [...mobileLibrary.library];
             if (!items.length) { emptyText.value = '卡片库为空，无法进行版本查重'; return; }
 
-            // 🚀 轻量化:全量 data 已不在内存,有界并发(4)逐卡加载正文 → 提取后即弃,峰值内存有界
+            // 🚀 批量水合:分批桥接 + 有界并发,全程进度可见(逐卡单次 IPC 在千卡库上要数分钟)
+            const dataMap = await loadCardsFullDataBatch(items, (done, total) => {
+                pending.value = `读取卡片 ${done}/${total}…`;
+            });
+
+            // 规范化文本，内容过短（<20 字符）无法可靠判定，跳过
             const valid = [];
-            let idx = 0;
-            const WORKERS = 4;
-            await Promise.all(Array.from({ length: Math.min(WORKERS, items.length) }, async () => {
-                while (idx < items.length) {
-                    const cur = idx++;
-                    const item = items[cur];
-                    try {
-                        const full = await loadCardFullData(item);
-                        if (!full) continue;
-                        const text = normalizeText(extractContentText({ data: full }));
-                        if (text.length >= 20) valid.push({ item, idx: cur, text });
-                    } catch (e) { /* 单卡失败跳过 */ }
-                }
-            }));
-            valid.sort((a, b) => a.idx - b.idx);
+            items.forEach((item, idx) => {
+                const full = dataMap.get(item.path);
+                if (!full) return;
+                const text = normalizeText(extractContentText({ data: full }));
+                if (text.length < 20) return;
+                valid.push({ item, idx, text });
+            });
+            pending.value = '';
             if (valid.length < 2) {
                 emptyText.value = '未发现可判定的内容重复项（内容过短的项已跳过）';
                 return;
@@ -528,6 +528,14 @@ export default {
 
         watch(() => props.modelValue, (v) => { if (v) runScan(); });
         watch(() => props.mode, () => { if (props.modelValue) runScan(); });
+        // 🚀 关闭清理:残留扫描状态/结果/嵌套比对弹窗,重开必得干净状态
+        watch(() => props.modelValue, (v) => {
+            if (!v) {
+                showDiff.value = false;
+                busyKey.value = '';
+                pending.value = '';
+            }
+        });
 
         return {
             scanning, pending, emptyText, groups, busyKey,

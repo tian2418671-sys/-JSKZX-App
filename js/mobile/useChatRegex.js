@@ -112,17 +112,22 @@ function placementMatches(placements, node) {
  * @param {Array} scripts - 正则脚本数组（已归一或未归一均可）
  * @param {string} stage - 应用阶段 'AI' | 'USER'
  * @param {object} macros - 宏字典（{{user}} {{char}} 及插件宏）
+ * @param {object} [opts] 选项:
+ *   - promptOnlyExclusive=true 仅应用 promptOnly 脚本(构建发给 AI 的提示词历史用,对齐酒馆"对AI隐藏")
  * @returns {string} 处理后的文本
  */
-export function applyRegexScripts(text, scripts, stage, macros) {
+export function applyRegexScripts(text, scripts, stage, macros, opts = {}) {
     if (!text || !scripts || !Array.isArray(scripts) || scripts.length === 0) return text || '';
+    const promptOnlyExclusive = opts.promptOnlyExclusive === true;
     const node = STAGE_NODE[stage] || 2;
     let out = String(text);
 
     for (const raw of scripts) {
         if (!raw || raw.disabled === true) continue;
-        // promptOnly = 仅作用于发给模型的提示词，不影响显示层（本管线即显示层）
-        if (raw.promptOnly === true) continue;
+        const isPromptOnly = raw.promptOnly === true;
+        // promptOnly = 仅作用于发给模型的提示词;markdownOnly = 仅显示层
+        if (promptOnlyExclusive) { if (!isPromptOnly) continue; }
+        else if (isPromptOnly) continue; // 显示管线跳过 promptOnly 脚本
 
         const placements = Array.isArray(raw.placement) ? raw.placement.map(coercePlacement).filter((v) => v !== null) : [];
         if (!placementMatches(placements, node)) continue;

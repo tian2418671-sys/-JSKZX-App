@@ -9,6 +9,7 @@
 const LS_REPLY_COUNT = 'jsmobile-chat-reply-count';
 const LS_USER_NAME = 'jsmobile-user-name';
 const LS_USER_PERSONA = 'jsmobile-user-persona';
+const LS_MAX_FLOORS = 'jsmobile-chat-max-floors'; // 自动隐藏楼层数:0=不限(全部发送),N=只发最近 N 层
 
 const MIN_REPLY = 1;
 const MAX_REPLY = 10;
@@ -43,4 +44,20 @@ export function setUserPersona(persona) {
     const v = String(persona == null ? '' : persona).trim();
     if (v) localStorage.setItem(LS_USER_PERSONA, v);
     else localStorage.removeItem(LS_USER_PERSONA);
+}
+
+/**
+ * 🚀 自动隐藏楼层数:0=不限(全部历史发送给 AI),N>0=只把最近 N 层(一层=用户+AI 一对)发给 AI,
+ * 远处楼层仅保留在界面显示,不进入请求 —— 防超长上下文/远处设定干扰新回复。
+ */
+export function getMaxFloors() {
+    const n = parseInt(localStorage.getItem(LS_MAX_FLOORS) || '', 10);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(n, 200);
+}
+
+export function setMaxFloors(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return;
+    localStorage.setItem(LS_MAX_FLOORS, String(Math.min(Math.max(Math.round(v), 0), 200)));
 }

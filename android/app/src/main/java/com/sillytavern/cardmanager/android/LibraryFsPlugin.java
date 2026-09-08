@@ -343,7 +343,10 @@ public class LibraryFsPlugin extends Plugin {
         }
         List<JSObject> files = new ArrayList<>();
         Set<String> categories = new LinkedHashSet<>();
-        walkDir(startDir, prefix, rel == null || rel.isEmpty(), files, categories);
+        // 🚀 v1.10.4 加载提速:文件 mtime 延后并行查询(SAF 逐文件 query 是万卡库扫描最大耗时点)
+        final List<Object[]> pendingMtime = new ArrayList<>(); // {JSObject, DocumentFile}
+        walkDir(startDir, prefix, rel == null || rel.isEmpty(), files, categories, pendingMtime);
+        fillMtimesParallel(pendingMtime);
         // 分组 = 库根下所有一级文件夹(含空分组)。不做“幽灵分组过滤”:
         // 空分组(新建后尚未放卡片)也必须显示,否则新建分组在列表/分组管理里不可见,分组功能看似失效。
         JSObject ret = new JSObject();
@@ -354,8 +357,33 @@ public class LibraryFsPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /**
+     * 🚀 v1.10.4 并行补齐文件 mtime:SAF 的 lastModified 每次都是一次 ContentResolver query,
+     * 千卡库串行查询要数秒;并行(8 线程)后降到几百毫秒。失败条目保持 0(排序兜底)。
+     */
+    private void fillMtimesParallel(List<Object[]> pending) {
+        if (pending.isEmpty()) return;
+        final int threads = Math.min(8, pending.size());
+        final java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger(0);
+        Thread[] pool = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            pool[t] = new Thread(() -> {
+                while (true) {
+                    int i = idx.getAndIncrement();
+                    if (i >= pending.size()) return;
+                    try {
+                        Object[] pair = pending.get(i);
+                        ((JSObject) pair[0]).put("mtime", queryLastModified((DocumentFile) pair[1]));
+                    } catch (Exception e) { /* 单文件失败保持 0 */ }
+                }
+            }, "jsx-mtime-" + t);
+            pool[t].start();
+        }
+        for (Thread t : pool) { try { t.join(); } catch (InterruptedException e) { /* 忽略 */ } }
+    }
+
     /** 递归遍历目录,收集文件和文件夹信息 */
-    private void walkDir(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories) {
+    private void walkDir(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime) {
         for (DocumentFile child : dir.listFiles()) {
             if (child.isDirectory()) {
                 String name = child.getName();
@@ -372,9 +400,9 @@ public class LibraryFsPlugin extends Plugin {
                 d.put("name", name);
                 d.put("path", "/library/" + relDir + name);
                 d.put("isDirectory", true);
-                d.put("mtime", queryLastModified(child));
+                d.put("mtime", queryLastModified(child)); // 目录数量少,即时查询
                 files.add(d);
-                walkDir(child, relDir + name + "/", skipHidden, files, categories);
+                walkDir(child, relDir + name + "/", skipHidden, files, categories, pendingMtime);
             } else if (child.isFile()) {
                 String name = child.getName();
                 if (name == null) continue;
@@ -389,7 +417,7 @@ public class LibraryFsPlugin extends Plugin {
                 o.put("path", "/library/" + relDir + name);
                 o.put("isDirectory", false);
                 o.put("url", JSObject.NULL);
-                o.put("mtime", queryLastModified(child));
+                o.put("mtime", 0); // 🚀 v1.10.4:延后到 fillMtimesParallel 并行补齐
                 o.put("birthtime", 0);
                 o.put("size", child.length()); // 文件字节数(排序用,对齐桌面 _size)
                 o.put("subFolder", relDir.replaceAll("/+$", ""));
@@ -398,6 +426,7 @@ public class LibraryFsPlugin extends Plugin {
                 //    → WebView OOM 闪退)。渲染层按批调用 readCharaBatch 提取文本块,载荷有界。
                 o.put("embeddedData", JSObject.NULL);
                 files.add(o);
+                pendingMtime.add(new Object[]{ o, child });
             }
         }
     }

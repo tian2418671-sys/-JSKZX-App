@@ -92,7 +92,9 @@ export function mergeDeep(target, src) {
 
 // ============ MVU 指令解析 ============
 
-const MVU_BLOCK_RE = /<UpdateVariable>([\s\S]*?)<\/UpdateVariable>/gi;
+// MVU 块标签:标准 <UpdateVariable>;兼容 JS-Slash-Runner/Prompt-Template 卡的小写变体
+// <update variable> / <update>(大小写不敏感,闭合标签与开标签同名)
+const MVU_BLOCK_RE = /<(UpdateVariable|update\s*variable|update)>([\s\S]*?)<\/\1>/gi;
 
 /** 简写行：_.$set path = value / $add / $insert / $del */
 const SHORTHAND_RE = /^_?\.\$(set|add|insert|del|delete)\s+([^\s=]+)\s*=\s*(.*)$/;
@@ -173,7 +175,7 @@ export function extractMvu(text) {
     MVU_BLOCK_RE.lastIndex = 0;
     let m;
     while ((m = MVU_BLOCK_RE.exec(src)) !== null) {
-        const parsed = parseMvuBlock(m[1]);
+        const parsed = parseMvuBlock(m[2]);
         if (parsed) ops.push(...parsed);
     }
     const display = src.replace(MVU_BLOCK_RE, '').trim();

@@ -211,6 +211,11 @@ export async function loadLibrary(refresh = false) {
 
         const append = (arr) => { for (const x of arr) if (x) staging.push(x); };
 
+        // 🚀 渐进渲染:每批解析完立即把已解析卡片挂上库(列表秒级可见,不必等全库解析完)
+        function publishProgress() {
+            mobileLibrary.library = staging.slice();
+        }
+
         // ① JSON 卡:分批读文本 → 有界并发解析 → 只留轻量字段(文本/全量 data 逐批释放)
         for (let i = 0; i < jsonFiles.length; i += JSON_BATCH) {
             const batch = jsonFiles.slice(i, i + JSON_BATCH);
@@ -224,6 +229,7 @@ export async function loadLibrary(refresh = false) {
             const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
             append(items);
             mobileLibrary.progress.done = Math.min(i + JSON_BATCH, jsonFiles.length);
+            publishProgress();
             await yieldFrame();
         }
 
@@ -245,6 +251,7 @@ export async function loadLibrary(refresh = false) {
             const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
             append(items);
             mobileLibrary.progress.done = jsonFiles.length + Math.min(i + PNG_BATCH, imgFiles.length);
+            publishProgress();
             await yieldFrame();
         }
 
@@ -371,7 +378,84 @@ function buildLightItem(file, fields) {
     };
 }
 
-// 按 path 取卡片
+/**
+ * 🚀 批量按需加载全量数据(内容查重等全库扫描场景):分批桥接 + 有界并发,
+ * 避免逐卡单次 IPC(2000 卡 = 2000 次桥接,数分钟)。
+ * @param {Array} cards 轻量条目数组(只需 path/fileName)
+ * @param {(done:number, total:number)=>void} [onProgress] 每批完成回调(UI 进度)
+ * @returns {Promise<Map<string, object>>} path → normalized 完整卡片(解析失败不包含)
+ */
+export async function loadCardsFullDataBatch(cards, onProgress) {
+    const out = new Map();
+    const list = Array.isArray(cards) ? cards : [];
+    if (!list.length) return out;
+    const BATCH = 24;
+    const CONCURRENCY = 8;
+    const jsonCards = list.filter((c) => (c.fileName || c.path || '').toLowerCase().endsWith('.json'));
+    const imgCards = list.filter((c) => !jsonCards.includes(c));
+    let done = 0;
+    const total = list.length;
+    const tick = () => { if (onProgress) { try { onProgress(done, total); } catch (e) { /* 忽略 */ } } };
+
+    // ① JSON 卡:批量读文本 → 并发解析
+    for (let i = 0; i < jsonCards.length; i += BATCH) {
+        const batch = jsonCards.slice(i, i + BATCH);
+        const textMap = new Map();
+        try {
+            const br = await window.electronAPI.readTextBatch(batch.map((c) => c.path));
+            if (br && br.success && Array.isArray(br.results)) {
+                br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+            }
+        } catch (e) { /* 降级单卡读 */ }
+        const results = await mapLimit(batch, CONCURRENCY, async (c) => {
+            let text = textMap.get(c.path);
+            if (typeof text !== 'string') {
+                const r = await window.electronAPI.readText(c.path);
+                text = (r && r.success && typeof r.text === 'string') ? r.text : null;
+            }
+            if (text == null) return [c.path, null];
+            const parsed = await parseViaWorker('json', text);
+            return [c.path, (parsed && typeof parsed === 'object') ? normalizeCardData(parsed) : null];
+        });
+        results.forEach(([p, data]) => { if (data) out.set(p, data); });
+        done += batch.length; tick();
+        await yieldFrame();
+    }
+
+    // ② PNG/WebP:批量提取 chara 文本块 → 并发解析(webp/失败回退整图)
+    for (let i = 0; i < imgCards.length; i += BATCH) {
+        const batch = imgCards.slice(i, i + BATCH);
+        const textMap = new Map();
+        if (hasCharaBatch()) {
+            try {
+                const cr = await window.electronAPI.readCharaBatch(batch.map((c) => c.path));
+                if (cr && cr.success && Array.isArray(cr.results)) {
+                    cr.results.forEach((item) => {
+                        if (item && item.success && typeof item.value === 'string') textMap.set(item.path, item.value);
+                    });
+                }
+            } catch (e) { /* 降级 */ }
+        }
+        const results = await mapLimit(batch, CONCURRENCY, async (c) => {
+            const prefetched = textMap.get(c.path);
+            let parsed = null;
+            if (typeof prefetched === 'string') {
+                parsed = await parseViaWorker('json', prefetched);
+            }
+            if (!parsed || typeof parsed !== 'object') {
+                const r = await window.electronAPI.readBuffer(c.path);
+                if (r && r.success && r.buffer) parsed = await parseViaWorker('png', r.buffer);
+            }
+            return [c.path, (parsed && typeof parsed === 'object') ? normalizeCardData(parsed) : null];
+        });
+        results.forEach(([p, data]) => { if (data) out.set(p, data); });
+        done += batch.length; tick();
+        await yieldFrame();
+    }
+    return out;
+}
+
+/** 按 path 取卡片 */
 export function findCard(path) {
     return mobileLibrary.library.find((c) => c.path === path);
 }

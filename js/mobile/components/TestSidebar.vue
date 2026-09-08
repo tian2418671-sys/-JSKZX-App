@@ -241,6 +241,11 @@
                     <van-field v-model="localUserName" label="用户名" placeholder="我" @blur="$emit('update-user-name', localUserName)" />
                     <van-field v-model="localUserPersona" label="用户人设" type="textarea" rows="2" autosize
                         placeholder="{{user}} 的角色设定" @blur="$emit('update-user-persona', localUserPersona)" />
+                    <van-cell title="自动隐藏楼层数" label="0=全部发送；N=只把最近 N 层发给 AI，远处楼层仅显示">
+                        <template #value>
+                            <van-stepper v-model="localMaxFloors" min="0" max="200" integer @change="$emit('update-max-floors', localMaxFloors)" />
+                        </template>
+                    </van-cell>
 
                     <!-- 长期记忆 -->
                     <div class="ts-sec-title" style="margin-top: 12px"><span>🧠 长期记忆</span></div>
@@ -252,11 +257,35 @@
                             <van-stepper v-model="localMemoryLimit" min="1" max="50" integer @change="$emit('update-memory-limit', localMemoryLimit)" />
                         </template>
                     </van-cell>
+                    <!-- 🚀 记忆数据查看:黑箱变透明,可浏览/删除/清空 -->
+                    <van-cell title="查看记忆数据" label="浏览已存储的对话与事实记忆" is-link @click="openMemoryViewer" />
                 </div>
             </div>
         </div>
         </div>
     </transition>
+
+    <!-- 🚀 记忆数据查看器:黑箱变透明(浏览/删除/清空) -->
+    <van-popup v-model:show="memoryViewerShow" position="bottom" round closeable
+        :style="{ height: '72vh' }" class="mem-viewer">
+        <div class="mem-v-head">
+            <span class="mem-v-title">🧠 记忆数据（{{ memoryItems.length }} 条）</span>
+            <van-button size="mini" plain type="danger" :disabled="!memoryItems.length" @click="clearMemoryAll">清空全部</van-button>
+        </div>
+        <div class="mem-v-body">
+            <van-loading v-if="memoryLoading" size="22">读取中…</van-loading>
+            <van-empty v-else-if="!memoryItems.length" description="暂无记忆数据（发送消息后会自动记录）" image-size="60" />
+            <div v-else v-for="it in memoryItems" :key="it.id" class="mem-v-item">
+                <div class="mem-v-meta">
+                    <van-tag :type="it.type === 'fact' ? 'warning' : (it.type === 'summary' ? 'success' : 'primary')" size="mini">{{ it.type || 'message' }}</van-tag>
+                    <span class="mem-v-card">{{ it.cardName || '' }}</span>
+                    <span class="mem-v-time">{{ fmtMemTime(it.createdAt) }}</span>
+                </div>
+                <div class="mem-v-content">{{ it.content }}</div>
+                <van-icon name="delete-o" class="mem-v-del" @click="deleteMemoryOne(it)" />
+            </div>
+        </div>
+    </van-popup>
 </template>
 
 <script>
@@ -286,6 +315,7 @@ export default {
         userPersona: { type: String, default: '' },
         memoryEnabled: { type: Boolean, default: true },
         memoryLimit: { type: Number, default: 20 },
+        maxFloors: { type: Number, default: 0 },
         // MVU 变量 + EJS + 分段渲染（变量 Tab）
         mvuEnabled: { type: Boolean, default: true },
         ejsEnabled: { type: Boolean, default: true },
@@ -300,7 +330,7 @@ export default {
         'update-params', 'toggle-wb-entry', 'update-wb-entry', 'sync-wb-keys',
         'new-session', 'switch-session', 'delete-session', 'rename-session',
         'update-api-config', 'update-reply-count', 'update-user-name', 'update-user-persona',
-        'update-memory-enabled', 'update-memory-limit',
+        'update-memory-enabled', 'update-memory-limit', 'update-max-floors',
         'update-mvu-enabled', 'update-ejs-enabled', 'update-seg-render',
         'apply-vars-json', 'undo-vars', 'reset-vars'
     ],
@@ -347,6 +377,55 @@ export default {
         const localUserPersona = ref(props.userPersona);
         const localMemoryEnabled = ref(props.memoryEnabled);
         const localMemoryLimit = ref(props.memoryLimit);
+        const localMaxFloors = ref(props.maxFloors);
+
+        // ---------- 🚀 记忆数据查看器(黑箱变透明) ----------
+        const memoryViewerShow = ref(false);
+        const memoryLoading = ref(false);
+        const memoryItems = ref([]);
+        async function openMemoryViewer() {
+            memoryViewerShow.value = true;
+            await refreshMemoryList();
+        }
+        async function refreshMemoryList() {
+            memoryLoading.value = true;
+            try {
+                const res = await api.memoryList({ type: '', limit: 300 });
+                memoryItems.value = (res && res.success && Array.isArray(res.items)) ? res.items : [];
+            } catch (e) {
+                memoryItems.value = [];
+            } finally {
+                memoryLoading.value = false;
+            }
+        }
+        async function deleteMemoryOne(it) {
+            if (!it || it.id == null) return;
+            try {
+                const res = await api.memoryRemove(it.id);
+                if (res && res.success) { showSuccessToast('已删除'); refreshMemoryList(); }
+                else showToast((res && res.error) || '删除失败');
+            } catch (e) {
+                showToast('删除失败');
+            }
+        }
+        async function clearMemoryAll() {
+            if (!memoryItems.value.length) return;
+            try {
+                await showConfirmDialog({ title: '清空记忆', message: `确定清空全部 ${memoryItems.value.length} 条记忆？此操作不可恢复。` });
+            } catch (e) { return; }
+            try {
+                const res = await api.memoryClear('');
+                if (res && res.success) { showSuccessToast('已清空'); memoryItems.value = []; }
+                else showToast((res && res.error) || '清空失败');
+            } catch (e) {
+                showToast('清空失败');
+            }
+        }
+        function fmtMemTime(t) {
+            const n = Number(t);
+            if (!Number.isFinite(n) || n <= 0) return '';
+            try { return new Date(n).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; }
+        }
 
         // 外部 prop 变化时同步本地副本
         watch(() => props.apiEndpoint, (v) => { localApiEndpoint.value = v; });
@@ -358,6 +437,7 @@ export default {
         watch(() => props.userPersona, (v) => { localUserPersona.value = v; });
         watch(() => props.memoryEnabled, (v) => { localMemoryEnabled.value = v; });
         watch(() => props.memoryLimit, (v) => { localMemoryLimit.value = v; });
+        watch(() => props.maxFloors, (v) => { localMaxFloors.value = v; });
 
         watch(() => props.presetParams, (params) => {
             if (params) {
@@ -537,7 +617,8 @@ export default {
             activeTab, bodyRef, onTabChange, switchTab, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
             paramOverrides, paramKeys, regexCount, wbCount, wbExpanded,
             localApiEndpoint, localApiKey, localApiModel, localApiType,
-            localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit,
+            localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit, localMaxFloors,
+            memoryViewerShow, memoryLoading, memoryItems, openMemoryViewer, deleteMemoryOne, clearMemoryAll, fmtMemTime,
             emitParams, resetParams, applyPastedPreset, importPastedRegex, importPastedPlugin,
             importPresetFromFile, importRegexFromFile, importPluginFromFile,
             emitApiConfig, toggleWbExpand, promptRename, confirmDelete,
@@ -647,6 +728,27 @@ export default {
 
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }
+
+/* 🚀 记忆数据查看器 */
+.mem-viewer { display: flex; flex-direction: column; }
+.mem-v-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 10px; border-bottom: 1px solid var(--van-gray-3, #ebedf0);
+}
+.mem-v-title { font-size: 15px; font-weight: 600; }
+.mem-v-body { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+.mem-v-item {
+    position: relative;
+    padding: 10px 30px 10px 12px;
+    margin-top: 8px;
+    border-radius: 10px;
+    background: var(--van-background-2, #f7f8fa);
+}
+.mem-v-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.mem-v-card { font-size: 11px; color: var(--van-gray-5, #969799); }
+.mem-v-time { margin-left: auto; font-size: 11px; color: var(--van-gray-5, #969799); }
+.mem-v-content { font-size: 13px; line-height: 1.5; word-break: break-all; white-space: pre-wrap; }
+.mem-v-del { position: absolute; top: 8px; right: 8px; color: var(--van-gray-5, #969799); }
 
 /* van-tabs 已替换为自定义 tab 栏，无需隐藏 __content */
 </style>

@@ -85,9 +85,9 @@
                     <span class="vm-btn" :class="{ active: viewMode === 'page' }" @click="setViewMode('page')">翻页</span>
                 </div>
 
-                <!-- 卡片网格 / 列表 -->
-                <div v-if="loading" class="status-wrap">
-                    <van-loading size="28">
+                <!-- 卡片网格 / 列表(🚀 渐进渲染:解析一批显示一批,loading 时顶部给进度条而非全屏等待) -->
+                <div v-if="loading && !filtered.length" class="status-wrap">
+                    <van-loading size="24">
                         {{ loadTip }}
                     </van-loading>
                 </div>

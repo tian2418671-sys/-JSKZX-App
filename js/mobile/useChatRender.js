@@ -12,8 +12,11 @@
  * 避免半截面板闪烁（本端非流式 API，保留该函数供后续接入）。
  */
 
-/** ```html 围栏（语言标记可省略空白；大小写不敏感） */
+/** ```html 围栏（语言标记可省略；大小写不敏感） */
 const HTML_FENCE_RE = /```html\s*\n?([\s\S]*?)```/gi;
+// 🚀 裸 ``` 围栏(无语言标记):酒馆部分卡的模板(如 JS-Slash-Runner 状态栏)输出
+//    "```\n<head><script type=module>..." —— 内容像 HTML 时按面板渲染
+const BARE_FENCE_RE = /```\s*\n?([\s\S]*?)```/gi;
 
 /** 段类型：text=文本段 html=面板段 */
 
@@ -23,11 +26,21 @@ const HTML_FENCE_RE = /```html\s*\n?([\s\S]*?)```/gi;
  */
 export function htmlNeedsIframe(html) {
     const t = String(html || '');
-    return /<style[\s>]/i.test(t) || /<script[\s>]/i.test(t) || /<html[\s>]/i.test(t);
+    return /<style[\s>]/i.test(t) || /<script[\s>]/i.test(t) || /<html[\s>]/i.test(t) || /^\s*<head[\s>]/i.test(t);
+}
+
+/** 围栏内容是否像 HTML 面板(裸围栏升级为 html 段的判定) */
+function fenceLooksLikeHtml(content) {
+    const t = String(content || '').trim();
+    return /^<(html|head|body|style|script|div|table|section)[\s>]/i.test(t);
 }
 
 /**
  * 消息文本 → 分段数组 [{type:'text'|'html', content}]
+ * 规则(两遍):
+ *   ① ```html 围栏 → html 段(显式面板)
+ *   ② 剩余文本里的裸 ``` 围栏:内容像 HTML(以 <head>/<style>/<script>/<div>… 开头) → html 段;
+ *     否则保留围栏留在 text 段(由 Markdown 引擎按代码块渲染)
  * 空段自动剔除；全空返回单空文本段（模板渲染兜底）
  */
 export function segmentMessage(text) {
@@ -38,16 +51,36 @@ export function segmentMessage(text) {
     HTML_FENCE_RE.lastIndex = 0;
     let m;
     while ((m = HTML_FENCE_RE.exec(src)) !== null) {
-        const before = src.slice(last, m.index).trim();
-        if (before) out.push({ type: 'text', content: before });
+        const before = src.slice(last, m.index);
+        pushTextSegments(out, before);
         const html = (m[1] || '').trim();
         if (html) out.push({ type: 'html', content: html });
         last = m.index + m[0].length;
     }
-    const tail = src.slice(last).trim();
-    if (tail) out.push({ type: 'text', content: tail });
+    pushTextSegments(out, src.slice(last));
     if (!out.length) out.push({ type: 'text', content: '' });
     return out;
+}
+
+/** 文本内容 → 追加 text/html 段(裸围栏内像 HTML 则升级为 html 段) */
+function pushTextSegments(out, raw) {
+    if (!raw) return;
+    let last = 0;
+    BARE_FENCE_RE.lastIndex = 0;
+    let m;
+    while ((m = BARE_FENCE_RE.exec(raw)) !== null) {
+        const before = raw.slice(last, m.index).trim();
+        if (before) out.push({ type: 'text', content: before });
+        const inner = (m[1] || '').trim();
+        if (inner) {
+            out.push(fenceLooksLikeHtml(inner)
+                ? { type: 'html', content: inner }
+                : { type: 'text', content: '```\n' + inner + '\n```' });
+        }
+        last = m.index + m[0].length;
+    }
+    const tail = raw.slice(last).trim();
+    if (tail) out.push({ type: 'text', content: tail });
 }
 
 /**

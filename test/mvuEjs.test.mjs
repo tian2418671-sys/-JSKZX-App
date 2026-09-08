@@ -286,3 +286,18 @@ test('splitPending：未闭合围栏挂起，已闭合直通', () => {
 });
 
 console.log('MVU+EJS ALL PASS');
+
+// ============ 小写 <update> 变体兼容(JS-Slash-Runner/Prompt-Template 卡) ============
+test('extractMvu 兼容小写 <update>/<update variable> 变体', () => {
+    const t1 = extractMvu('前<update>[{"type":"set","path":"a.b","value":1}]</update>后');
+    assert.equal(t1.ops.length, 1);
+    assert.equal(t1.ops[0].type, 'set');
+    assert.equal(t1.display, '前后');
+    const t2 = extractMvu('A<UpdateVariable>{"type":"set","path":"x","value":2}</UpdateVariable>B');
+    assert.equal(t2.ops.length, 1);
+    assert.equal(t2.display, 'AB');
+    // 大小写不敏感
+    const t3 = extractMvu('a<UPDATE VARIABLE>{"type":"set","path":"y","value":3}</UPDATE VARIABLE>b');
+    assert.equal(t3.ops.length, 1);
+    assert.equal(t3.display, 'ab');
+});

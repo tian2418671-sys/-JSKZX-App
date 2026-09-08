@@ -9,7 +9,12 @@
             </template>
         </van-nav-bar>
 
-        <van-empty v-if="!card" :description="id ? `未找到卡片：${id}` : '卡片不存在'">
+        <!-- 🚀 打开加载态:水合全量数据期间显示 loading,不再闪现「未找到卡片」 -->
+        <div v-if="cardLoading" class="detail-loading">
+            <van-loading size="28">加载卡片…</van-loading>
+        </div>
+
+        <van-empty v-else-if="!card" :description="id ? `未找到卡片：${id}` : '卡片不存在'">
             <van-button size="small" type="primary" @click="$router.back()">返回</van-button>
         </van-empty>
 
@@ -355,6 +360,7 @@
                             :user-persona="userPersona"
                             :memory-enabled="memoryEnabled"
                             :memory-limit="memoryLimit"
+                            :max-floors="maxFloors"
                             :mvu-enabled="mvuEnabled"
                             :ejs-enabled="ejsEnabled"
                             :seg-render-enabled="segRenderEnabled"
@@ -382,6 +388,7 @@
                             @update-user-persona="handleUpdateUserPersona"
                             @update-memory-enabled="handleUpdateMemoryEnabled"
                             @update-memory-limit="handleUpdateMemoryLimit"
+                            @update-max-floors="handleUpdateMaxFloors"
                             @update-mvu-enabled="handleUpdateMvu"
                             @update-ejs-enabled="handleUpdateEjs"
                             @update-seg-render="handleUpdateSegRender"
@@ -554,7 +561,7 @@ import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
-import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
+import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona, getMaxFloors, setMaxFloors } from '../useChatSettings';
 import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 // 🚀 对齐酒馆正文 Markdown 引擎(Showdown,messageFormatting 第 6 步 converter.makeHtml)
@@ -582,6 +589,7 @@ export default {
         const router = useRouter();
         const id = ref('');
         const card = ref(null);
+        const cardLoading = ref(false); // 🚀 打开水合中(防「未找到卡片」闪现)
         const activeTab = ref('basic');
         const advancedOpen = ref([]);
         const descOpen = ref(['desc']); // 详细设定默认展开，可手动折叠
@@ -1501,6 +1509,7 @@ export default {
             replyCount.value = getReplyCount();
             userName.value = getUserName();
             userPersona.value = getUserPersona();
+            maxFloors.value = getMaxFloors();
         }
         // 切到「测卡」Tab 时重新同步全局配置（可能刚在设置页改过）
         watch(activeTab, (t) => { if (t === 'chat') { refreshChatConfig(); scrollChat(); } });
@@ -1509,6 +1518,7 @@ export default {
         const replyCount = ref(getReplyCount());
         const userName = ref(getUserName());
         const userPersona = ref(getUserPersona());
+        const maxFloors = ref(getMaxFloors()); // 🚀 自动隐藏楼层数:0=不限
         const showUserRole = ref(false);
         function openUserRole() { showUserRole.value = true; }
         function saveInlineUser() {
@@ -1919,6 +1929,8 @@ export default {
         function handleUpdateUserPersona(v) { userPersona.value = v; setUserPersona(v); }
         function handleUpdateMemoryEnabled(v) { memoryEnabled.value = v; setMemoryEnabled(v); }
         function handleUpdateMemoryLimit(v) { memoryLimit.value = v; setMemoryLimit(v); }
+        // 🚀 自动隐藏楼层数:只把最近 N 层发给 AI
+        function handleUpdateMaxFloors(v) { maxFloors.value = Number(v) || 0; setMaxFloors(maxFloors.value); }
 
         // 测卡页面底部快捷入口：打开侧边栏设置 Tab
         function goApiSettings() {
@@ -2009,11 +2021,21 @@ export default {
 
         async function buildPayload(type) {
             const macros = fullMacros.value;
-            // 历史对话（不含最后一条刚发出的 user 消息——buildPayload 在 push user 之后调用）
-            const chatHistory = chatMessages.value
+            // 🚀 自动隐藏楼层数:只保留最近 N 层(N=用户+AI 一对,即 2N 条消息),远处楼层不发给 AI
+            const maxFloorsN = Math.max(0, Number(maxFloors.value) || 0);
+            let historySource = chatMessages.value
                 .slice(0, -1)
-                .filter((m) => m.role === 'user' || m.role === 'assistant')
-                .map((m) => ({ role: m.role, content: messageText(m) }));
+                .filter((m) => m.role === 'user' || m.role === 'assistant');
+            if (maxFloorsN > 0) historySource = historySource.slice(-(maxFloorsN * 2));
+            // 历史对话（不含最后一条刚发出的 user 消息——buildPayload 在 push user 之后调用）
+            // 🚀 对齐酒馆:发给 AI 的历史 assistant 消息应用 promptOnly 正则(如「对AI隐藏状态栏/变量更新」),
+            //    避免把 <update>/占位符等内部块发给模型
+            const chatHistory = historySource.map((m) => {
+                const content = m.role === 'assistant'
+                    ? applyRegexScripts(messageText(m), allRegexScripts.value, 'AI', macros, { promptOnlyExclusive: true })
+                    : messageText(m);
+                return { role: m.role, content };
+            });
 
             // 世界书激活条目（方案 PromptBuilder：常驻 + 关键词触发，EJS 条目先渲染）
             const lastUserMsg = [...chatMessages.value].reverse().find((m) => m.role === 'user');
@@ -2259,7 +2281,12 @@ export default {
             const prior = chatMessages.value
                 .slice(0, i)
                 .filter((m) => m.role === 'user' || m.role === 'assistant')
-                .map((m) => ({ role: m.role, content: messageText(m) }));
+                .map((m) => {
+                    const content = m.role === 'assistant'
+                        ? applyRegexScripts(messageText(m), allRegexScripts.value, 'AI', fullMacros.value, { promptOnlyExclusive: true })
+                        : messageText(m);
+                    return { role: m.role, content };
+                });
             prior.push({ role: 'assistant', content: text });
             prior.push({ role: 'user', content: '[continue]' });
             let payload;
@@ -2534,6 +2561,7 @@ export default {
         onMounted(async () => {
             try {
                 resolveId();
+                cardLoading.value = true; // 🚀 水合期间显示 loading,杜绝「未找到卡片」闪现
                 await ensureLibraryReady();
                 // 🚀 轻量化:先定位轻量条目,再按需加载全量数据为深响应式编辑副本
                 card.value = await hydrateCardForEdit(locateCard(id.value));
@@ -2552,6 +2580,7 @@ export default {
                         samples: mobileLibrary.library.slice(0, 5).map((x) => x.path)
                     }));
                 }
+                cardLoading.value = false; // 🚀 水合完成(找到与否都结束 loading)
                 // 初始化会话管理（反馈3：聊天记录持久化）
                 chatSessions.value = loadSessions(id.value);
                 const lastSid = getLastSessionId(id.value);
@@ -2571,6 +2600,7 @@ export default {
                 initChat();
             } catch (e) {
                 console.error('[CardDetail] 挂载异常', e && e.message, e);
+                cardLoading.value = false; // 🚀 异常也结束 loading,回落到「未找到卡片」提示
             }
         });
 
@@ -2584,7 +2614,7 @@ export default {
         });
 
         return {
-            card, id, activeTab, advancedOpen, descOpen, showTokenDetail, showTokenPanel, personalityOpen, saved,
+            card, cardLoading, id, activeTab, advancedOpen, descOpen, showTokenDetail, showTokenPanel, personalityOpen, saved,
             d, tags, greetingsText, wbEntries, regexList,
             tokenText, tokenRows, tokenTotal, wbTokenCount,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
@@ -2627,9 +2657,9 @@ export default {
             handleToggleWbEntry, handleUpdateWbEntry, handleSyncWbKeys,
             // API/设置 handler（反馈6）
             handleUpdateApiConfig, handleUpdateReplyCount, handleUpdateUserName, handleUpdateUserPersona,
-            handleUpdateMemoryEnabled, handleUpdateMemoryLimit,
+            handleUpdateMemoryEnabled, handleUpdateMemoryLimit, handleUpdateMaxFloors,
             // 记忆状态（反馈6）
-            memoryEnabled, memoryLimit,
+            memoryEnabled, memoryLimit, maxFloors,
             showAiTools, aiMode, aiRunning, aiProgress, aiCandidates, openAiTools,
             showAutoTagRules, disabledRuleNames, customAutoTagRules, toggleSystemRule, addCustomRule, removeCustomRule,
             addAICandidate, removeAICandidate, startAiTagging, startAiTranslate, startAiRefactor
@@ -2914,4 +2944,6 @@ export default {
 /* 插件列表 */
 .plugin-name { font-size: 14px; font-weight: 600; }
 .plugin-desc { font-size: 11px; color: var(--van-gray-5, #969799); margin-top: 2px; }
+/* 🚀 打开水合 loading */
+.detail-loading { padding: 80px 0; text-align: center; color: var(--van-gray-5, #969799); }
 </style>
