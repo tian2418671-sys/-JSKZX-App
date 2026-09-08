@@ -2,10 +2,12 @@
   CodeEditor 轻量代码编辑器(预设脚本查看/编辑用,零依赖)
   行号栏 + 语法高亮层(highlightJs) + 透明 textarea 编辑层叠加;
   同步滚动;Tab 键缩进;工具栏:格式化 / 复制 / 明暗切换。
-  🎨 配色:One Dark 深色主题(逐 token 对比度 ≥ 4.5:1,颜色全 !important 防全局样式污染)。
+  🎨 主题架构:根容器 .ce-editor 上的 CSS 变量统一驱动全部节点
+     (背景/文字/行号/光标/高亮 token),切换只改根 class,任何子节点必然同步;
+     样式全部非 scoped 且带 .ce-editor 前缀 + !important,杜绝作用域丢失与全局污染。
 -->
 <template>
-    <div class="ce-wrap" :class="{ 'ce-light': lightTheme }">
+    <div class="ce-editor" :class="{ 'ce-light': lightTheme }">
         <div class="ce-toolbar">
             <span class="ce-info">{{ lineCount }} 行 · {{ charCount }} 字符</span>
             <span class="ce-actions">
@@ -14,14 +16,13 @@
                 <van-button size="mini" plain @click="lightTheme = !lightTheme">{{ lightTheme ? '🌙 深色' : '☀️ 浅色' }}</van-button>
             </span>
         </div>
-        <div class="ce-body" :class="{ 'ce-fallback': !overlaySupported }" :style="{ height: height }">
+        <div class="ce-body" :style="{ height: height }">
             <div class="ce-gutter" ref="gutterEl" aria-hidden="true">{{ gutterText }}</div>
             <div class="ce-stage">
-                <pre v-if="overlaySupported" class="ce-highlight" ref="hlEl" aria-hidden="true" v-html="highlighted"></pre>
+                <pre class="ce-highlight" ref="hlEl" aria-hidden="true" v-html="highlighted"></pre>
                 <textarea
                     ref="taEl"
                     class="ce-input"
-                    :class="{ 'ce-input-fallback': !overlaySupported }"
                     :value="modelValue"
                     :spellcheck="false"
                     :autocapitalize="off"
@@ -36,7 +37,7 @@
 </template>
 
 <script>
-import { computed, ref, onMounted, watch } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { highlightJs, formatJs } from '../../utils/codeFormat.js';
 
 export default {
@@ -50,24 +51,10 @@ export default {
         const taEl = ref(null);
         const hlEl = ref(null);
         const gutterEl = ref(null);
-        // 🚀 WebView 兜底:检测透明文字叠层是否受支持(部分旧 WebView 不支持 -webkit-text-fill-color:transparent
-        //    → 文字会以黑色直接显示,与高亮层叠影)。不支持时切「直显模式」:黑字白底,仍可正常编辑。
-        const overlaySupported = (() => {
-            try {
-                const el = document.createElement('textarea');
-                el.style.setProperty('-webkit-text-fill-color', 'transparent');
-                document.body.appendChild(el);
-                const v = getComputedStyle(el).webkitTextFillColor;
-                el.remove();
-                return v === 'transparent' || v === 'rgba(0, 0, 0, 0)';
-            } catch (e) {
-                return false;
-            }
-        })();
-        const code = computed(() => String(props.modelValue == null ? '' : props.modelValue));
-        // 🎨 明暗主题切换(默认深色 One Dark;浅色为 GitHub Light 系,对比度同达标)
+        // 🎨 明暗主题(默认深色 One Dark;浅色为 GitHub Light 系)
         const lightTheme = ref(false);
         const copied = ref(false);
+        const code = computed(() => String(props.modelValue == null ? '' : props.modelValue));
         const highlighted = computed(() => highlightJs(code.value));
         const lineCount = computed(() => (code.value ? code.value.split('\n').length : 1));
         const charCount = computed(() => code.value.length);
@@ -103,37 +90,25 @@ export default {
         async function doCopy() {
             const text = code.value;
             if (!text) return;
+            const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            };
             try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(text);
-                } else {
-                    const ta = document.createElement('textarea');
-                    ta.value = text;
-                    ta.style.position = 'fixed';
-                    ta.style.opacity = '0';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    ta.remove();
-                }
+                if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+                else fallback();
                 copied.value = true;
-                setTimeout(() => { copied.value = false; }, 1600);
             } catch (e) {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = text;
-                    ta.style.position = 'fixed';
-                    ta.style.opacity = '0';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    ta.remove();
-                    copied.value = true;
-                    setTimeout(() => { copied.value = false; }, 1600);
-                } catch (e2) { /* 复制失败静默 */ }
+                try { fallback(); copied.value = true; } catch (e2) { /* 复制失败静默 */ }
             }
+            setTimeout(() => { copied.value = false; }, 1600);
         }
-        // 换行数变化时保持高亮层高度同步(高亮层靠内容高度,textarea 滚动同步即可)
         onMounted(() => {
             if (taEl.value && hlEl.value) {
                 hlEl.value.scrollTop = taEl.value.scrollTop;
@@ -141,7 +116,7 @@ export default {
             }
         });
         return {
-            taEl, hlEl, gutterEl, overlaySupported, lightTheme, copied,
+            taEl, hlEl, gutterEl, lightTheme, copied,
             highlighted, lineCount, charCount, gutterText,
             onInput, onScroll, onTab, doFormat, doCopy
         };
@@ -149,79 +124,85 @@ export default {
 };
 </script>
 
-<style scoped>
-.ce-wrap { display: flex; flex-direction: column; }
-.ce-toolbar {
+<!--
+  主题样式:非 scoped,全部 .ce-editor 前缀 + !important。
+  深色(默认)与浅色(.ce-light)两组 CSS 变量,节点只引用变量 → 切换必然整体同步。
+-->
+<style>
+/* ===== 主题变量 ===== */
+.ce-editor {
+    --ce-bg: #0d1117;         /* 代码区背景 */
+    --ce-gutter-bg: #0d1117;  /* 行号栏背景 */
+    --ce-gutter-fg: #6e7681;  /* 行号文字 */
+    --ce-fg: #e6edf3;         /* 默认文字 */
+    --ce-caret: #58a6ff;      /* 光标 */
+    --ce-kw: #c678dd;         /* 关键字 */
+    --ce-str: #98c379;        /* 字符串 */
+    --ce-num: #d19a66;        /* 数字 */
+    --ce-cmt: #8b949e;        /* 注释 */
+    --ce-lit: #56b6c2;        /* 字面量 */
+    --ce-bi: #79c0ff;         /* 内置 API */
+    --ce-re: #e06c75;         /* 正则 */
+}
+.ce-editor.ce-light {
+    --ce-bg: #ffffff;
+    --ce-gutter-bg: #f6f8fa;
+    --ce-gutter-fg: #8c959f;
+    --ce-fg: #1f2328;
+    --ce-caret: #0969da;
+    --ce-kw: #cf222e;
+    --ce-str: #0a3069;
+    --ce-num: #0550ae;
+    --ce-cmt: #6e7781;
+    --ce-lit: #0550ae;
+    --ce-bi: #8250df;
+    --ce-re: #a40e26;
+}
+
+/* ===== 布局 ===== */
+.ce-editor { display: flex; flex-direction: column; }
+.ce-editor .ce-toolbar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 6px 14px; border-bottom: 1px solid var(--van-gray-3, #ebedf0);
 }
-.ce-info { font-size: 11px; color: var(--van-gray-5, #969799); font-variant-numeric: tabular-nums; }
-.ce-actions { display: flex; gap: 6px; }
-.ce-body { display: flex; overflow: hidden; background: #0d1117; }
-.ce-gutter {
+.ce-editor .ce-info { font-size: 11px; color: var(--van-gray-5, #969799); font-variant-numeric: tabular-nums; }
+.ce-editor .ce-actions { display: flex; gap: 6px; }
+.ce-editor .ce-body { display: flex; overflow: hidden; background: var(--ce-bg) !important; }
+.ce-editor .ce-gutter {
     flex: 0 0 auto; min-width: 38px; padding: 12px 8px 12px 0;
     text-align: right; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.55;
-    color: #484f58; background: #0d1117; overflow: hidden; user-select: none;
-    white-space: pre; box-sizing: border-box;
+    color: var(--ce-gutter-fg) !important; background: var(--ce-gutter-bg) !important;
+    overflow: hidden; user-select: none; white-space: pre; box-sizing: border-box;
 }
-.ce-stage { position: relative; flex: 1; min-width: 0; }
-.ce-highlight, .ce-input {
+.ce-editor .ce-stage { position: relative; flex: 1; min-width: 0; }
+.ce-editor .ce-highlight, .ce-editor .ce-input {
     position: absolute; inset: 0; margin: 0; padding: 12px 12px;
     font-family: 'Consolas', 'Monaco', 'SF Mono', monospace; font-size: 13px; line-height: 1.55;
     white-space: pre; overflow: auto; tab-size: 2;
     border: 0; border-radius: 0; box-sizing: border-box;
 }
-.ce-highlight {
+.ce-editor .ce-highlight {
     pointer-events: none; z-index: 1;
-    color: #e6edf3 !important; /* One Dark 主文字:浅灰白,对 #0d1117 底对比 ≈ 15:1 */
-    background: transparent;
+    color: var(--ce-fg) !important;
+    background: transparent !important;
 }
-.ce-input {
-    z-index: 2; color: transparent; caret-color: #58a6ff; background: transparent;
+.ce-editor .ce-input {
+    z-index: 2; color: transparent; caret-color: var(--ce-caret) !important; background: transparent !important;
     resize: none; outline: none; -webkit-text-fill-color: transparent;
 }
-/* 🚀 选中态:叠层方案下编辑层文字透明,显式给选中态白字+蓝底 */
-.ce-input::selection {
+.ce-editor .ce-input::selection {
     background: rgba(88, 166, 255, 0.45);
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff;
 }
-.ce-highlight::selection { background: rgba(88, 166, 255, 0.30); }
+.ce-editor .ce-highlight::selection { background: rgba(88, 166, 255, 0.30); }
 
-/* ============ One Dark 语法高亮(逐 token 对比度 ≥ 4.5:1,!important 防全局污染) ============ */
-/* 关键字 const/function/return… 亮紫 #c678dd,对比 ≈ 7.1:1 */
-.ce-highlight :deep(.kw) { color: #c678dd !important; font-weight: 600; }
-/* 字符串 浅绿 #98c379,对比 ≈ 8.6:1 */
-.ce-highlight :deep(.str) { color: #98c379 !important; }
-/* 数字 浅橙 #d19a66,对比 ≈ 7.0:1 */
-.ce-highlight :deep(.num) { color: #d19a66 !important; }
-/* 注释 中灰 #8b949e,对比 ≈ 5.2:1 */
-.ce-highlight :deep(.cmt) { color: #8b949e !important; font-style: italic; }
-/* 字面量 true/false/null 亮青 #56b6c2,对比 ≈ 7.3:1 */
-.ce-highlight :deep(.lit) { color: #56b6c2 !important; }
-/* 内置 API 亮蓝 #79c0ff,对比 ≈ 8.0:1 */
-.ce-highlight :deep(.bi) { color: #79c0ff !important; }
-/* 正则字面量 红 #e06c75,对比 ≈ 5.4:1 */
-.ce-highlight :deep(.re) { color: #e06c75 !important; }
-
-/* 🚀 直显回退模式(WebView 不支持透明叠层):白底黑字,放弃高亮保可编辑性 */
-.ce-fallback { background: #ffffff; }
-.ce-input-fallback {
-    color: #1e293b !important; background: #ffffff; -webkit-text-fill-color: #1e293b;
-    caret-color: #0284c7;
-}
-.ce-fallback .ce-gutter { background: #f6f8fa; color: #8c959f; }
-
-/* ============ 浅色主题(GitHub Light 系,对比度同达标) ============ */
-.ce-light .ce-body, .ce-light .ce-gutter { background: #ffffff; }
-.ce-light .ce-gutter { color: #8c959f; }
-.ce-light .ce-highlight { color: #1f2328 !important; }
-.ce-light .ce-highlight :deep(.kw) { color: #cf222e !important; }
-.ce-light .ce-highlight :deep(.str) { color: #0a3069 !important; }
-.ce-light .ce-highlight :deep(.num) { color: #0550ae !important; }
-.ce-light .ce-highlight :deep(.cmt) { color: #6e7781 !important; }
-.ce-light .ce-highlight :deep(.lit) { color: #0550ae !important; }
-.ce-light .ce-highlight :deep(.bi) { color: #8250df !important; }
-.ce-light .ce-highlight :deep(.re) { color: #a40e26 !important; }
-.ce-light .ce-input { caret-color: #0969da; }
+/* ===== 语法高亮 token(全部引用主题变量) ===== */
+.ce-editor .ce-highlight .kw { color: var(--ce-kw) !important; font-weight: 600; }
+.ce-editor .ce-highlight .str { color: var(--ce-str) !important; }
+.ce-editor .ce-highlight .num { color: var(--ce-num) !important; }
+.ce-editor .ce-highlight .cmt { color: var(--ce-cmt) !important; font-style: italic; }
+.ce-editor .ce-highlight .lit { color: var(--ce-lit) !important; }
+.ce-editor .ce-highlight .bi { color: var(--ce-bi) !important; }
+.ce-editor .ce-highlight .re { color: var(--ce-re) !important; }
 </style>
