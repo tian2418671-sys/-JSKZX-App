@@ -158,16 +158,19 @@ export default {
             const d = preset.value && preset.value.data;
             return (d && Array.isArray(d.prompts)) ? d.prompts : [];
         });
+        // 🚀 正则/插件双位置读取:酒馆预设的 regex_scripts 在「顶层 extensions」;
+        //   兼容 data.extensions 形态的卡内预设(与 extractRegexFromPreset 语义对齐)
+        function presetExt(presetObj) {
+            const d = presetObj && presetObj.data;
+            if (!d) return {};
+            return d.extensions || (d.data && d.data.extensions) || {};
+        }
         const editableRegex = computed(() => {
-            const d = preset.value && preset.value.data;
-            if (!d) return [];
-            const ext = d.extensions || {};
+            const ext = presetExt(preset.value);
             return Array.isArray(ext.regex_scripts) ? ext.regex_scripts : [];
         });
         const editablePlugins = computed(() => {
-            const d = preset.value && preset.value.data;
-            if (!d) return [];
-            const ext = d.extensions || {};
+            const ext = presetExt(preset.value);
             return Array.isArray(ext.plugins) ? ext.plugins : [];
         });
 
@@ -379,10 +382,13 @@ export default {
 </script>
 
 <style scoped>
-.pd-page { display: flex; flex-direction: column; height: 100vh; background: var(--van-background-2, #f7f8fa); }
+/* 🚀 滚动修复:完整高度链(页面→tabs→content),长列表(204 条提示词/26 条正则)必须可滚动 */
+.pd-page { display: flex; flex-direction: column; height: 100vh; min-height: 0; background: var(--van-background-2, #f7f8fa); }
 .pd-loading { padding: 80px 0; text-align: center; }
-.pd-tabs { flex: 1; overflow: hidden; }
-.pd-tabs :deep(.van-tabs__content) { flex: 1; overflow-y: auto; }
+.pd-tabs { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.pd-tabs :deep(.van-tabs) { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.pd-tabs :deep(.van-tabs__content) { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.pd-tabs :deep(.van-tab__panel) { height: auto; }
 .pd-body { padding: 10px 12px 24px; }
 .pd-tip { font-size: 12px; color: var(--van-gray-5, #969799); padding: 4px 4px 10px; }
 .pd-p-name { margin-right: 8px; font-size: 14px; font-weight: 600; }
