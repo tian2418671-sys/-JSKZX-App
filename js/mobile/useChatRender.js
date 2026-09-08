@@ -52,18 +52,21 @@ export function segmentMessage(text) {
 
 /**
  * HTML 段 → iframe srcdoc 完整文档（对齐方案 ensureDocument：片段包壳，完整文档直用）
- * 注入变量桥（getVariables/getMessageVar stub）+ 高度上报桥（postMessage，
+ * 注入变量桥（getVariables/getMessageVar）+ 高度上报桥（postMessage，
  * sandbox 无同源权限时的量高回写等价实现，方案第 4 节 onPageFinished 量高）
  * @param {string} html 面板 HTML（片段或完整文档）
- * @param {string} varsJson 变量树 JSON 字符串（注入 getVariables）
+ * @param {string} varsJson 变量树 JSON 字符串（注入 getVariables；须为 JSON 文本）
  * @param {string} panelId 面板唯一 id（高度上报配对用）
  */
 export function buildHtmlSrcdoc(html, varsJson, panelId) {
     const body = String(html || '');
-    const vars = varsJson || '{ "stat_data": {} }';
+    // 🔧 修复双重序列化:varsJson 已是 JSON 文本,直接内联为 JS 表达式(getVariables 必须返回对象)。
+    //   另防变量/面板内容里的 </script 破出桥接脚本标签。
+    const varsLiteral = String(varsJson || '{"stat_data":{}}')
+        .replace(/<\/(script)/gi, '<\\/$1');
     const pid = String(panelId || '');
-    const bridge = '<script>window.getVariables=function(){try{return JSON.parse(' +
-        JSON.stringify(vars) + ');}catch(e){return {stat_data:{}};}};' +
+    const bridge = '<script>window.getVariables=function(){try{return ' + varsLiteral +
+        ';}catch(e){return {stat_data:{}};}};' +
         'window.getMessageVar=function(p){var v=window.getVariables();var c=v;' +
         'try{p.split(".").forEach(function(s){c=(c==null)?undefined:c[s];});}catch(e){c=undefined;}' +
         'return c;};' +
@@ -83,6 +86,22 @@ export function buildHtmlSrcdoc(html, varsJson, panelId) {
         '<meta name="viewport" content="width=device-width,initial-scale=1">' +
         '<style>html,body{margin:0;padding:0;background:transparent;}</style>' +
         bridge + '</head><body>' + body + '</body></html>';
+}
+
+/**
+ * 🚀 分段升级（对齐酒馆 messageFormatting:正则输出的完整 HTML 模板无 ```html 围栏,直接渲染）
+ * text 段内容若为完整 HTML 模板(含 <style>/<script>/<html> 结构) → 升级为 html 段走 sandbox iframe,
+ * 否则落入 sanitizeStatusHtml 白名单时 <style>/<script> 会被剥除,面板全部失效。
+ * @param {Array} segments segmentMessage 的输出
+ * @returns {Array} 升级后的分段
+ */
+export function promoteHtmlSegments(segments) {
+    return (segments || []).map((seg) => {
+        if (seg && seg.type === 'text' && htmlNeedsIframe(seg.content)) {
+            return { type: 'html', content: seg.content };
+        }
+        return seg;
+    });
 }
 
 /**

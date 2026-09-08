@@ -64,12 +64,29 @@ function unescapeHtmlEntities(str) {
             .replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 }
 
+// 🚀 对齐酒馆 addDOMPurifyHooks:链接强制新窗口打开,防点击链接把 WebView 整页导航走
+let sanitizeHooksInstalled = false;
+function installSanitizeHooks() {
+    if (sanitizeHooksInstalled) return;
+    sanitizeHooksInstalled = true;
+    try {
+        DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+            if (node.tagName === 'A') {
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
+            }
+        });
+    } catch (e) { /* 钩子失败不影响主流程 */ }
+}
+
 /**
  * DOMPurify 白名单清洗（移动端状态栏预览与桌面共用同策略）
- * 剥离 Markdown 代码块围栏 / loader 直链块，禁止外联 URL 与事件属性
+ * 剥离 Markdown 代码块围栏 / loader 直链块，禁止事件属性与外联追踪
+ * 🚀 v1.10.4:放行 <a href>(http/https/mailto)+ 新窗口钩子,标题/列表/表格等 Markdown 全量生效
  */
 export function sanitizeStatusHtml(text) {
     if (!text) return '';
+    installSanitizeHooks();
     let t = String(text);
     // 🧹 剥离 Markdown 代码块围栏（```html ```json 等）
     t = t.replace(/```[a-zA-Z]*\n?/gi, '').replace(/```/g, '');
@@ -81,18 +98,18 @@ export function sanitizeStatusHtml(text) {
         : t;
     return DOMPurify.sanitize(textWithoutLoader, {
         ALLOWED_TAGS: [
-            'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span',
+            'b', 'i', 'em', 'strong', 'u', 's', 'br', 'p', 'div', 'span', 'a',
             'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'img', 'hr',
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
             'table', 'thead', 'tbody', 'tr', 'td', 'th',
             'progress', 'details', 'summary', 'font', 'center', 'small', 'sub', 'sup'
         ],
-        ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title', 'width', 'height',
+        ALLOWED_ATTR: ['class', 'style', 'src', 'alt', 'title', 'width', 'height', 'href',
             'align', 'valign', 'colspan', 'rowspan', 'bgcolor', 'color', 'max', 'value'],
         ALLOW_DATA_ATTR: false,
         FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'oninput', 'onanimationstart', 'onanimationend', 'onpointerdown', 'onpointerup', 'onpointermove', 'ondragstart', 'ondrop'],
-        // 允许内嵌 base64 图与相对路径，禁止 http(s) 外联（防追踪像素/内网探测）
-        ALLOWED_URI_REGEXP: /^(?:data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+        // 🚀 放行 http(s)/mailto 链接与内嵌 base64 图;事件属性已被 FORBID_ATTR 全量拦截
+        ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|tel:|data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
     });
 }
 

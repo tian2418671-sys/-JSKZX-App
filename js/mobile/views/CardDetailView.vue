@@ -557,13 +557,15 @@ import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
+// 🚀 对齐酒馆正文 Markdown 引擎(Showdown,messageFormatting 第 6 步 converter.makeHtml)
+import Showdown from 'showdown';
 import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
 import { buildMacroContext, applyMacros } from '../useChatMacros';
 import { applyRegexScripts, extractRegexFromCard, coercePlacement } from '../useChatRegex';
 import { createVariableEngine, countVars, extractMvu } from '../useChatVariables';
 import { renderEjs, looksLikeEjs, buildTemplateContext } from '../useChatEjs';
-import { segmentMessage } from '../useChatRender';
+import { segmentMessage, promoteHtmlSegments } from '../useChatRender';
 import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
 import { loadSessions, createSession, upsertSession, persistMessages, deleteSession as deleteSessionById, renameSession as renameSessionById, getLastSessionId, setLastSessionId } from '../useChatSessions';
 import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
@@ -1138,12 +1140,21 @@ export default {
             const t = statusApplied.value || '';
             return statusNeedsIframe.value ? '' : sanitizeStatusHtml(t);
         });
-        // 完整模板 → 包成完整文档 + 注入 getVariables stub（无酒馆变量接口，模板按默认值渲染）
+        // 完整模板 → 包成完整文档 + 注入真实 MVU 变量桥(状态栏模板读 stat_data 等真实变量,
+        // 不再用 {stat_data:{}} stub;变量变更后 srcdoc 重算自动重渲染)
         const statusSrcdoc = computed(() => {
             const t = statusApplied.value || '';
             if (!statusNeedsIframe.value) return '';
+            void varsVersion.value; // 变量树变更 → 状态栏模板重渲染
+            let varsLiteral = '{"stat_data":{}}';
+            try {
+                varsLiteral = JSON.stringify(varEngine ? varEngine.root : { stat_data: {} });
+            } catch (e) { /* 保持 stub */ }
+            // 防变量内容里的闭合脚本标签破出桥接脚本(SFC 注释勿含字面量闭合标签)
+            varsLiteral = varsLiteral.replace(/<\/(script)/gi, '<\\/$1');
             return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:transparent;}</style></head><body>' +
-                '<script>window.getVariables = function(){ return { stat_data: {} }; };<\/script>' + t + '</body></html>';
+                '<script>window.getVariables = function(){ try{ return ' + varsLiteral + '; }catch(e){ return {stat_data:{}}; } };' +
+                'window.getMessageVar=function(p){var v=window.getVariables();var c=v;try{p.split(".").forEach(function(s){c=(c==null)?undefined:c[s];});}catch(e){c=undefined;}return c;};<\/script>' + t + '</body></html>';
         });
 
         function resetStatusDemo() {
@@ -1436,23 +1447,38 @@ export default {
         function toggleChatRender() {
             chatRenderMode.value = chatRenderMode.value === 'render' ? 'source' : 'render';
         }
-        // 聊测渲染:Markdown(粗体/斜体/代码块) + 安全 HTML 渲染,经 DOMPurify 白名单清洗
+        // 聊测渲染:对齐酒馆 messageFormatting —— Showdown 完整 Markdown(标题/列表/表格/引用/链接/代码块)
+        // + DOMPurify 白名单清洗(禁脚本/事件;链接新窗口)。仅文本段走此管线,HTML 面板段走 sandbox iframe。
+        const mdConverter = (() => {
+            try {
+                return new Showdown.Converter({
+                    tables: true, strikethrough: true, simplifiedAutoLink: false,
+                    openLinksInNewWindow: false, emoji: false, headerLevelStart: 1
+                });
+            } catch (e) {
+                return null; // showdown 加载失败 → 走轻量降级
+            }
+        })();
         function renderChatHtml(text) {
             let s = String(text == null ? '' : text);
-            // 代码块内容转义,避免被当 HTML 解析
-            s = s.replace(/```([\s\S]*?)```/g, (m, code) => {
-                const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return '<pre>' + esc + '</pre>';
-            });
-            s = s.replace(/`([^`]+)`/g, (m, code) => {
-                const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return '<code>' + esc + '</code>';
-            });
-            // 行内 Markdown
-            s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-            s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-            s = s.replace(/\n/g, '<br/>');
-            // DOMPurify 白名单清洗(禁止脚本/事件/外联,允许 b/i/p/pre/div 等安全标签)
+            if (mdConverter) {
+                try { s = mdConverter.makeHtml(s); } catch (e) { /* 转轻量降级 */ }
+            }
+            if (!mdConverter) {
+                // 轻量降级:粗体/斜体/行内代码/换行
+                s = s.replace(/```([\s\S]*?)```/g, (m, code) => {
+                    const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return '<pre>' + esc + '</pre>';
+                });
+                s = s.replace(/`([^`]+)`/g, (m, code) => {
+                    const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return '<code>' + esc + '</code>';
+                });
+                s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+                s = s.replace(/\n/g, '<br/>');
+            }
+            // DOMPurify 白名单清洗(禁止脚本/事件/外联追踪,允许 a[href] 新窗口)
             return sanitizeStatusHtml(s);
         }
 
@@ -1608,9 +1634,11 @@ export default {
         }
         // ---------- 分段渲染（对齐「渲染方案.MD」：文本段 + HTML 面板段） ----------
         function messageSegments(m) {
-            const text = messageText(m);
+            // 对齐酒馆 substituteParams:显示层先做宏替换({{char}}/{{user}} 等,幂等安全)
+            let text = applyMacros(messageText(m), fullMacros.value);
             if (!segRenderEnabled.value) return [{ type: 'text', content: text }];
-            return segmentMessage(text);
+            // 围栏切分 + 裸 HTML 模板段升级(正则输出的完整面板 HTML 无围栏,直接走 sandbox iframe)
+            return promoteHtmlSegments(segmentMessage(text));
         }
 
         // 持久化当前对话到会话
@@ -2055,12 +2083,10 @@ export default {
             const systemText = sysParts.filter(Boolean).join('\n\n');
             // 对历史消息应用宏替换
             const messages = chatHistory.map((m) => ({ role: m.role, content: applyMacros(messageText(m), macros) }));
-            // 最后一条消息也应用宏 + 正则(USER 方向)
+            // 最后一条消息(发送前已应用宏 + USER 正则,此处仅宏替换,不再二次应用正则防重复替换)
             const lastMsg = chatMessages.value[chatMessages.value.length - 1];
             if (lastMsg) {
-                let lastContent = applyMacros(messageText(lastMsg), macros);
-                lastContent = applyRegexScripts(lastContent, allRegexScripts.value, 'USER', macros);
-                messages.push({ role: lastMsg.role, content: lastContent });
+                messages.push({ role: lastMsg.role, content: applyMacros(messageText(lastMsg), macros) });
             }
 
             if (type === 'anthropic') {
@@ -2090,8 +2116,10 @@ export default {
             const reply = replyToSwipe(res, type);
             // 错误占位文本（⚠ 开头）不进变量层
             if (!reply || reply.startsWith('⚠')) return reply;
-            if (applyVars) return processAiReplyVars(reply);
-            return extractMvu(reply).display;
+            let out = applyVars ? processAiReplyVars(reply) : extractMvu(reply).display;
+            // 🚀 统一 AI 方向正则后处理(发送/再生成/重新生成/续写全部走同一管线,对齐酒馆 getRegexedString)
+            out = applyRegexScripts(out, allRegexScripts.value, 'AI', fullMacros.value);
+            return out;
         }
 
         async function sendChat() {
@@ -2101,8 +2129,9 @@ export default {
                 return;
             }
             const type = chatApiType.value === 'anthropic' ? 'anthropic' : 'openai';
-            // 对用户输入应用宏替换
-            const processedText = applyMacros(text, fullMacros.value);
+            // 对用户输入应用宏替换 + USER 方向正则(对齐酒馆:输入正则替换结果即显示文本,payload 直接复用不再二次应用)
+            let processedText = applyMacros(text, fullMacros.value);
+            processedText = applyRegexScripts(processedText, allRegexScripts.value, 'USER', fullMacros.value);
             chatMessages.value.push({ role: 'user', content: processedText });
             chatDraft.value = '';
             const count = Math.max(1, replyCount.value || 1);
@@ -2113,12 +2142,10 @@ export default {
 
             try {
                 const swipes = [];
-                const macros = fullMacros.value;
                 for (let n = 0; n < count; n++) {
                     // MVU 只对首条候选应用（变量跟随对话时间线；多候选重复应用会导致 add 双重计数）
-                    let reply = await requestReply(payload, type, n === 0);
-                    // 对 AI 回复应用 AI 方向正则脚本
-                    reply = applyRegexScripts(reply, allRegexScripts.value, 'AI', macros);
+                    // AI 正则已统一在 requestReply 内应用
+                    const reply = await requestReply(payload, type, n === 0);
                     swipes.push(reply);
                 }
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });

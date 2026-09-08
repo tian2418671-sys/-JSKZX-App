@@ -40,9 +40,24 @@ export default {
         const uid = 'seg' + (++SEG_UID);
         const heights = {}; // panelId → px（不响应式，收齐后批量写入）
         let flushTimer = null;
+        // 🚀 srcdoc 缓存:父组件每次重渲染(输入/发送/变量变更)若重新生成 srcdoc 字符串,
+        //    全部 iframe 会被浏览器整体重载 → 面板闪烁。按 内容+变量 键缓存,仅在真正变化时重载。
+        const srcdocCache = new Map();
+        let lastVarsJson = '';
 
         function srcdocOf(seg, si) {
-            return buildHtmlSrcdoc(seg.content, props.varsJson, uid + '_' + si);
+            const varsKey = String(props.varsJson || '');
+            if (varsKey !== lastVarsJson) { srcdocCache.clear(); lastVarsJson = varsKey; }
+            const key = varsKey + '\u0000' + si + '\u0000' + seg.content;
+            const hit = srcdocCache.get(key);
+            if (hit !== undefined) return hit;
+            const doc = buildHtmlSrcdoc(seg.content, props.varsJson, uid + '_' + si);
+            if (srcdocCache.size > 60) {
+                const first = srcdocCache.keys().next().value;
+                srcdocCache.delete(first);
+            }
+            srcdocCache.set(key, doc);
+            return doc;
         }
 
         // 段结构变化（会话切换/重新生成）→ 已量高度作废，等 iframe 重新上报
