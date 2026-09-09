@@ -1,13 +1,10 @@
 /**
- * SillyTavern 角色卡高级解析中心 - 前端入口（Vite）
- * 挂载 App.vue 根组件（全部界面与逻辑已迁入 SFC 结构）
- * M0：按运行环境分流挂载——
- *   ● Capacitor(Android WebView) → MobileApp 移动壳（4 Tab 骨架）
- *   ● Electron / 浏览器           → App.vue 桌面版
+ * SillyTavern 角色卡高级解析中心 - 移动版前端入口（Vite / Capacitor）
+ * 挂载 MobileApp.vue 移动壳（4 Tab 骨架）
+ * 🚀 移动版专用：入口只加载移动壳链（MobileApp+Vant+路由），单一 chunk 无桌面代码
  */
 import { createApp } from 'vue';
 
-// 是否运行在 Capacitor 原生容器内（Android/iOS WebView）
 // 预览调试开关：URL 带 ?mobile=1 或 localStorage 设 jsx_mobile_preview=1 时强制进入移动端界面（仅浏览器调试用，对 APK 实际运行零影响）
 const forceMobile = typeof window !== 'undefined'
     && (new URLSearchParams(window.location.search).has('mobile')
@@ -15,27 +12,17 @@ const forceMobile = typeof window !== 'undefined'
 const isNative = forceMobile || (typeof window !== 'undefined'
     && !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()));
 
-/**
- * 🚀 启动提速：桌面/移动根组件改动态 import —— Vite 自动拆分为两个独立 chunk：
- *   - Android WebView 只下载解析移动壳链（MobileApp+Vant+路由），
- *     桌面 App.vue 及其依赖（ECharts 桌面用法/大量 composables）不进首屏包
- *   - 桌面同理不加载移动端代码
- * 原静态 import 会把两端全部代码打进同一主 chunk（约 1.9MB），中端机解析 2~4 秒
- */
 async function boot() {
-    const rootComponent = isNative
-        ? (await import('./mobile/MobileApp.vue')).default
-        : (await import('./components/App.vue')).default;
+    // 🚀 移动版：始终挂载移动壳（浏览器预览也走移动端界面）
+    const rootComponent = (await import('./mobile/MobileApp.vue')).default;
     const app = createApp(rootComponent);
     await registerPlatform(app);
     app.config.errorHandler = errorHandler;
     app.mount('#app');
 }
 
-// 移动端:注册路由与 Vant(桌面端保持原有行为,零影响)
-// Vant/桥接仅移动端需要 → 随移动分支动态加载,桌面首屏不再携带
+// 移动端:注册路由与 Vant + Android 桥接
 async function registerPlatform(app) {
-    if (!isNative) return;
     const [{ default: Vant }, { default: router }, { androidImpl }] = await Promise.all([
         import('vant'),
         import('./mobile/router'),
