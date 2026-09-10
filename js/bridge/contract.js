@@ -91,6 +91,16 @@ export const ErrorCode = {
  * @method readBuffer(filePath:string) → {success:boolean, buffer?:ArrayBuffer, error?:string}
  *   读取文件二进制内容 (用于 PNG 解析)
  *
+ * @method readThumb(filePath:string, mtime:number, size:number, maxDim?:number) → {success:boolean, buffer?:ArrayBuffer, error?:string}
+ *   封面缩略图读取(磁盘缓存 MD5(path|mtime|size),未命中原生降采样生成 300px WebP)。
+ *   列表封面优先走此方法,避免全量原图 base64 过桥(内存尖峰主因)。
+ *
+ * @method readThumbBatch(cards:Array<{path:string, _mtime?:number, _size?:number}>, maxDim?:number) → {success:boolean, results:Array<{path:string, success:boolean, buffer?:ArrayBuffer, error?:string}>}
+ *   批量缩略图读取/生成(单次 IPC,8 线程并行):首屏预热专用。
+ *
+ * @method deleteThumb(filePath:string, mtime:number, size:number) → void
+ *   删除卡片缩略图缓存(换卡图后强制重新生成,幂等)。
+ *
  * @method readText(filePath:string) → {success:boolean, text?:string, error?:string}
  *   读取文件文本内容 (用于 JSON 卡片)
  *
@@ -118,6 +128,10 @@ export const ErrorCode = {
  *
  * @method getUiSettings() → Object
  *   获取 UI 设置子集
+ *
+ * @method reportFullyDrawn() → void
+ *   冷启动 KPI:首屏内容已渲染后标记启动完成(原生 Activity.reportFullyDrawn 计时)。
+ *   与 core-splashscreen 配合使用。仅移动端调用,桌面端无此能力可安全忽略。
  *
  * === 对话框 ===
  *

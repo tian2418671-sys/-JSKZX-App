@@ -1313,9 +1313,10 @@ export default {
                 const res = await api.changeCardImage(card.value.path);
                 if (res && res.success) {
                     // 清除封面缓存强制重新加载(MobileCardCover coverCache 以 path 为 key)
+                    // v1.10.15:传 mtime/size 同步删除磁盘缩略图,避免换图后列表仍显示旧缩略图
                     try {
                         const { clearCoverCache } = await import('../components/MobileCardCover.vue');
-                        if (clearCoverCache) clearCoverCache(card.value.path);
+                        if (clearCoverCache) clearCoverCache(card.value.path, card.value._mtime, card.value._size);
                     } catch (e2) { /* 忽略 */ }
                     showSuccessToast('已替换卡图');
                 } else if (res && res.cancelled) {

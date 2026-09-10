@@ -113,4 +113,27 @@ public class AppConfigPlugin extends Plugin {
     }
 
     // endregion
+
+    // region 冷启动 KPI 埋点
+
+    /**
+     * 首屏内容已渲染后由 JS 调用,标记启动流程完成(reportFullyDrawn 计时)。
+     * 与 SplashScreen 配合:WebView 首帧内容可见 → 调用此方法上报冷启动耗时。
+     */
+    @PluginMethod()
+    public void reportFullyDrawn(PluginCall call) {
+        try {
+            final android.app.Activity a = getActivity();
+            if (a != null) {
+                a.runOnUiThread(() -> {
+                    try { a.reportFullyDrawn(); } catch (Exception e) { /* 忽略 */ }
+                });
+            }
+        } catch (Exception e) { /* 忽略 */ }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        call.resolve(ret);
+    }
+
+    // endregion
 }

@@ -124,7 +124,10 @@ export function lightFieldsToCache(f) {
         c: f.creator || '',
         t: f.tags || [],
         d: f.desc || '',
-        s: f.searchText || '',
+        // searchText 截断到 1.5K:4K/卡 × 千卡级 = 11MB+ 缓存,二次启动读+parse 秒级阻塞。
+        // 前 1.5K 已覆盖 name/creator/tags/description/personality 等核心搜索字段,
+        // 深层世界书内容搜索召回略降,换千卡库冷启动提速数倍。
+        s: f.searchText ? f.searchText.slice(0, 1500) : '',
         k: f.tokens || 0,
         b: f.hasLorebook ? 1 : 0,
         x: f.hasRegex ? 1 : 0

@@ -74,6 +74,24 @@ function normalizeMemoryItem(it) {
     };
 }
 
+/** base64 → ArrayBuffer(桥接载荷统一转换点) */
+function base64ToBuffer(b64) {
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+}
+
+/** Uint8Array → base64:分块拼接,避免 String.fromCharCode(...大数组) 超过 V8 参数上限(~65K)导致中大图保存溢出 */
+function bytesToBase64(bytes) {
+    let bin = '';
+    const STEP = 0x8000; // 32768,远低于 V8 参数上限
+    for (let i = 0; i < bytes.length; i += STEP) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + STEP));
+    }
+    return btoa(bin);
+}
+
 // ---------- M4:PNG 工具函数(用于 replaceCardImage / 快照) ----------
 /** 替换 PNG 中 chara/ccv3 tEXt 块为新的 JSON 数据 */
 function replacePNGTextChunk(pngBytes, cardJson) {
@@ -379,6 +397,47 @@ export const androidImpl = {
         }
         return { success: false, error: (res && res.error) || '读取失败' };
     },
+    /** 封面缩略图读取(Quick Win:磁盘缩略图缓存 ≈ Glide 分层)。
+     *  原生按 MD5(path|mtime|size) 缓存 300px WebP;命中 12KB 过桥,未命中自动生成并缓存。
+     *  返回 { success, buffer: ArrayBuffer },与 readBuffer 同构。 */
+    async readThumb(filePath, mtime, size, maxDim) {
+        const rel = toRelativePath(filePath);
+        if (rel === null) return { success: false, error: '路径无效' };
+        const res = await LibraryFs.readThumb({
+            path: rel, mtime: mtime || 0, size: size || 0, maxDim: maxDim || 300
+        });
+        if (res && res.success && res.value) {
+            return { success: true, buffer: base64ToBuffer(res.value) };
+        }
+        return { success: false, error: (res && res.error) || '缩略图读取失败' };
+    },
+    /** 批量缩略图读取/生成(首屏预热:单次 IPC 8 线程并行,避免逐卡往返)。
+     *  入参 cards: [{path, _mtime, _size}, ...] → { success, results: [{path, success, buffer|error}] } */
+    async readThumbBatch(cards, maxDim) {
+        const list = (Array.isArray(cards) ? cards : [])
+            .filter((c) => c && c.path && toRelativePath(c.path) !== null);
+        if (!list.length) return { success: true, results: [] };
+        const paths = list.map((c) => toRelativePath(c.path));
+        const mtimes = list.map((c) => c._mtime || c.mtime || 0);
+        const sizes = list.map((c) => c._size || c.size || 0);
+        const res = await LibraryFs.readThumbBatch({ paths, mtimes, sizes, maxDim: maxDim || 300 });
+        if (!res || !res.success) return { success: false, error: (res && res.error) || '批量缩略图生成失败' };
+        return {
+            success: true,
+            results: (res.results || []).map((it) => ({
+                path: it && it.path && !it.path.startsWith('/') ? LIBRARY_ROOT + '/' + it.path : (it && it.path),
+                success: !!(it && it.success),
+                buffer: (it && it.value) ? base64ToBuffer(it.value) : null,
+                error: it && it.error
+            }))
+        };
+    },
+    /** 删除卡片缩略图缓存(换卡图后调用,强制下次 readThumb 重新生成;幂等) */
+    async deleteThumb(filePath, mtime, size) {
+        const rel = toRelativePath(filePath);
+        if (rel === null) return;
+        try { await LibraryFs.deleteThumb({ path: rel, mtime: mtime || 0, size: size || 0 }); } catch (e) { /* 忽略 */ }
+    },
     async readText(filePath) {
         const rel = toRelativePath(filePath);
         if (rel === null) return { success: false, error: '路径无效' };
@@ -439,7 +498,7 @@ export const androidImpl = {
             const rawBytes = Uint8Array.from(atob(bufRes.value), (c) => c.charCodeAt(0));
             // 2. 生成新的 chara 文本块(酒馆兼容:Base64(UTF-8 JSON))
             const cardJson = typeof updatedJson === 'string' ? updatedJson : JSON.stringify(updatedJson);
-            const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(cardJson)));
+            const b64 = bytesToBase64(new TextEncoder().encode(cardJson));
             const newCharaChunk = this._buildPngTextChunk('chara', b64, false);
             // 3. 遍历原 PNG chunk,跳过旧 chara/ccv3 文本块,保留图像及其他合法 chunk
             const newChunks = this._filterPngChunks(rawBytes, newCharaChunk);
@@ -448,7 +507,7 @@ export const androidImpl = {
             const newPng = this._assemblePng(newChunks);
             // 5. 写临时文件(同目录 .tmp),校验,再替换
             const tmpRel = rel + '.jszkx-tmp';
-            const tmpB64 = btoa(String.fromCharCode(...newPng));
+            const tmpB64 = bytesToBase64(newPng);
             const writeRes = await LibraryFs.writeBuffer({ path: tmpRel, value: tmpB64 });
             if (!writeRes || !writeRes.success) {
                 return { success: false, error: '写入临时文件失败' };
@@ -464,7 +523,7 @@ export const androidImpl = {
             const renameRes = await LibraryFs.rename({ path: tmpRel, newPath: rel });
             if (!renameRes || !renameRes.success) {
                 // 重命名失败,尝试恢复:删掉临时文件,用临时文件内容直接写回原路径
-                const fallbackB64 = btoa(String.fromCharCode(...newPng));
+                const fallbackB64 = bytesToBase64(newPng);
                 const fbRes = await LibraryFs.writeBuffer({ path: rel, value: fallbackB64 });
                 await LibraryFs.delete({ path: tmpRel }).catch(() => {});
                 return { success: !!(fbRes && fbRes.success), error: (fbRes && fbRes.error) || '替换失败,已尝试直接写回' };
@@ -595,6 +654,10 @@ export const androidImpl = {
         return { success: !!(res && res.success), error: (res && res.error) };
     },
     getUiSettings() { return this.loadAppConfig().then(c => c.uiSettings || {}); },
+    /** 冷启动 KPI:首屏内容已渲染后标记启动完成(原生 reportFullyDrawn 计时) */
+    async reportFullyDrawn() {
+        try { await AppConfig.reportFullyDrawn(); } catch (e) { /* 忽略 */ }
+    },
 
     // ---------- 对话框(M2 用 Toast/Alert 细化) ----------
     showMessage(options = {}) {
@@ -1056,7 +1119,7 @@ export const androidImpl = {
             if (!newPNG) return { success: false, error: '构建新 PNG 失败' };
             // 5. 写回(原子替换:先写 tmp 再 rename)
             const tmpRel = rel + '.tmp_' + Date.now();
-            const newB64 = btoa(String.fromCharCode(...newPNG));
+            const newB64 = bytesToBase64(newPNG);
             const writeRes = await LibraryFs.writeBuffer({ path: tmpRel, value: newB64 });
             if (!writeRes || !writeRes.success) {
                 return { success: false, error: (writeRes && writeRes.error) || '写入临时文件失败' };

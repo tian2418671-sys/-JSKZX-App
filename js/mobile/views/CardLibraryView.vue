@@ -327,7 +327,8 @@ import TagCategoryPanel from '../components/TagCategoryPanel.vue';
 // 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
     mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo,
-    loadCardFullData, syncCardLightFields, LIBRARY_ROOT, setLastOpenedPath
+    loadCardFullData, syncCardLightFields, LIBRARY_ROOT, setLastOpenedPath,
+    appendImportedCards
 } from '../useMobileLibrary';
 
 export default {
@@ -620,9 +621,11 @@ export default {
                 if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
                 if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
                 showSuccessToast(m.join(' · '));
-                // 导入后必须强制重扫：loadLibrary(false) 在库就绪时会跳过扫描，新卡进不了内存
-                await load(true);
-                // 第三波：导入自动打标（开关开启时后台低并发执行，库重载完成后启动）
+                // 修复缺陷 #001:增量导入——只解析新增卡追加内存库,不再全库重扫。
+                // 4 张卡导入耗时从全库重扫(SAF 全树+全量解析)降到亚秒级;
+                // 搜索索引由 mobileLibrary.revision watch 自动重建,新卡立即可搜。
+                await appendImportedCards(res.copied || []);
+                // 第三波：导入自动打标（开关开启时后台低并发执行，定位内存新卡）
                 autoTagImportedCards(res.copied || []);
             } else {
                 showToast((res && res.error) || '已取消导入');

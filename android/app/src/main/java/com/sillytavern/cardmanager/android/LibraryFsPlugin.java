@@ -3,11 +3,14 @@ package com.sillytavern.cardmanager.android;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
 import androidx.documentfile.provider.DocumentFile;
@@ -23,11 +26,13 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -70,8 +75,102 @@ public class LibraryFsPlugin extends Plugin {
         prefs().edit().putString(KEY_ROOT_URI, uri.toString()).apply();
     }
 
-    /** 相对路径(用 / 分隔) → 根下的 DocumentFile;越权(..)一律 null */
+    // ---------- F1: rescan 一次深度遍历建索引,此后路径解析 O(1) ----------
+    // 千卡基线实测 read=344s(占83%)根因是每次路径解析逐 seg findFile 树查找;建表后 O(1) 命中
+    private final java.util.Map<String, DocumentFile> relIndex = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean relIndexReady = false;
+    /** buildRelIndex 一次遍历收集的文件/目录列表,供根扫描内存化输出(免二次 SAF 遍历) */
+    private volatile java.util.List<Object[]> scanFilesList = new java.util.ArrayList<>();
+    private volatile java.util.List<Object[]> scanDirsList = new java.util.ArrayList<>();
+
+    private void buildRelIndex() {
+        java.util.Map<String, DocumentFile> m = new java.util.HashMap<>();
+        java.util.List<Object[]> fileList = new java.util.ArrayList<>(); // {rel, DocumentFile}
+        java.util.List<Object[]> dirList = new java.util.ArrayList<>();
+        DocumentFile root = rootFile();
+        if (root == null) { relIndexReady = false; return; }
+        java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<String> rels = new java.util.ArrayDeque<>();
+        stack.push(root); rels.push("");
+        while (!stack.isEmpty()) {
+            DocumentFile dir = stack.pop();
+            String dirRel = rels.pop();
+            for (DocumentFile f : dir.listFiles()) {
+                String name = f.getName();
+                if (name == null) continue;
+                if (f.isDirectory()) {
+                    if (name.startsWith(".")) continue; // 对齐 SCAN skipHidden:跳过隐藏目录
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    if (SKIP_FOLDERS.contains(lower)) continue; // 对齐 walkDir 黑名单
+                    stack.push(f);
+                    String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
+                    rels.push(rel);
+                    dirList.add(new Object[]{ rel, f });
+                } else {
+                    String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
+                    m.put(rel, f);
+                    fileList.add(new Object[]{ rel, f });
+                }
+            }
+        }
+        synchronized (relIndex) { relIndex.clear(); relIndex.putAll(m); }
+        relIndexReady = true;
+        scanFilesList = fileList;
+        scanDirsList = dirList;
+        android.util.Log.i("Perf", "relIndex built: " + m.size() + " files, " + dirList.size() + " dirs");
+    }
+
+    /** 根扫描快速路径:用 buildRelIndex 已收集的内存列表生成 scan 输出(不再二次 SAF 遍历) */
+    private void buildScanOutputFromIndex(List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime) {
+        for (Object[] dr : scanDirsList) {
+            String drel = (String) dr[0];
+            DocumentFile df = (DocumentFile) dr[1];
+            String name = drel.contains("/") ? drel.substring(drel.lastIndexOf('/') + 1) : drel;
+            if (!drel.contains("/")) categories.add(name); // 一级目录=分组
+            JSObject d = new JSObject();
+            d.put("name", name);
+            d.put("path", "/library/" + drel);
+            d.put("isDirectory", true);
+            d.put("mtime", queryLastModified(df)); // 目录数量少,即时查询
+            files.add(d);
+        }
+        for (Object[] fr : scanFilesList) {
+            String rel = (String) fr[0];
+            DocumentFile cf = (DocumentFile) fr[1];
+            String name = rel.contains("/") ? rel.substring(rel.lastIndexOf('/') + 1) : rel;
+            String subFolder = rel.contains("/") ? rel.substring(0, rel.lastIndexOf('/')) : "";
+            JSObject o = new JSObject();
+            o.put("name", name);
+            o.put("path", "/library/" + rel);
+            o.put("isDirectory", false);
+            o.put("url", JSObject.NULL);
+            o.put("mtime", 0); // 延后 fillMtimesParallel 并行补齐
+            o.put("birthtime", 0);
+            o.put("size", cf.length());
+            o.put("subFolder", subFolder);
+            o.put("category", subFolder.isEmpty() ? "未分类" : subFolder.split("/")[0]);
+            o.put("embeddedData", JSObject.NULL);
+            files.add(o);
+            pendingMtime.add(new Object[]{ o, cf });
+        }
+    }
+
+    /** O(1) 命中;未命中(导入新增)退化为一次慢查并回填 */
     private DocumentFile fileByRelPath(String rel) {
+        String r = rel == null ? "" : rel.replace('\\', '/').replaceAll("^/+", "");
+        if (relIndexReady) {
+            if (r.isEmpty()) return rootFile();
+            DocumentFile hit = relIndex.get(r);
+            if (hit != null) return hit;
+            DocumentFile slow = fileByRelPathSlow(r);
+            if (slow != null) relIndex.put(r, slow);
+            return slow;
+        }
+        return fileByRelPathSlow(r);
+    }
+
+    // 原 fileByRelPath 实现整体改名 fileByRelPathSlow,逻辑不动
+    private DocumentFile fileByRelPathSlow(String rel) {
         DocumentFile root = rootFile();
         if (root == null || rel == null) return null;
         String relNorm = rel.replace('\\', '/').replaceAll("^/+", "");
@@ -122,7 +221,7 @@ public class LibraryFsPlugin extends Plugin {
                     out.write(buf, 0, n);
                 }
                 byte[] data = out.toByteArray();
-                return asBase64 ? Base64.getEncoder().encodeToString(data)
+                return asBase64 ? Base64.encodeToString(data, Base64.NO_WRAP)
                         : new String(data, java.nio.charset.StandardCharsets.UTF_8);
             } finally {
                 in.close();
@@ -317,6 +416,8 @@ public class LibraryFsPlugin extends Plugin {
             return;
         }
         // M4 支持子目录扫描(如 .bak_history 快照目录)
+        // F1:先全树建索引供 readCharaBatch/readTextBatch O(1);walkDir 顺带填充用于子目录 miss 回填
+        buildRelIndex(); // 内部已 clear + putAll + relIndexReady=true
         DocumentFile startDir = root;
         String prefix = "";
         if (rel != null && !rel.isEmpty()) {
@@ -345,7 +446,14 @@ public class LibraryFsPlugin extends Plugin {
         Set<String> categories = new LinkedHashSet<>();
         // 🚀 v1.10.4 加载提速:文件 mtime 延后并行查询(SAF 逐文件 query 是万卡库扫描最大耗时点)
         final List<Object[]> pendingMtime = new ArrayList<>(); // {JSObject, DocumentFile}
-        walkDir(startDir, prefix, rel == null || rel.isEmpty(), files, categories, pendingMtime);
+        // F1:索引已由 buildRelIndex() 一次全树遍历建立;根扫描用内存列表生成输出,免二次 SAF 遍历。
+        // 子目录扫描(快照等)保留 walkDir 子树遍历(目录少,成本可忽略)。
+        if (rel == null || rel.isEmpty()) {
+            buildScanOutputFromIndex(files, categories, pendingMtime);
+        } else {
+            walkDir(startDir, prefix, false, files, categories, pendingMtime, relIndex);
+        }
+        relIndexReady = true;
         fillMtimesParallel(pendingMtime);
         // 分组 = 库根下所有一级文件夹(含空分组)。不做“幽灵分组过滤”:
         // 空分组(新建后尚未放卡片)也必须显示,否则新建分组在列表/分组管理里不可见,分组功能看似失效。
@@ -382,8 +490,8 @@ public class LibraryFsPlugin extends Plugin {
         for (Thread t : pool) { try { t.join(); } catch (InterruptedException e) { /* 忽略 */ } }
     }
 
-    /** 递归遍历目录,收集文件和文件夹信息 */
-    private void walkDir(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime) {
+    /** 递归遍历目录,收集文件和文件夹信息 + 顺建路径→DocumentFile索引(一次遍历替代两次) */
+    private void walkDir(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime, java.util.Map<String, DocumentFile> indexMap) {
         for (DocumentFile child : dir.listFiles()) {
             if (child.isDirectory()) {
                 String name = child.getName();
@@ -402,7 +510,7 @@ public class LibraryFsPlugin extends Plugin {
                 d.put("isDirectory", true);
                 d.put("mtime", queryLastModified(child)); // 目录数量少,即时查询
                 files.add(d);
-                walkDir(child, relDir + name + "/", skipHidden, files, categories, pendingMtime);
+                walkDir(child, relDir + name + "/", skipHidden, files, categories, pendingMtime, indexMap);
             } else if (child.isFile()) {
                 String name = child.getName();
                 if (name == null) continue;
@@ -427,6 +535,8 @@ public class LibraryFsPlugin extends Plugin {
                 o.put("embeddedData", JSObject.NULL);
                 files.add(o);
                 pendingMtime.add(new Object[]{ o, child });
+                // F1 合并:一次遍历顺建 path→DocumentFile 索引,省去独立 buildRelIndex 遍历
+                if (indexMap != null) indexMap.put(relDir.isEmpty() ? name : relDir + "/" + name, child);
             }
         }
     }
@@ -898,15 +1008,19 @@ public class LibraryFsPlugin extends Plugin {
         }
         DocumentFile f = fileByRelPath(path);
         if (f == null) {
-            // 文件不存在:若父目录存在则尝试创建
+            // 文件不存在:若父目录存在则尝试创建(支持库根 .jskzx_cache.json 首次写入)
             String rel = path.replace('\\', '/').replaceAll("^/+", "");
-            if (!rel.contains("/")) {
-                call.reject("目标目录不可用(未授权)");
-                return;
+            String dirRel, name;
+            DocumentFile parent;
+            if (rel.contains("/")) {
+                dirRel = rel.substring(0, rel.lastIndexOf('/'));
+                name = rel.substring(rel.lastIndexOf('/') + 1);
+                parent = fileByRelPath(dirRel);
+            } else {
+                dirRel = "";
+                name = rel;
+                parent = rootFile();
             }
-            String dirRel = rel.substring(0, rel.lastIndexOf('/'));
-            String name = rel.substring(rel.lastIndexOf('/') + 1);
-            DocumentFile parent = fileByRelPath(dirRel);
             if (parent == null || !parent.canWrite()) {
                 call.reject("目标目录不可用(未授权)");
                 return;
@@ -999,8 +1113,13 @@ public class LibraryFsPlugin extends Plugin {
                         continue;
                     }
                     boolean ok = writeUriFromStream(nf.getUri(), in);
-                    if (ok) copied.add(call.getString("destPath", "") + "/" + name);
-                    else failed.add(name);
+                    if (ok) {
+                        copied.add(call.getString("destPath", "") + "/" + name);
+                        // F1 回填:新导入文件立即进索引,后续批次 O(1) 命中
+                        String destRel = call.getString("destPath", "").replace("\\", "/")
+                                .replaceAll("^/library/", "").replaceAll("^/+", "");
+                        relIndex.put(destRel.isEmpty() ? name : destRel + "/" + name, nf);
+                    } else failed.add(name);
                 } finally {
                     in.close();
                 }
@@ -1896,6 +2015,315 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("删除失败: " + e.getMessage());
+        }
+    }
+
+    // endregion
+
+    // region 封面缩略图 + 二进制写入 (Quick Win: 缩略图磁盘缓存 ≈ Glide 分层)
+
+    private static final String THUMB_DIR = "thumbs";
+    private static final int THUMB_MAX_DIM = 300;
+    /** 缓存上限(单文件 ~12KB;1500 张 ≈ 18MB,超过按最旧淘汰一半) */
+    private static final int THUMB_MAX_CACHE = 1500;
+    private static volatile boolean thumbGcDone = false;
+
+    /** path|mtime|size → MD5 hex(卡片图变更 → 指纹变化 → 旧缓存自动失效,无需副作用) */
+    private String thumbCacheKey(String path, long mtime, long size) {
+        String raw = path + "|" + mtime + "|" + size;
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] d = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(32);
+            for (byte b : d) sb.append(String.format(Locale.ROOT, "%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return String.format(Locale.ROOT, "%x", raw.hashCode());
+        }
+    }
+
+    private File thumbDir() {
+        return new File(getContext().getFilesDir(), THUMB_DIR);
+    }
+
+    /**
+     * 读取 call 中的 long 参数:org.json 会按数值范围把 JSON 数字解析为 Integer/Long/Double
+     * 三种类型,Capacitor 的 getLong/getDouble 各有盲区(互不覆盖),这里直接取原值统一处理。
+     */
+    private long callLong(PluginCall call, String key, long def) {
+        try {
+            Object v = call.getData().opt(key);
+            if (v instanceof Number) return ((Number) v).longValue();
+        } catch (Exception e) { /* 忽略 */ }
+        return def;
+    }
+
+    /** 进程内首次调用:缩略图数超限 → 按最后修改时间淘汰旧的一半 */
+    private void gcThumbsIfNeeded() {
+        if (thumbGcDone) return;
+        thumbGcDone = true;
+        try {
+            File[] files = thumbDir().listFiles();
+            if (files == null || files.length <= THUMB_MAX_CACHE) return;
+            java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            int toDelete = files.length - THUMB_MAX_CACHE / 2;
+            for (int i = 0; i < toDelete && i < files.length; i++) files[i].delete();
+        } catch (Exception e) { /* 清理失败不影响主流程 */ }
+    }
+
+    /**
+     * SAF 图片 → maxDim 最长边缩略图:
+     * 1) inJustDecodeBounds 只读边界 2) 逐步 inSampleSize 降到 ≤ maxDim 解码
+     * (BitmapFactory 按 inSampleSize 行解码,内存安全) 3) createScaledBitmap 等比精调。
+     * ARGB_8888:角色立绘透明背景常见,RGB_565 会把透明像素变黑底(缺陷 #001 B 包显式禁止)。
+     */
+    private Bitmap decodeThumbBitmap(Uri uri, int maxDim) {
+        InputStream in = null;
+        try {
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inJustDecodeBounds = true;
+            in = getContext().getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            BitmapFactory.decodeStream(in, null, opts);
+            in.close(); in = null;
+            int w = opts.outWidth, h = opts.outHeight;
+            if (w <= 0 || h <= 0) return null;
+            int sample = 1;
+            while (w / (sample * 2) >= maxDim || h / (sample * 2) >= maxDim) sample *= 2;
+            opts.inJustDecodeBounds = false;
+            opts.inSampleSize = sample;
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            in = getContext().getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            Bitmap bmp = BitmapFactory.decodeStream(in, null, opts);
+            if (bmp == null) return null;
+            // 精调:createScaledBitmap 只在实际超出时调用,避免单像素小图重复创建
+            if (bmp.getWidth() > maxDim || bmp.getHeight() > maxDim) {
+                float ratio = Math.min((float) maxDim / bmp.getWidth(), (float) maxDim / bmp.getHeight());
+                int nw = Math.max(1, Math.round(bmp.getWidth() * ratio));
+                int nh = Math.max(1, Math.round(bmp.getHeight() * ratio));
+                Bitmap scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true);
+                if (scaled != bmp) { bmp.recycle(); bmp = scaled; }
+            }
+            return bmp;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (in != null) { try { in.close(); } catch (IOException e) { /* 忽略 */ } }
+        }
+    }
+
+    /**
+     * 单卡缩略图 base64:命中缓存直接读磁盘,未命中读 SAF 原图降采样生成 WebP 并写缓存。
+     * 供 readThumb 与 readThumbBatch 复用;失败返回 null。
+     */
+    private String thumbBase64(String path, long mtime, long size, int maxDim) {
+        File thumb = new File(thumbDir(), thumbCacheKey(path, mtime, size) + ".webp");
+        // 缓存命中:读本地 → 返回
+        if (thumb.exists() && thumb.length() > 0) {
+            try (FileInputStream fin = new FileInputStream(thumb)) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = fin.read(buf)) != -1) out.write(buf, 0, n);
+                return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+            } catch (Exception e) { /* 缓存读失败 → 落重建分支 */ }
+        }
+        // 缓存未命中:读 SAF 原图 → 降采样 → WebP q75 → 写缓存 → 返回
+        DocumentFile f = fileByRelPath(path);
+        if (f == null || !f.canRead()) return null;
+        Bitmap bmp = decodeThumbBitmap(f.getUri(), maxDim);
+        if (bmp == null) return null;
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.WEBP, 75, out);
+            byte[] bytes = out.toByteArray();
+            thumbDir().mkdirs();
+            try (FileOutputStream fos = new FileOutputStream(thumb)) { fos.write(bytes); }
+            return Base64.encodeToString(bytes, Base64.NO_WRAP);
+        } catch (Exception e) {
+            return null;
+        } finally {
+            bmp.recycle();
+        }
+    }
+
+    // ---------- F2/F5: 共享缩略图线程池 + 批量编排线程,桥线程零等待 ----------
+    // 千卡基线:readThumbBatch 原实现手动 8 线程 + join 阻塞桥线程,chara 批读 IPC 排队;
+    // 改为共享池(4线程,低优先级)执行 + 单线程编排,桥线程立即返回(I8)
+    private static final java.util.concurrent.ExecutorService THUMB_POOL =
+        java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "jsx-thumb");
+            t.setPriority(Thread.NORM_PRIORITY - 1);
+            return t;
+        });
+    private static final java.util.concurrent.ExecutorService BATCH_ORCH =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "jsx-thumb-orch"));
+
+    /**
+     * 封面缩略图读取(Glide 分层的磁盘层)。
+     * 缓存键 = MD5(path|mtime|size):卡片图更换后 mtime/size 变化 → 生成新缩略图,
+     * 旧缓存按 fingerprint 过期,无需额外副作用清理。
+     * 写入 app 私有目录(filesDir/thumbs/):不污染用户卡片库,SCAN 不可见(跳过 .jskzx 开头目录)。
+     * 返回结构 { success, value: base64 } 与 readBuffer 同构。
+     * 重活提交共享线程池,不阻塞 Capacitor 桥接线程。
+     */
+    @PluginMethod()
+    public void readThumb(PluginCall call) {
+        String path = call.getString("path");
+        if (path == null) { call.reject("参数缺失"); return; }
+        long mtime = callLong(call, "mtime", 0L);
+        long size = callLong(call, "size", 0L);
+        final int maxDim = call.getInt("maxDim", THUMB_MAX_DIM) > 0
+                ? call.getInt("maxDim", THUMB_MAX_DIM) : THUMB_MAX_DIM;
+        gcThumbsIfNeeded();
+        // F5: 共享池执行,不再每次 new Thread
+        THUMB_POOL.execute(() -> {
+            String b64 = thumbBase64(path, mtime, size, maxDim);
+            if (b64 == null) { call.reject("缩略图失败"); return; }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("value", b64);
+            call.resolve(ret);
+        });
+    }
+
+    /**
+     * 批量缩略图读取/生成(单次 IPC,共享池并行):
+     * 首屏预热专用——第一批可见卡缩略图一次过桥,避免逐卡 IPC 往返。
+     * 入参 paths: [rel,...], mtimes: [long,...], sizes: [long,...], maxDim
+     * 返回 results: [{path, success, value: base64|error}]
+     */
+    @PluginMethod()
+    public void readThumbBatch(PluginCall call) {
+        JSArray paths = call.getArray("paths");
+        if (paths == null || paths.length() == 0) {
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("results", new JSArray());
+            call.resolve(ret);
+            return;
+        }
+        final int n = paths.length();
+        final JSArray mtimes = call.getArray("mtimes");
+        final JSArray sizes = call.getArray("sizes");
+        final int maxDim = call.getInt("maxDim", THUMB_MAX_DIM) > 0
+                ? call.getInt("maxDim", THUMB_MAX_DIM) : THUMB_MAX_DIM;
+        // F2: 参数解析留在桥线程(微秒级);批量执行整体移交编排线程——
+        // 桥线程立即返回,chara 批读 IPC 不再被 join 阻塞排队(I8)
+        BATCH_ORCH.execute(() -> runThumbBatch(call, paths, mtimes, sizes, maxDim, n));
+    }
+
+    private void runThumbBatch(PluginCall call, JSArray paths, JSArray mtimes,
+                               JSArray sizes, int maxDim, int n) {
+        gcThumbsIfNeeded();
+        final JSObject[] collected = new JSObject[n];
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(n);
+        for (int t = 0; t < n; t++) {
+            final int i = t;
+            THUMB_POOL.execute(() -> {
+                try {
+                    JSObject item = new JSObject();
+                    String p = null; long mtime = 0L, size = 0L;
+                    try { p = paths.getString(i); } catch (Exception ignore) { /* 忽略 */ }
+                    try {
+                        Object mv = (mtimes != null && i < mtimes.length()) ? mtimes.get(i) : null;
+                        if (mv instanceof Number) mtime = ((Number) mv).longValue();
+                    } catch (Exception ignore) { /* 保持 0 */ }
+                    try {
+                        Object sv = (sizes != null && i < sizes.length()) ? sizes.get(i) : null;
+                        if (sv instanceof Number) size = ((Number) sv).longValue();
+                    } catch (Exception ignore) { /* 保持 0 */ }
+                    String b64 = (p != null) ? thumbBase64(p, mtime, size, maxDim) : null;
+                    item.put("success", b64 != null);
+                    if (b64 != null) item.put("value", b64);
+                    else item.put("error", "生成失败");
+                    collected[i] = item;
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        try { done.await(20, java.util.concurrent.TimeUnit.SECONDS); } // 上限保护,防坏卡卡死
+        catch (InterruptedException ignored) { /* 忽略 */ }
+        JSArray results = new JSArray();
+        for (int i = 0; i < n; i++) { if (collected[i] != null) results.put(collected[i]); }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("results", results);
+        call.resolve(ret);
+    }
+
+    /**
+     * 删除指定卡片的缩略图缓存(换卡图后调用,强制下次 readThumb 从新文件重新生成)。
+     * 入参 { path, mtime, size } → {} (幂等,始终成功)
+     */
+    @PluginMethod()
+    public void deleteThumb(PluginCall call) {
+        String path = call.getString("path");
+        if (path != null) {
+            long mtime = callLong(call, "mtime", 0L);
+            long size = callLong(call, "size", 0L);
+            try {
+                File thumb = new File(thumbDir(), thumbCacheKey(path, mtime, size) + ".webp");
+                if (thumb.exists()) thumb.delete();
+            } catch (Exception e) { /* 删除失败不影响主流程 */ }
+        }
+        call.resolve(new JSObject());
+    }
+
+    private String inferMime(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".gif")) return "image/gif";
+        if (lower.endsWith(".json")) return "application/json";
+        if (lower.endsWith(".txt")) return "text/plain";
+        return "application/octet-stream";
+    }
+
+    /**
+     * 二进制写入(base64 载荷,对齐桌面 writeBuffer 语义)。
+     * PNG/WebP 卡片保存、换卡图、快照创建/恢复均依赖此方法;
+     * 此前原生缺失(仅 writeText)导致这些操作在 Android 端静默失败。
+     * 入参 { path, value: base64 } → { success }
+     */
+    @PluginMethod()
+    public void writeBuffer(PluginCall call) {
+        String path = call.getString("path");
+        String value = call.getString("value");
+        if (path == null || value == null) { call.reject("参数缺失"); return; }
+        DocumentFile f = fileByRelPath(path);
+        if (f == null) {
+            // 文件不存在:在目标目录创建(SAF createFile + 按扩展名推断 MIME)。
+            // 支持库根(rel 无斜杠)场景:PNG 安全写回的 .jszkx-tmp 临时文件位于库根时也必须可创建
+            String rel = path.replace('\\', '/').replaceAll("^/+", "");
+            String dirRel, name;
+            DocumentFile parent;
+            if (rel.contains("/")) {
+                dirRel = rel.substring(0, rel.lastIndexOf('/'));
+                name = rel.substring(rel.lastIndexOf('/') + 1);
+                parent = fileByRelPath(dirRel);
+            } else {
+                dirRel = "";
+                name = rel;
+                parent = rootFile();
+            }
+            if (parent == null || !parent.canWrite()) { call.reject("目标目录不可用(未授权)"); return; }
+            f = parent.createFile(inferMime(name), name);
+            if (f == null) { call.reject("创建文件失败"); return; }
+        }
+        try {
+            byte[] bytes = Base64.decode(value, Base64.NO_WRAP);
+            OutputStream out = getContext().getContentResolver().openOutputStream(f.getUri(), "wt");
+            if (out == null) { call.reject("打开文件失败"); return; }
+            try { out.write(bytes); } finally { out.close(); }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("写入失败: " + e.getMessage());
         }
     }
 

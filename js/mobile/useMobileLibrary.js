@@ -13,8 +13,19 @@ import { reactive } from 'vue';
 import { normalizeCardData, isCharacterCardData, getCardRejectReason } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
 import { extractCardLightFields, lightFieldsToCache, lightFieldsFromCache } from '../utils/cardLight.js';
+import { prefillCoverCache } from './components/MobileCardCover.vue';
 // Worker 内联（?worker&inline）：Android WebView 加载外部 Worker 文件不可靠，内联为 data URL 后由 Vite 生成降级兜底
 import cardParseWorker from './cardParseWorker.js?worker&inline';
+import { restoreItemsFromCacheText, buildLightItem, NEG, cacheFingerprint as coreCacheFingerprint } from './libraryCacheCore.js';
+import cacheRestoreWorker from './cacheRestoreWorker.js?worker&inline';
+
+// ---------- 阶段打点（缺陷 #001 排查基建，永久保留） ----------
+// plog 输出各阶段累计耗时:scan=SAF枚举 read=文件读取 parse=解析 publish=发布 cache=缓存落盘 total=总耗时
+const perf = { scan: 0, read: 0, parse: 0, publish: 0, cacheWrite: 0, t0: 0 };
+const pnow = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+function plog(tag) {
+    console.info(`[Perf] ${tag} scan=${perf.scan | 0}ms read=${perf.read | 0}ms parse=${perf.parse | 0}ms publish=${perf.publish | 0}ms cache=${perf.cacheWrite | 0}ms total=${((pnow() - perf.t0) | 0)}ms`);
+}
 
 export const LIBRARY_ROOT = '/library';
 
@@ -42,13 +53,11 @@ export function getLastOpenedPath() { return lastOpenedPath; }
 // ---------- 轻量内嵌缓存（二次启动秒开:v2 只存轻量字段,免读文件免解析） ----------
 // 键: 文件 path+mtime+size 指纹;值: lightFieldsToCache 紧凑对象。缓存文件存库目录 .jskzx_cache.json
 const CACHE_FILE = '/library/.jskzx_cache.json';
-const CACHE_VERSION = 2; // v2=轻量字段(与 v1 全量 data 不兼容,旧缓存直接作废重建)
+const CACHE_VERSION = 2; // v2=轻量字段(与 libraryCacheCore 单一事实源保持一致,local 用于 scheduleCacheFlush 版本判断)
 let embeddedCache = null; // { version, items: { [fingerprint]: cachedLight } }
 let cacheDirty = false;
 
-function cacheFingerprint(file) {
-    return `${file.path}|${file.mtime || 0}|${file.size || 0}`;
-}
+const cacheFingerprint = coreCacheFingerprint; // F3: 纯函数迁至 libraryCacheCore.js
 
 async function loadEmbeddedCache() {
     if (embeddedCache) return embeddedCache;
@@ -80,7 +89,9 @@ function scheduleCacheFlush() {
             if (keys.length > 20000) {
                 for (const k of keys.slice(0, keys.length - 20000)) delete embeddedCache.items[k];
             }
+            const flushStart = pnow();
             await window.electronAPI.writeText(CACHE_FILE, JSON.stringify(embeddedCache));
+            perf.cacheWrite += pnow() - flushStart;
         } catch (e) { /* 缓存写失败不影响主流程 */ }
     }, 2000);
 }
@@ -135,15 +146,15 @@ function parseRawSync(kind, raw) {
 /** 经 Worker 解析原始数据,失败/超时回退主线程 */
 function parseViaWorker(kind, raw) {
     const w = getParseWorker();
-    if (!w) return Promise.resolve(parseRawSync(kind, raw));
+    if (!w) return Promise.resolve(parseRawSync(kind, raw)); // Worker 完全不可用才主线程兜底(一次性)
     return new Promise((resolve) => {
         const id = ++parseReqId;
         parsePending.set(id, resolve);
-        // 超时保护:5s 未响应则回退主线程(避免个别卡拖死整体加载)
+        // F4:超时→null(禁止回退主线程),后续由二次机会队列后台补解析(I11)
         const timer = setTimeout(() => {
             if (parsePending.has(id)) {
                 parsePending.delete(id);
-                resolve(parseRawSync(kind, raw));
+                resolve(null);
             }
         }, 5000);
         w.postMessage({ id, kind, raw });
@@ -176,6 +187,48 @@ function yieldFrame() {
     });
 }
 
+// ---------- 首屏缩略图预热(阶段2:分层缓存的内存 + 磁盘双预热) ----------
+let prefetchedThumbPaths = new Set();
+let fullyDrawnReported = false;
+const THUMB_PREFETCH_CAP = 60; // 首两屏上限,其余靠懒加载按需生成
+
+/** 已解析卡片首屏预热:批量生成缩略图(原生磁盘缓存) + 填充内存缓存,
+ *  首屏封面免逐卡 readThumb 原生往返;失败静默走懒加载兜底。
+ *  F2:预热推迟到空闲期(requestIdleCallback/1.5s timeout)——scan/reconcile期间绝不抢占桥线程(I8) */
+function prefetchCoverThumbs(cards) {
+    const api = window.electronAPI;
+    if (!api || typeof api.readThumbBatch !== 'function') return;
+    const run = () => {
+        if (prefetchedThumbPaths.size >= THUMB_PREFETCH_CAP) return;
+        const pending = (cards || []).filter((c) => c && c.path && !prefetchedThumbPaths.has(c.path));
+        if (!pending.length) return;
+        const batch = pending.slice(0, THUMB_PREFETCH_CAP - prefetchedThumbPaths.size);
+        batch.forEach((c) => prefetchedThumbPaths.add(c.path));
+        api.readThumbBatch(batch).then((res) => {
+            if (!res || !res.success || !Array.isArray(res.results)) return;
+            for (const it of res.results) {
+                if (it && it.success && it.buffer && it.path) prefillCoverCache(it.path, it.buffer);
+            }
+        }).catch(() => { /* 预热失败静默,封面走懒加载 */ });
+    };
+    // 空闲期执行:scan/reconcile 期间不抢占桥线程
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 });
+    else setTimeout(run, 400);
+}
+
+/** 冷启动 KPI:首帧内容可见后上报一次(reportFullyDrawn 计时) */
+function reportFullyDrawnOnce() {
+    if (fullyDrawnReported) return;
+    const api = window.electronAPI;
+    if (!api || typeof api.reportFullyDrawn !== 'function') return;
+    fullyDrawnReported = true;
+    setTimeout(() => { try { api.reportFullyDrawn(); } catch (e) { /* 忽略 */ } }, 250);
+}
+
+// ---------- F4: 解析超时二次机会队列(I11:主线程零重活) ----------
+const parseRetryQueue = [];
+const parseRetryPaths = new Set();
+
 // 桥接能力探测:readCharaBatch(PNG 文本块批量提取,新增);低版本桥接自动回退 readBuffer。
 // ⚠️ 必须调用时探测:本模块在 entry.js 注入 window.electronAPI 之前就可能被 import 求值。
 function hasCharaBatch() {
@@ -183,15 +236,152 @@ function hasCharaBatch() {
         && window.electronAPI && typeof window.electronAPI.readCharaBatch === 'function';
 }
 
+// ---------- F3: restore 缓存重建 Worker 化(特性开关,失败回退主线程) ----------
+// 千卡基线:缓存 6MB JSON.parse + 1818 条重建在主线程 ~秒级;移入 Worker 后主线程只收成品数组(I10)
+const RESTORE_VIA_WORKER = true; // F3 特性开关:出问题改 false 即回退 v1.10.15 行为
+let restoreWorker = null, restoreReqId = 0;
+
+function restoreViaWorker(text) {
+    return new Promise((resolve) => {
+        try {
+            if (!restoreWorker) restoreWorker = new cacheRestoreWorker();
+            const id = ++restoreReqId;
+            const timer = setTimeout(() => resolve(null), 3000); // Worker 异常时回退主线程路径
+            restoreWorker.onmessage = (e) => {
+                if (!e.data || e.data.id !== id) return;
+                clearTimeout(timer);
+                resolve(e.data.ok ? e.data : null);
+            };
+            restoreWorker.postMessage({ id, text });
+        } catch (_) { resolve(null); }
+    });
+}
+
+/**
+ * 🚀 二次启动秒开:从 .jskzx_cache.json 直接重建轻量库(零 scan 零读文件)。
+ * 缓存 key 为 path|mtime|size 指纹,可直接反解出物理元信息。
+ * 上屏后由 reconcileLibraryInBackground 后台 scan 增量校验(新增/删除/修改)。
+ * @returns {boolean} 是否成功走缓存先行
+ */
+async function restoreLibraryFromCache(cache) {
+    if (!cache || !cache.items) return false;
+    const keys = Object.keys(cache.items);
+    if (!keys.length) return false;
+    let items = [];
+    let categories = [];
+    if (RESTORE_VIA_WORKER) {
+        // 🚀 F3: 缓存 JSON 文本 → Worker 内 parse+重建,主线程零重活(I10)
+        const built = await restoreViaWorker(JSON.stringify(cache));
+        if (built && built.items) { items = built.items; categories = built.categories || []; }
+    }
+    if (!items.length) {
+        // 回退:主线程重建(与 v1.10.15 等价)
+        const r = restoreItemsFromCacheText(JSON.stringify(cache));
+        if (r && r.items) { items = r.items; categories = r.categories || []; }
+    }
+    if (!items.length) return false;
+    mobileLibrary.categories = categories.length ? categories : mobileLibrary.categories;
+    mobileLibrary.ready = true;
+    mobileLibrary.loading = false;
+    mobileLibrary.error = '';
+    // 🚀 渐进上屏:首屏只渲染前 60 张,其余分批 push 追加。
+    // 重型库实测:592 张一次性赋值 → Vue 建 592 个 DOM 项阻塞主线程 ~4s(reportFullyDrawn 被饿死);
+    // 分 60 张/批后首屏立即可见,主线程不再长阻塞。
+    const FIRST_BATCH = 60;
+    mobileLibrary.library = items.slice(0, FIRST_BATCH);
+    reportFullyDrawnOnce();
+    if (items.length > FIRST_BATCH) {
+        let idx = FIRST_BATCH;
+        const tick = () => {
+            if (idx >= items.length) return;
+            mobileLibrary.library.push(...items.slice(idx, idx + FIRST_BATCH));
+            idx += FIRST_BATCH;
+            setTimeout(tick, 0);
+        };
+        setTimeout(tick, 0);
+    }
+    reconcileLibraryInBackground();
+    return true;
+}
+
+/** 缓存先行后的后台校验:scan 全树 → 增量解析(缓存命中免读文件) → 覆盖式更新 */
+async function reconcileLibraryInBackground() {
+    try {
+        const res = await window.electronAPI.rescanLibrary(LIBRARY_ROOT);
+        if (!res || res.error) return;
+        const files = (res.files || []).filter((f) => f && !f.isDirectory);
+        mobileLibrary.categories = (res.categories || []).filter(Boolean);
+        const cache = await loadEmbeddedCache();
+        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE);
+        const imgFiles = files.filter((f) => !jsonFiles.includes(f));
+        const staging = [];
+        const append = (arr) => { for (const x of arr) if (x) staging.push(x); };
+        const JSON_BATCH = 24, PNG_BATCH = 24, CONCURRENCY = 6;
+        const cacheHit = (f, ignoreNegative = false) => {
+            if (!cache) return false;
+            const v = cache.items[cacheFingerprint(f)];
+            if (!v) return false;
+            if (v.nc && !ignoreNegative) return false; // F6: refresh=true 时负缓存视为 miss 重新探测
+            return true;
+        };
+        for (let i = 0; i < jsonFiles.length; i += JSON_BATCH) {
+            const batch = jsonFiles.slice(i, i + JSON_BATCH);
+            const missBatch = batch.filter((f) => !cacheHit(f));
+            const textMap = new Map();
+            if (missBatch.length) {
+                try {
+                    const br = await window.electronAPI.readTextBatch(missBatch.map((f) => f.path));
+                    if (br && br.success && Array.isArray(br.results)) {
+                        br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+                    }
+                } catch (e) { /* 忽略 */ }
+            }
+            const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
+            append(items);
+            await yieldFrame();
+        }
+        for (let i = 0; i < imgFiles.length; i += PNG_BATCH) {
+            const batch = imgFiles.slice(i, i + PNG_BATCH);
+            const missBatch = batch.filter((f) => !cacheHit(f));
+            const textMap = new Map();
+            if (hasCharaBatch() && missBatch.length) {
+                try {
+                    const cr = await window.electronAPI.readCharaBatch(missBatch.map((f) => f.path));
+                    if (cr && cr.success && Array.isArray(cr.results)) {
+                        cr.results.forEach((item) => {
+                            if (item && item.success && typeof item.value === 'string') textMap.set(item.path, item.value);
+                        });
+                    }
+                } catch (e) { /* 忽略 */ }
+            }
+            const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
+            append(items);
+            await yieldFrame();
+        }
+        mobileLibrary.library = staging;
+        mobileLibrary.revision++;
+        scheduleCacheFlush();
+    } catch (e) { /* 后台修正失败:保留缓存先行视图 */ }
+}
+
 export async function loadLibrary(refresh = false) {
     // 已加载完成且库非空时跳过重复扫描（返回页面/组件重复挂载不重扫；下拉刷新等传 true 强制重扫）
     if (!refresh && mobileLibrary.ready && mobileLibrary.library.length > 0) return;
+    // 🚀 二次启动秒开:轻量缓存先行直接上屏(零 scan 零读文件),scan 后台增量校验
+    if (!refresh) {
+        const cache = await loadEmbeddedCache();
+        if (await restoreLibraryFromCache(cache)) return;
+    }
     mobileLibrary.loading = true;
     mobileLibrary.error = '';
     mobileLibrary.ready = false;
     mobileLibrary.worldbooks = [];
     try {
+        // 阶段打点:重置计时器
+        perf.t0 = pnow(); perf.scan = perf.read = perf.parse = perf.publish = perf.cacheWrite = 0;
+        let s0 = pnow();
         const res = await window.electronAPI.rescanLibrary(LIBRARY_ROOT);
+        perf.scan += pnow() - s0;
         if (!res || res.error) {
             mobileLibrary.error = (res && res.error) || '尚未选择库目录';
             mobileLibrary.loading = false;
@@ -211,22 +401,53 @@ export async function loadLibrary(refresh = false) {
 
         const append = (arr) => { for (const x of arr) if (x) staging.push(x); };
 
-        // 🚀 渐进渲染:每批解析完立即把已解析卡片挂上库(列表秒级可见,不必等全库解析完)
+        // 🚀 渐进渲染:每批解析完立即把已解析卡片挂上库(列表秒级可见,不必等全库解析完)。
+        // 千卡级优化:全量 staging.slice() 赋值会让 Vue 每次 diff 整个库(1994 卡 × 80 批 = 16 万次
+        // 响应式操作,主线程长时间阻塞);改为记录已发布游标,只 push 新增批次(Vue 只 diff 增量)。
+        let publishedCursor = 0;
         function publishProgress() {
-            mobileLibrary.library = staging.slice();
+            const b0 = pnow();
+            const added = staging.slice(publishedCursor);
+            publishedCursor = staging.length;
+            if (added.length) {
+                mobileLibrary.library.push(...added);
+            } else {
+                mobileLibrary.library = staging.slice(); // 无增量时(如空批次)兜底全量
+            }
+            prefetchCoverThumbs(added);   // 阶段2:只预热新增卡缩略图(避免每批全量重算)
+            reportFullyDrawnOnce();       // 冷启动 KPI 埋点
+            perf.publish += pnow() - b0;
         }
+
+        // 🚀 二次启动秒开:批量读取前先筛出轻量缓存命中项(mtime/size 指纹一致),
+        // 命中卡零文件读取直接重建条目;只对未命中卡发起 readTextBatch/readCharaBatch。
+        // 冷启动瓶颈实测:scan 205ms + 全卡批量读取 ~340ms → 命中后仅剩 scan。
+        const cacheHit = (f, ignoreNegative = false) => {
+            if (!cache) return false;
+            const v = cache.items[cacheFingerprint(f)];
+            if (!v) return false;
+            if (v.nc && !ignoreNegative) return false; // F6: refresh=true 时负缓存视为 miss 重新探测
+            return true;
+        };
 
         // ① JSON 卡:分批读文本 → 有界并发解析 → 只留轻量字段(文本/全量 data 逐批释放)
         for (let i = 0; i < jsonFiles.length; i += JSON_BATCH) {
             const batch = jsonFiles.slice(i, i + JSON_BATCH);
+            const missBatch = batch.filter((f) => !cacheHit(f, refresh));
             const textMap = new Map();
-            try {
-                const br = await window.electronAPI.readTextBatch(batch.map((f) => f.path));
-                if (br && br.success && Array.isArray(br.results)) {
-                    br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
-                }
-            } catch (e) { /* 批量读失败降级:单卡逐个读 */ }
+            if (missBatch.length) {
+                try {
+                    const r0 = pnow();
+                    const br = await window.electronAPI.readTextBatch(missBatch.map((f) => f.path));
+                    perf.read += pnow() - r0;
+                    if (br && br.success && Array.isArray(br.results)) {
+                        br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+                    }
+                } catch (e) { /* 批量读失败降级:单卡逐个读 */ }
+            }
+            const p0 = pnow();
             const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
+            perf.parse += pnow() - p0;
             append(items);
             mobileLibrary.progress.done = Math.min(i + JSON_BATCH, jsonFiles.length);
             publishProgress();
@@ -237,10 +458,13 @@ export async function loadLibrary(refresh = false) {
         //    webp 无 chara 文本块,回退 readBuffer 整图解析(数量少,可接受)
         for (let i = 0; i < imgFiles.length; i += PNG_BATCH) {
             const batch = imgFiles.slice(i, i + PNG_BATCH);
+            const missBatch = batch.filter((f) => !cacheHit(f, refresh));
             const textMap = new Map();
-            if (hasCharaBatch()) {
+            if (hasCharaBatch() && missBatch.length) {
                 try {
-                    const cr = await window.electronAPI.readCharaBatch(batch.map((f) => f.path));
+                    const r0 = pnow();
+                    const cr = await window.electronAPI.readCharaBatch(missBatch.map((f) => f.path));
+                    perf.read += pnow() - r0;
                     if (cr && cr.success && Array.isArray(cr.results)) {
                         cr.results.forEach((item) => {
                             if (item && item.success && typeof item.value === 'string') textMap.set(item.path, item.value);
@@ -248,7 +472,9 @@ export async function loadLibrary(refresh = false) {
                     }
                 } catch (e) { /* 降级 readBuffer */ }
             }
+            const p0 = pnow();
             const items = await mapLimit(batch, CONCURRENCY, (f) => parseLightCard(f, textMap.get(f.path), cache));
+            perf.parse += pnow() - p0;
             append(items);
             mobileLibrary.progress.done = jsonFiles.length + Math.min(i + PNG_BATCH, imgFiles.length);
             publishProgress();
@@ -263,8 +489,86 @@ export async function loadLibrary(refresh = false) {
         mobileLibrary.error = '加载失败: ' + (e.message || e);
     } finally {
         mobileLibrary.loading = false;
+        let tag;
+        if (refresh) tag = 'refresh';
+        else if (perf.read > 0) tag = 'coldscan';
+        else tag = 'cacherestore';
+        plog(tag);
+        await drainParseRetries();
         if (flavorCallback) flavorCallback();
     }
+}
+
+/**
+ * 增量导入(修复缺陷 #001:导入后不再全库重扫)。
+ * 只解析新增卡 → 追加内存库 → 补全新分组 → 修订号 + 缓存落盘(搜索索引由 revision watch 重建)。
+ * 3MB 卡导入耗时:全库重扫(数十秒~分钟级) → 仅新卡解析(亚秒级)。
+ * @param {string[]} copiedPaths 原生导入返回的新卡路径(库内绝对路径 /library/...)
+ * @returns {Promise<{added:number, failed:number}>}
+ */
+export async function appendImportedCards(copiedPaths) {
+    const paths = (Array.isArray(copiedPaths) ? copiedPaths : []).filter(Boolean);
+    if (!paths.length) return { added: 0, failed: 0 };
+    const cache = await loadEmbeddedCache();
+    // 1) 批量取新卡元数据(mtime/size,单次 IPC)——绝不全库重扫
+    const stats = await window.electronAPI.getFileStats(paths);
+    const statMap = (stats && stats.data) || {};
+    // 2) 组装 file 元信息(与 loadLibrary 的 scan 条目同构)
+    const fileObjs = paths.map((p) => {
+        const rel = String(p).replace(/^\/library\//, '');
+        const segs = rel.split('/');
+        const name = segs.pop() || '';
+        const subFolder = segs.join('/');
+        const st = statMap[p] || {};
+        return {
+            name,
+            path: p,
+            isDirectory: false,
+            mtime: st.mtimeMs || 0,
+            birthtime: 0,
+            size: st.size || 0,
+            subFolder,
+            category: subFolder ? subFolder.split('/')[0] : '未分类'
+        };
+    });
+    // 3) 按类型批量预取解析文本(JSON 读文本 / PNG 提取 chara 文本块,均不过桥整图)
+    const textMap = new Map();
+    const jsonFiles = fileObjs.filter((f) => f.name.toLowerCase().endsWith('.json'));
+    const imgFiles = fileObjs.filter((f) => !jsonFiles.includes(f));
+    if (jsonFiles.length) {
+        try {
+            const br = await window.electronAPI.readTextBatch(jsonFiles.map((f) => f.path));
+            if (br && br.success && Array.isArray(br.results)) {
+                br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+            }
+        } catch (e) { /* 降级单卡读 */ }
+    }
+    if (imgFiles.length && hasCharaBatch()) {
+        try {
+            const cr = await window.electronAPI.readCharaBatch(imgFiles.map((f) => f.path));
+            if (cr && cr.success && Array.isArray(cr.results)) {
+                cr.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+            }
+        } catch (e) { /* 降级整图解析 */ }
+    }
+    // 4) 有界并发解析(新卡数量少,2 路足够且不争抢 UI)
+    const items = await mapLimit(fileObjs, 2, (f) => parseLightCard(f, textMap.get(f.path), cache));
+    let added = 0, failed = 0;
+    for (const it of items) {
+        if (it) { mobileLibrary.library.push(it); added++; }
+        else failed++;
+    }
+    // 5) 补全新出现的一级分组(导入到新建分组时列表分组可见)
+    for (const f of fileObjs) {
+        if (f.category && f.category !== '未分类' && !mobileLibrary.categories.includes(f.category)) {
+            mobileLibrary.categories.push(f.category);
+        }
+    }
+    if (added > 0) {
+        mobileLibrary.revision++; // 触发搜索索引重建(CardLibraryView watch)
+        scheduleCacheFlush();
+    }
+    return { added, failed };
 }
 
 /**
@@ -277,7 +581,9 @@ async function parseLightCard(file, prefetchedText, cache) {
     const fp = cache ? cacheFingerprint(file) : null;
     // 🚀 轻量缓存命中:免读文件免解析,直接重建条目
     if (cache && fp) {
-        const cached = lightFieldsFromCache(cache.items[fp], file.name);
+        // F6: 负缓存条目(nc)不算命中,走下方真实解析
+        const cachedVal = cache.items[fp];
+        const cached = (cachedVal && cachedVal.nc) ? null : lightFieldsFromCache(cachedVal, file.name);
         if (cached) return buildLightItem(file, cached);
     }
     try {
@@ -303,6 +609,12 @@ async function parseLightCard(file, prefetchedText, cache) {
                     });
                 } else {
                     console.warn(`[库] 跳过非角色卡 JSON [${getCardRejectReason(parsed)}]: ${file.name}`);
+                    // F6: 混入库的普通 json(非角色卡非世界书)写负缓存,只探测一次
+                    if (cache && fp) {
+                        cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
+                        cacheDirty = true;
+                        scheduleCacheFlush();
+                    }
                 }
                 return null;
             }
@@ -331,7 +643,20 @@ async function parseLightCard(file, prefetchedText, cache) {
                 if (!parsedData || !isCharacterCardData(parsedData)) return null;
             } else return null;
         }
-        if (!parsedData) return null;
+        if (!parsedData) {
+            // F4:解析失败进二次机会队列(后台补解析,不阻塞主线程)
+            if (typeof prefetchedText === 'string' && !parseRetryPaths.has(file.path)) {
+                parseRetryPaths.add(file.path);
+                parseRetryQueue.push(file);
+            }
+            // F6: 不可解析文件写负缓存,后续 scan/reconcile 零成本跳过
+            if (cache && fp) {
+                cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
+                cacheDirty = true;
+                scheduleCacheFlush();
+            }
+            return null;
+        }
         const normalized = normalizeCardData(parsedData);
         const fields = extractCardLightFields(normalized, {
             fileName: file.name,
@@ -348,34 +673,33 @@ async function parseLightCard(file, prefetchedText, cache) {
         }
         return buildLightItem(file, fields);
     } catch (e) {
+        if (typeof prefetchedText === 'string' && !parseRetryPaths.has(file.path)) {
+            parseRetryPaths.add(file.path);
+            parseRetryQueue.push(file);
+        }
         return null;
     }
 }
 
-/** 轻量列表条目(无全量 data;详情页打开时经 loadCardFullData 按需加载) */
-function buildLightItem(file, fields) {
-    return {
-        id: file.path,
-        path: file.path,
-        fileName: file.name,
-        name: fields.name || String(file.name || '').replace(/\.(png|webp|json)$/i, '') || '未命名',
-        creator: fields.creator || '未知',
-        avatar: null, // 封面懒加载(MobileCardCover)
-        data: null, // 🚀 全量数据不常驻内存(详情页按需加载)
-        category: file.category || (file.subFolder ? file.subFolder.split('/')[0] : '未分类'),
-        customTags: [],
-        subFolder: file.subFolder || '',
-        _desc: fields.desc || '',
-        _searchText: fields.searchText || '',
-        _tags: fields.tags || [],
-        _tokens: fields.tokens || 0,
-        _lb: !!fields.hasLorebook,
-        _rx: !!fields.hasRegex,
-        _mtime: file.mtime || 0,
-        _ctime: file.birthtime || file.mtime || 0, // SAF 无 birthtime,回退 mtime
-        _size: file.size || 0,
-        _importTime: file.mtime || Date.now() // 移动端暂以 mtime 充当导入时间
-    };
+// buildLightItem 已迁至 libraryCacheCore.js(import 使用),单一事实源
+
+/** F4: 二次机会队列消费——解析失败的卡在后台逐卡补解析并增量上屏 */
+async function drainParseRetries() {
+    let n = 0;
+    while (parseRetryQueue.length) {
+        const file = parseRetryQueue.shift();
+        await yieldFrame();
+        const cache = await loadEmbeddedCache();
+        const it = await parseLightCard(file, undefined, cache); // 不带预取文本→重读重析
+        if (it) {
+            mobileLibrary.library.push(it);
+            n++; cacheDirty = true; scheduleCacheFlush();
+        } else {
+            parseRetryPaths.delete(file.path); // 彻底失败:允许下轮 scan 再试
+        }
+    }
+    if (n) { mobileLibrary.revision++; }
+    if (n) console.info(`[Perf] retryParsed=${n}`);
 }
 
 /**
