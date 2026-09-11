@@ -1450,6 +1450,8 @@ export default {
         const chatMessages = ref([]);
         const chatDraft = ref('');
         const chatSending = ref(false);
+        // {{idle_duration}} 宏:距最后一次用户消息的秒数(测卡时随时间增长,发送 payload 时取当时值)
+        const lastUserActivity = ref(0);
         const chatListEl = ref(null);
         // 聊测展示模式:source=纯文本/代码, render=Markdown+HTML 渲染;默认渲染
         const chatRenderMode = ref('render');
@@ -1683,8 +1685,8 @@ export default {
             }
         }
 
-        // 宏字典（响应式 computed，随卡片/用户名变化自动更新）
-        const macroContext = computed(() => buildMacroContext(card.value, userName.value, userPersona.value));
+        // 宏字典（响应式 computed，随卡片/用户名变化自动更新；idle_duration 依赖 lastUserActivity）
+        const macroContext = computed(() => buildMacroContext(card.value, userName.value, userPersona.value, lastUserActivity.value));
 
         // 合并插件宏后的完整宏字典
         const fullMacros = computed(() => mergePluginMacros(plugins.value, macroContext.value));
@@ -2176,6 +2178,7 @@ export default {
             let processedText = applyMacros(text, fullMacros.value);
             processedText = applyRegexScripts(processedText, allRegexScripts.value, 'USER', fullMacros.value);
             chatMessages.value.push({ role: 'user', content: processedText });
+            lastUserActivity.value = Date.now(); // {{idle_duration}} 基准:用户消息发出时刻
             chatDraft.value = '';
             const count = Math.max(1, replyCount.value || 1);
             chatSending.value = true;

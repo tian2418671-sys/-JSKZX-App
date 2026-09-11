@@ -13,12 +13,13 @@
  *   {{persona}}      → 用户人设
  *   {{time}}         → 当前时间
  *   {{date}}         → 当前日期
- *   {{idle_duration}}→ 占位（不实现真实闲置时长）
+ *   {{idle_duration}}→ 距最后一次用户消息的秒数(传入 lastActivityAt;缺省 0)
  */
 
 /** 构建宏字典 */
-export function buildMacroContext(card, userName, userPersona) {
+export function buildMacroContext(card, userName, userPersona, lastActivityAt = 0) {
     const dd = (card && card.data && card.data.data) || {};
+    const idleSec = lastActivityAt ? Math.max(0, Math.floor((Date.now() - lastActivityAt) / 1000)) : 0;
     return {
         '{{user}}': String(userName || '我'),
         '{{char}}': String((card && card.name) || dd.name || 'AI'),
@@ -30,7 +31,7 @@ export function buildMacroContext(card, userName, userPersona) {
         '{{persona}}': String(userPersona || ''),
         '{{time}}': new Date().toTimeString().slice(0, 5),
         '{{date}}': new Date().toISOString().slice(0, 10),
-        '{{idle_duration}}': '0',
+        '{{idle_duration}}': String(idleSec),
     };
 }
 
