@@ -33,6 +33,12 @@ Thumbs.db
 # Android SDK（本地构建工具目录，勿提交）
 android-sdk/
 
+# 🔑 发布签名密钥（绝对不要提交！一旦推上去 = 私钥泄露，任何人都能伪造你的更新包）
+keystore.properties
+*.jks
+*.keystore
+_备份_签名密钥/
+
 # Android 构建产物
 *.apk
 *.aab
