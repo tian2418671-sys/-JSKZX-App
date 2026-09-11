@@ -27,9 +27,25 @@ export const THEME_META = {
     ink:       { font: "'STKaiti', 'KaiTi', '楷体', 'Noto Serif SC', serif",                             radius: '4px',  deco: 'ink',        desc: '水墨宣纸，淡墨留白' },
 };
 
-const safeSystemBars = () => {
-    try { return import('@capacitor/core').then((m) => m.SystemBars).catch(() => null); }
-    catch (e) { return Promise.resolve(null); }
+/**
+ * 把 SystemBars 插件安全交给回调消费。
+ *
+ * ⚠️ 绝不能把 Capacitor 插件代理作为 Promise 的「解决值」返回：
+ *    Promise 解析时会读取 value.then 判定是否为 thenable，而插件代理会把 .then
+ *    当成插件方法去调用，于是抛出
+ *      "SystemBars.then()" is not implemented on android
+ *    表现为启动时的未处理 Promise 异常（即使外面套了 .catch 也拦不住，因为异常
+ *    发生在 then 回调的返回值被同化那一步）。
+ *    所以这里在 then 回调内部直接消费插件对象，绝不把它传出去。
+ *
+ * @param {(sb:any)=>void} fn 拿到插件的回调（非 Capacitor 环境/模块缺失时不执行）
+ */
+const withSystemBars = (fn) => {
+    try {
+        import('@capacitor/core')
+            .then((m) => { fn(m.SystemBars); })
+            .catch(() => { /* 非 Capacitor 环境 / 模块缺失，忽略 */ });
+    } catch (e) { /* 同步异常忽略 */ }
 };
 
 export function currentTheme() {
@@ -83,8 +99,13 @@ export function applyTheme(theme) {
         document.body.style.background = bgMap[t] || '#f7f8fa';
     }
     localStorage.setItem(THEME_KEY, t);
-    safeSystemBars().then((SB) => {
-        if (SB && SB.setStyle) SB.setStyle({ style: isDark ? 'DARK' : 'LIGHT' }).catch(() => {});
+    withSystemBars((SB) => {
+        if (SB && typeof SB.setStyle === 'function') {
+            try {
+                const r = SB.setStyle({ style: isDark ? 'DARK' : 'LIGHT' });
+                if (r && typeof r.catch === 'function') r.catch(() => {});
+            } catch (e) { /* 插件调用失败不影响主题应用 */ }
+        }
     });
     return t;
 }
