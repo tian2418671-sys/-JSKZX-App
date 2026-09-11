@@ -425,14 +425,17 @@ export function createVariableEngine(opts = {}) {
     return engine;
 }
 
-/** 变量统计（侧边栏展示用） */
+/** 变量统计（侧边栏展示用）：空对象/空数组计 0（空树应显示「0 值」而非 1） */
 export function countVars(root) {
+    if (!root || typeof root !== 'object') return 0;
     let leaves = 0;
     const walk = (o) => {
-        if (!o || typeof o !== 'object') { leaves++; return; }
         const keys = Array.isArray(o) ? o.map((_, i) => i) : Object.keys(o);
-        if (!keys.length) leaves++;
-        for (const k of keys) walk(o[k]);
+        for (const k of keys) {
+            const v = o[k];
+            if (v && typeof v === 'object') walk(v);
+            else leaves++;
+        }
     };
     walk(root);
     return leaves;

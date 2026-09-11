@@ -19,15 +19,20 @@ import java.util.List;
 /**
  * 长期记忆插件（MemoryChat 方案 B 融合，移动端专属）
  *  - 用 Android 内置 SQLite 存储分层记忆（fact 事实 / summary 摘要 / message 原始消息）
+ *  - fact 为「记忆表格」行：key(键) + content(值)，注入时以 Markdown 表格呈现
  *  - 检索采用关键词匹配（MVP；后续可升级 sqlite-vec 向量检索）
  *  - 与桌面版无关，仅移动端原生层实现
- * 表：memory_items(id, type, content, card_name, created_at)
+ * 表：memory_items(id, type, content, key, card_name, created_at)
+ * 治理：同卡同内容 10 分钟内去重（防失败重试/重复发送导致重复记忆）；message 型每卡仅保留最近 40 条
  */
 @CapacitorPlugin(name = "MemoryPlugin")
 public class MemoryPlugin extends Plugin {
 
     private static final String DB_NAME = "memory.db";
-    private static final int DB_VERSION = 1;
+    private static final int DB_VERSION = 2;
+
+    private static final int MESSAGE_KEEP = 40;          // 每卡保留的 message 型记忆条数
+    private static final long DUP_WINDOW_MS = 10 * 60 * 1000L; // 去重窗口：10 分钟
 
     private static class DBHelper extends SQLiteOpenHelper {
         DBHelper(Context ctx) {
@@ -39,14 +44,17 @@ public class MemoryPlugin extends Plugin {
                 "id INTEGER PRIMARY KEY AUTOINCREMENT," +
                 "type TEXT NOT NULL," +
                 "content TEXT NOT NULL," +
+                "key TEXT," +
                 "card_name TEXT," +
                 "created_at INTEGER NOT NULL)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_mem_type ON memory_items(type)");
         }
         @Override
         public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
-            db.execSQL("DROP TABLE IF EXISTS memory_items");
-            onCreate(db);
+            // v1 → v2：新增 key 列（记忆表格键值），保留既有数据
+            if (oldV < 2) {
+                db.execSQL("ALTER TABLE memory_items ADD COLUMN key TEXT");
+            }
         }
     }
 
@@ -57,33 +65,92 @@ public class MemoryPlugin extends Plugin {
         return helper.getWritableDatabase();
     }
 
-    /** 新增记忆：{ type: fact|summary|message, content, cardName? } */
+    /** 新增记忆：{ type: fact|summary|message, content, key?, cardName? }；去重+message 修剪 */
     @PluginMethod
     public void add(PluginCall call) {
         String type = call.getString("type", "message");
         String content = call.getString("content", "").trim();
+        String key = call.getString("key", "");
         String cardName = call.getString("cardName", "");
         if (content.isEmpty()) {
             call.reject("content 缺失");
             return;
         }
         try {
+            SQLiteDatabase db = db();
+            long now = System.currentTimeMillis();
+            // 去重：同卡同类型同内容在去重窗口内已存在 → 幂等跳过（防失败重试/连发重复记录）
+            Cursor dup = db.rawQuery(
+                "SELECT id FROM memory_items WHERE type = ? AND content = ? AND card_name = ? AND created_at >= ? LIMIT 1",
+                new String[]{ type, content, String.valueOf(cardName == null ? "" : cardName), String.valueOf(now - DUP_WINDOW_MS) });
+            boolean dupHit = false;
+            long dupId = -1L;
+            try {
+                if (dup.moveToFirst()) { dupHit = true; dupId = dup.getLong(0); }
+            } finally { dup.close(); }
+            if (dupHit) {
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("id", dupId);
+                ret.put("skipped", true);
+                call.resolve(ret);
+                return;
+            }
             ContentValues cv = new ContentValues();
             cv.put("type", type);
             cv.put("content", content);
+            if (key != null && !key.isEmpty()) cv.put("key", key);
             cv.put("card_name", cardName);
-            cv.put("created_at", System.currentTimeMillis());
-            long id = db().insertOrThrow("memory_items", null, cv);
+            cv.put("created_at", now);
+            long id = db.insertOrThrow("memory_items", null, cv);
+            // message 型修剪：每卡仅保留最近 MESSAGE_KEEP 条（L1 原始消息是短期上下文，防库无限膨胀）
+            if ("message".equals(type)) {
+                String card = cardName == null ? "" : cardName;
+                db.execSQL(
+                    "DELETE FROM memory_items WHERE type = 'message' AND card_name = ? AND id NOT IN " +
+                    "(SELECT id FROM memory_items WHERE type = 'message' AND card_name = ? ORDER BY id DESC LIMIT " + MESSAGE_KEEP + ")",
+                    new String[]{ card, card });
+            }
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("id", id);
+            ret.put("skipped", false);
             call.resolve(ret);
         } catch (Exception e) {
             call.reject(e.getMessage());
         }
     }
 
-    /** 关键词检索：{ query, limit? } → { success, items } */
+    /** 更新单条：{ id, key?, content? }（记忆表格行编辑：改键/改值） */
+    @PluginMethod
+    public void update(PluginCall call) {
+        long id = call.getLong("id", -1L);
+        if (id < 0) {
+            call.reject("id 缺失");
+            return;
+        }
+        try {
+            ContentValues cv = new ContentValues();
+            if (call.getString("key") != null) cv.put("key", call.getString("key", ""));
+            if (call.getString("content") != null) cv.put("content", call.getString("content", "").trim());
+            if (cv.size() == 0) {
+                call.reject("无可更新字段");
+                return;
+            }
+            int n = db().update("memory_items", cv, "id = ?", new String[]{ String.valueOf(id) });
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("updated", n);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    /**
+     * 关键词检索：{ query, limit? } → { success, items }
+     * 只检索 fact/summary（长期记忆）；message 原始消息是短期上下文，不进检索注入
+     */
     @PluginMethod
     public void search(PluginCall call) {
         String query = call.getString("query", "").trim();
@@ -93,24 +160,20 @@ public class MemoryPlugin extends Plugin {
             SQLiteDatabase db = db();
             String sel;
             List<String> args = new ArrayList<>();
+            String scope = "type IN ('fact','summary')";
             if (query.isEmpty()) {
-                sel = "SELECT * FROM memory_items ORDER BY created_at DESC LIMIT ?";
+                sel = "SELECT * FROM memory_items WHERE " + scope + " ORDER BY created_at DESC LIMIT ?";
                 args.add(String.valueOf(limit));
             } else {
                 String[] words = query.split("[\\s,，。.!！?？;；:：、]+");
-                StringBuilder where = new StringBuilder();
+                StringBuilder kw = new StringBuilder();
                 for (String w : words) {
                     if (w.isEmpty()) continue;
-                    if (where.length() > 0) where.append(" OR ");
-                    where.append("content LIKE ?");
+                    if (kw.length() > 0) kw.append(" OR ");
+                    kw.append("content LIKE ?");
                     args.add("%" + w + "%");
                 }
-                if (where.length() == 0) {
-                    where.append("content LIKE ?");
-                    args.add("%" + query + "%");
-                }
-                sel = "SELECT * FROM memory_items WHERE " + where.toString() +
-                    " ORDER BY created_at DESC LIMIT " + limit;
+                sel = "SELECT * FROM memory_items WHERE " + scope + " AND (" + kw + ") ORDER BY created_at DESC LIMIT " + limit;
             }
             c = db.rawQuery(sel, args.toArray(new String[0]));
             JSArray items = new JSArray();
@@ -206,6 +269,7 @@ public class MemoryPlugin extends Plugin {
         o.put("id", c.getLong(c.getColumnIndexOrThrow("id")));
         o.put("type", c.getString(c.getColumnIndexOrThrow("type")));
         o.put("content", c.getString(c.getColumnIndexOrThrow("content")));
+        o.put("key", c.getString(c.getColumnIndexOrThrow("key")));
         o.put("cardName", c.getString(c.getColumnIndexOrThrow("card_name")));
         o.put("createdAt", c.getLong(c.getColumnIndexOrThrow("created_at")));
         return o;

@@ -27,23 +27,74 @@ export function setMemoryLimit(n) {
 }
 
 /** 记录一条记忆（不阻塞，失败静默） */
-export async function recordMemory(type, content, cardName) {
+export async function recordMemory(type, content, key, cardName) {
     if (!isMemoryEnabled()) return null;
     try {
-        return await api.memoryAdd({ type: type || 'message', content: content || '', cardName: cardName || '' });
+        return await api.memoryAdd({ type: type || 'message', content: content || '', key: key || '', cardName: cardName || '' });
     } catch (e) {
         return { success: false, error: (e && e.message) || '' };
     }
 }
 
-/** 记录对话消息（user / assistant） */
+/**
+ * 记录对话消息（user / assistant）
+ * 治理：错误占位（⚠ 开头）与空内容不进记忆；去重与 L1 修剪由原生层完成
+ */
 export function recordMessage(role, content, cardName) {
-    return recordMemory('message', `${role === 'user' ? '用户' : 'AI'}: ${content || ''}`, cardName);
+    const text = String(content || '').trim();
+    if (!text) return null;
+    if (text.startsWith('⚠')) return null; // 请求失败占位文本不是记忆
+    return recordMemory('message', `${role === 'user' ? '用户' : 'AI'}: ${text}`, '', cardName);
 }
 
-/** 记录事实（L3，用户关键信息） */
-export function recordFact(content, cardName) {
-    return recordMemory('fact', content, cardName);
+/** 记录事实（L3，记忆表格行：键=值） */
+export function recordFact(key, value, cardName) {
+    const v = String(value == null ? '' : value).trim();
+    if (!v) return null;
+    return recordMemory('fact', v, String(key || '备忘').trim(), cardName);
+}
+
+/** 更新记忆表格行（改键/改值） */
+export async function updateMemory(id, patch) {
+    try {
+        return await api.memoryUpdate(id, patch || {});
+    } catch (e) {
+        return { success: false, error: (e && e.message) || '' };
+    }
+}
+
+// ---------- L3 事实提取（用户交代的关键信息 → 记忆表格行） ----------
+// 启发式规则：命中即记（键 值）。值为句末截止（。！？!? 或行尾）。
+const FACT_RULES = [
+    { re: /(?:我叫|我的名字(?:叫|是)?|名字是|本名是)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: '名字' },
+    { re: /我(?:最喜欢|超喜欢|特别喜欢|喜欢)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: '喜欢' },
+    // 讨厌：允许逗号后省略「我」的口语写法（「我喜欢X，讨厌Y。」）
+    { re: /(?<=^|[，,；;：:\s])我?(?:最讨厌|特别讨厌|讨厌|不喜欢)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: '讨厌' },
+    { re: /(?:记住|牢记|记下)\s*[:：]?\s*(.+?)(?:[。！？!?]|$)/, key: '备忘' },
+    { re: /(?:你|您|老板娘|老板|管家|夫君|主人|哥哥|姐姐)(?:要)?(?:记住|记得|牢记)\s*[:：]?\s*(.+?)(?:[。！？!?]|$)/, key: '备忘' },
+    { re: /我?(?:今年|现在)\s*(\d+)\s*岁/, key: '年龄', valueFrom: (m) => m[1] + '岁' },
+    { re: /我?(?:现在|正在|身处)?(?:在|身处)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: '位置' },
+    { re: /我?(?:想去|要去|打算去|计划去)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: '目标' },
+    { re: /我的(.+?)(?:是|为)\s*[:：]?\s*(.+?)(?:[。！？!?，,]|$)/, key: (m) => String(m[1] || '备忘').trim() },
+];
+
+/** 从用户消息提取事实列表：[{ key, value }]（纯函数，供单测）；同键同值去重 */
+export function extractFacts(text) {
+    const src = String(text || '');
+    const facts = [];
+    const seen = new Set();
+    for (const rule of FACT_RULES) {
+        const m = rule.re.exec(src);
+        if (!m) continue;
+        const key = typeof rule.key === 'function' ? rule.key(m) : rule.key;
+        const value = rule.valueFrom ? rule.valueFrom(m) : String(m[m.length - 1] || '').trim();
+        if (!key || !value) continue;
+        const sig = key + '\u0000' + value;
+        if (seen.has(sig)) continue; // 「记住X」与「你记住X」等重叠规则只记一次
+        seen.add(sig);
+        facts.push({ key, value });
+    }
+    return facts;
 }
 
 /** 检索相关记忆 */
@@ -75,18 +126,37 @@ export async function clearMemory(type) {
 }
 
 /**
- * 根据用户输入检索相关记忆，拼成可注入 system 的文本片段。
- * 仅返回事实(fact)与摘要(summary)类记忆；空则返回 ''。
+ * 根据用户输入检索相关记忆，拼成可注入 system 的文本片段：
+ *   - fact 事实 → 「记忆表格」（| 键 | 值 | Markdown 表格）
+ *   - summary 摘要 → 要点列表
+ * 空则返回 ''。
  */
 export async function buildMemoryContext(query) {
     if (!isMemoryEnabled()) return '';
     try {
         const items = await searchMemory(query, getMemoryLimit());
-        const useful = items.filter((it) => it && (it.type === 'fact' || it.type === 'summary') && it.content);
-        if (!useful.length) return '';
-        return '### 相关记忆(供参考，请自然融入对话，勿直接复述)\n' +
-            useful.map((it) => '- ' + it.content).join('\n');
+        const facts = items.filter((it) => it && it.type === 'fact' && it.content);
+        const summaries = items.filter((it) => it && it.type === 'summary' && it.content);
+        const parts = [];
+        if (facts.length) {
+            parts.push('### 记忆表格（角色已记住的信息，请在对话中自然运用，不要逐条复述）');
+            parts.push('| 记忆 | 内容 |');
+            parts.push('| --- | --- |');
+            for (const f of facts) {
+                parts.push('| ' + escTable(f.key || '备忘') + ' | ' + escTable(f.content) + ' |');
+            }
+        }
+        if (summaries.length) {
+            parts.push('### 对话摘要（近期发生的事）');
+            parts.push(summaries.map((s) => '- ' + s.content).join('\n'));
+        }
+        return parts.join('\n\n');
     } catch (e) {
         return '';
     }
+}
+
+/** Markdown 表格单元格转义：| → \|、换行 → 空格（防表格破行） */
+function escTable(s) {
+    return String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }

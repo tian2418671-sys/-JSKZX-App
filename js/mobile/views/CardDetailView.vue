@@ -562,7 +562,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona, getMaxFloors, setMaxFloors } from '../useChatSettings';
-import { buildMemoryContext, recordMessage, recordFact, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
+import { buildMemoryContext, recordMessage, recordFact, extractFacts, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 // 🚀 对齐酒馆正文 Markdown 引擎(Showdown,messageFormatting 第 6 步 converter.makeHtml)
 import Showdown from 'showdown';
@@ -2195,9 +2195,11 @@ export default {
                     swipes.push(reply);
                 }
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
-                // 记录对话到长期记忆(不阻塞)
-                recordMessage('user', text, card.value.name);
+                // 记录对话到长期记忆(不阻塞)；错误占位(⚠)/失败重试由 recordMessage 与原生层过滤去重
+                recordMessage('user', processedText, card.value.name);
                 if (swipes && swipes[0]) recordMessage('assistant', swipes[0], card.value.name);
+                // L3 事实提取：用户交代的关键信息 → 记忆表格行(键=值)
+                for (const f of extractFacts(processedText)) recordFact(f.key, f.value, card.value.name);
             } catch (e) {
                 chatMessages.value.push({ role: 'assistant', swipes: ['⚠ 请求异常: ' + (e.message || e)], index: 0 });
             } finally {

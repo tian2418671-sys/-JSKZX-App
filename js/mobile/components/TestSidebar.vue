@@ -176,6 +176,8 @@
                         spellcheck="false"
                         placeholder="变量树 JSON（可编辑后应用合并）"
                         class="ts-paste-field"
+                        @focus="varsEditing = true"
+                        @blur="varsEditing = false"
                     />
                     <van-button block size="small" type="primary" plain style="margin-top: 6px" @click="applyVarsJsonEdit">应用变量树修改</van-button>
 
@@ -265,24 +267,32 @@
         </div>
     </transition>
 
-    <!-- 🚀 记忆数据查看器:黑箱变透明(浏览/删除/清空) -->
+    <!-- 🚀 记忆表格查看器:黑箱变透明(类型筛选/行编辑/删除/清空) -->
     <van-popup v-model:show="memoryViewerShow" position="bottom" round closeable
         :style="{ height: '72vh' }" class="mem-viewer">
         <div class="mem-v-head">
-            <span class="mem-v-title">🧠 记忆数据（{{ memoryItems.length }} 条）</span>
-            <van-button size="mini" plain type="danger" :disabled="!memoryItems.length" @click="clearMemoryAll">清空全部</van-button>
+            <span class="mem-v-title">🧠 记忆表格（{{ memoryItems.length }} 条）</span>
+            <van-button size="mini" plain type="danger" :disabled="!memoryItems.length" @click="clearMemoryAll">{{ memFilter === 'fact' ? '清空事实' : (memFilter === 'summary' ? '清空摘要' : (memFilter === 'message' ? '清空消息' : '清空全部')) }}</van-button>
+        </div>
+        <!-- 类型筛选 -->
+        <div class="mem-v-tabs">
+            <div v-for="t in memFilters" :key="t.key" class="mem-v-tab" :class="{ active: memFilter === t.key }" @click="setMemFilter(t.key)">{{ t.label }}</div>
         </div>
         <div class="mem-v-body">
             <van-loading v-if="memoryLoading" size="22">读取中…</van-loading>
-            <van-empty v-else-if="!memoryItems.length" description="暂无记忆数据（发送消息后会自动记录）" image-size="60" />
+            <van-empty v-else-if="!memoryItems.length" description="暂无记忆数据（发送消息后自动记录，关键信息自动入表）" image-size="60" />
             <div v-else v-for="it in memoryItems" :key="it.id" class="mem-v-item">
                 <div class="mem-v-meta">
-                    <van-tag :type="it.type === 'fact' ? 'warning' : (it.type === 'summary' ? 'success' : 'primary')" size="mini">{{ it.type || 'message' }}</van-tag>
+                    <van-tag :type="it.type === 'fact' ? 'warning' : (it.type === 'summary' ? 'success' : 'primary')" size="mini">{{ typeLabel(it.type) }}</van-tag>
+                    <span v-if="it.type === 'fact'" class="mem-v-key">{{ it.key || '备忘' }}</span>
                     <span class="mem-v-card">{{ it.cardName || '' }}</span>
                     <span class="mem-v-time">{{ fmtMemTime(it.createdAt) }}</span>
                 </div>
                 <div class="mem-v-content">{{ it.content }}</div>
-                <van-icon name="delete-o" class="mem-v-del" @click="deleteMemoryOne(it)" />
+                <div class="mem-v-actions">
+                    <van-icon name="edit" class="mem-v-edit" @click="editMemoryRow(it)" />
+                    <van-icon name="delete-o" class="mem-v-del" @click="deleteMemoryOne(it)" />
+                </div>
             </div>
         </div>
     </van-popup>
@@ -292,6 +302,7 @@
 import { ref, reactive, computed, watch } from 'vue';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
+import { countVars } from '../useChatVariables.js';
 
 export default {
     name: 'TestSidebar',
@@ -379,10 +390,24 @@ export default {
         const localMemoryLimit = ref(props.memoryLimit);
         const localMaxFloors = ref(props.maxFloors);
 
-        // ---------- 🚀 记忆数据查看器(黑箱变透明) ----------
+        // ---------- 🚀 记忆表格查看器(黑箱变透明:类型筛选/行编辑/删除/清空) ----------
         const memoryViewerShow = ref(false);
         const memoryLoading = ref(false);
         const memoryItems = ref([]);
+        const memFilters = [
+            { key: '', label: '全部' },
+            { key: 'fact', label: '事实' },
+            { key: 'summary', label: '摘要' },
+            { key: 'message', label: '消息' }
+        ];
+        const memFilter = ref('');
+        function typeLabel(t) {
+            return t === 'fact' ? '事实' : (t === 'summary' ? '摘要' : (t === 'message' ? '消息' : (t || '未知')));
+        }
+        function setMemFilter(k) {
+            memFilter.value = k;
+            refreshMemoryList();
+        }
         async function openMemoryViewer() {
             memoryViewerShow.value = true;
             await refreshMemoryList();
@@ -390,12 +415,35 @@ export default {
         async function refreshMemoryList() {
             memoryLoading.value = true;
             try {
-                const res = await api.memoryList({ type: '', limit: 300 });
+                const res = await api.memoryList({ type: memFilter.value, limit: 300 });
                 memoryItems.value = (res && res.success && Array.isArray(res.items)) ? res.items : [];
             } catch (e) {
                 memoryItems.value = [];
             } finally {
                 memoryLoading.value = false;
+            }
+        }
+        /** 编辑记忆表格行：改键（fact）/改值（prompt 输入，与 promptRename 同套路） */
+        async function editMemoryRow(it) {
+            if (!it || it.id == null) return;
+            const isFact = it.type === 'fact';
+            let key = it.key || '备忘';
+            let value = it.content || '';
+            if (isFact) {
+                const k = window.prompt('记忆键（事实分类）', key);
+                if (k == null) return;
+                key = k.trim() || '备忘';
+            }
+            const v = window.prompt('记忆内容', value);
+            if (v == null) return;
+            value = v.trim();
+            if (!value) { showToast('内容不能为空'); return; }
+            try {
+                const res = await api.memoryUpdate(it.id, { key, content: value });
+                if (res && res.success) { showSuccessToast('已更新'); await refreshMemoryList(); }
+                else showToast((res && res.error) || '更新失败');
+            } catch (e) {
+                showToast('更新失败');
             }
         }
         async function deleteMemoryOne(it) {
@@ -410,11 +458,12 @@ export default {
         }
         async function clearMemoryAll() {
             if (!memoryItems.value.length) return;
+            const typeStr = memFilter.value === 'fact' ? '事实' : (memFilter.value === 'summary' ? '摘要' : (memFilter.value === 'message' ? '消息' : '全部'));
             try {
-                await showConfirmDialog({ title: '清空记忆', message: `确定清空全部 ${memoryItems.value.length} 条记忆？此操作不可恢复。` });
+                await showConfirmDialog({ title: '清空记忆', message: `确定清空当前筛选「${typeStr}」下的 ${memoryItems.value.length} 条记忆？此操作不可恢复。` });
             } catch (e) { return; }
             try {
-                const res = await api.memoryClear('');
+                const res = await api.memoryClear(memFilter.value);
                 if (res && res.success) { showSuccessToast('已清空'); memoryItems.value = []; }
                 else showToast((res && res.error) || '清空失败');
             } catch (e) {
@@ -557,8 +606,11 @@ export default {
 
         // ---------- 变量 Tab（MVU/EJS） ----------
         const varsJsonDraft = ref(props.varsTreeJson || '{}');
-        // 宿主变量树变化 → 同步草稿（用户在编辑中且内容未变时不打断）
-        watch(() => props.varsTreeJson, (v) => { varsJsonDraft.value = v || '{}'; });
+        // 用户正在编辑变量树 JSON 的标记：编辑期间变量树变更不打断草稿（应用/撤销/重置/AI 回复后
+        // 树变化触发宿主 props 更新，若此刻强制覆盖会把用户未完成的编辑冲掉）
+        const varsEditing = ref(false);
+        // 宿主变量树变化 → 同步草稿（仅当用户未在编辑时；编辑中交给用户自己收尾）
+        watch(() => props.varsTreeJson, (v) => { if (!varsEditing.value) varsJsonDraft.value = v || '{}'; });
         function applyVarsJsonEdit() {
             emit('apply-vars-json', varsJsonDraft.value);
         }
@@ -575,7 +627,9 @@ export default {
             if (!Array.isArray(ops)) return '';
             return ops.map((o) => {
                 if (!o || !o.type) return '';
-                if (o.type === 'init') return 'init(' + Object.keys(o.data || {}).length + '键)';
+                // init 按并入的值数展示（与变量树「N 值」口径一致；数顶层键会把
+                // {stat_data:{…}} 这类整树粘贴误显示成 1）
+                if (o.type === 'init') return 'init(' + countVars(o.data || {}) + '值)';
                 if (o.type === 'patch') return 'patch(' + (o.ops || []).length + '条)';
                 const v = o.value === undefined ? '' : '=' + (typeof o.value === 'object' ? JSON.stringify(o.value) : o.value);
                 return o.type + ' ' + (o.path || '') + v;
@@ -619,10 +673,11 @@ export default {
             localApiEndpoint, localApiKey, localApiModel, localApiType,
             localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit, localMaxFloors,
             memoryViewerShow, memoryLoading, memoryItems, openMemoryViewer, deleteMemoryOne, clearMemoryAll, fmtMemTime,
+            memFilters, memFilter, setMemFilter, editMemoryRow, typeLabel,
             emitParams, resetParams, applyPastedPreset, importPastedRegex, importPastedPlugin,
             importPresetFromFile, importRegexFromFile, importPluginFromFile,
             emitApiConfig, toggleWbExpand, promptRename, confirmDelete,
-            varsJsonDraft, applyVarsJsonEdit, confirmResetVars, formatOps,
+            varsJsonDraft, varsEditing, applyVarsJsonEdit, confirmResetVars, formatOps,
             formatPlacement, regexSourceLabel, formatTime,
         };
     }
@@ -736,19 +791,29 @@ export default {
     padding: 14px 16px 10px; border-bottom: 1px solid var(--van-gray-3, #ebedf0);
 }
 .mem-v-title { font-size: 15px; font-weight: 600; }
+/* 记忆表格类型筛选 Tab */
+.mem-v-tabs { display: flex; gap: 6px; padding: 8px 16px 0; flex-shrink: 0; }
+.mem-v-tab {
+    padding: 3px 12px; font-size: 12px; border-radius: 12px;
+    background: var(--van-background-2, #f7f8fa); color: var(--van-gray-6, #646566); cursor: pointer;
+}
+.mem-v-tab.active { background: #eef7fb; color: #06b6d4; font-weight: 600; }
 .mem-v-body { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 .mem-v-item {
     position: relative;
-    padding: 10px 30px 10px 12px;
+    padding: 10px 56px 10px 12px;
     margin-top: 8px;
     border-radius: 10px;
     background: var(--van-background-2, #f7f8fa);
 }
 .mem-v-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.mem-v-key { font-size: 11px; color: #b8860b; background: #fdf6e3; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
 .mem-v-card { font-size: 11px; color: var(--van-gray-5, #969799); }
 .mem-v-time { margin-left: auto; font-size: 11px; color: var(--van-gray-5, #969799); }
 .mem-v-content { font-size: 13px; line-height: 1.5; word-break: break-all; white-space: pre-wrap; }
-.mem-v-del { position: absolute; top: 8px; right: 8px; color: var(--van-gray-5, #969799); }
+.mem-v-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 10px; }
+.mem-v-edit { color: var(--van-gray-6, #646566); }
+.mem-v-del { color: var(--van-gray-5, #969799); }
 
 /* van-tabs 已替换为自定义 tab 栏，无需隐藏 __content */
 </style>

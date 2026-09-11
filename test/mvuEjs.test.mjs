@@ -243,6 +243,14 @@ test('countVars 统计叶子数', () => {
     assert.equal(countVars({ a: 1, b: { c: 2, d: [3, 4] } }), 4);
 });
 
+test('countVars 空树/空集合计 0（侧边栏「N 值」徽标与重置按钮态依赖此语义）', () => {
+    assert.equal(countVars({}), 0);
+    assert.equal(countVars([]), 0);
+    assert.equal(countVars({ a: {} }), 0);
+    assert.equal(countVars({ arr: [] }), 0);
+    assert.equal(countVars(null), 0);
+});
+
 // ============ 分段渲染器 ============
 test('segmentMessage：```html 围栏切分文本段/面板段', () => {
     const text = '前文\n```html\n<div class="panel">面板</div>\n```\n后文';

@@ -64,11 +64,12 @@ export function toRelativePath(p) {
 
 /** 统一记忆条目字段名(原生 snake_case → JS camelCase) */
 function normalizeMemoryItem(it) {
-    if (!it) return { id: 0, type: '', content: '', cardName: '', createdAt: 0 };
+    if (!it) return { id: 0, type: '', content: '', key: '', cardName: '', createdAt: 0 };
     return {
         id: it.id || 0,
         type: it.type || '',
         content: it.content || '',
+        key: it.key || '',
         cardName: it.cardName || it.card_name || '',
         createdAt: it.createdAt || it.created_at || 0
     };
@@ -750,13 +751,22 @@ export const androidImpl = {
         }
     },
     // ---------- 长期记忆(MemoryChat 方案 B,移动端专属,与桌面无关) ----------
-    /** 新增记忆:{ type: fact|summary|message, content, cardName? } */
-    async memoryAdd({ type, content, cardName } = {}) {
+    /** 新增记忆:{ type: fact|summary|message, content, key?, cardName? } */
+    async memoryAdd({ type, content, key, cardName } = {}) {
         try {
-            const res = await Memory.add({ type: type || 'message', content: content || '', cardName: cardName || '' });
-            return { success: !!(res && res.success), id: (res && res.id) || 0, error: (res && res.message) || undefined };
+            const res = await Memory.add({ type: type || 'message', content: content || '', key: key || '', cardName: cardName || '' });
+            return { success: !!(res && res.success), id: (res && res.id) || 0, skipped: !!(res && res.skipped), error: (res && res.message) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '记忆写入失败' };
+        }
+    },
+    /** 更新单条记忆(记忆表格行编辑):{ id, key?, content? } */
+    async memoryUpdate(id, patch) {
+        try {
+            const res = await Memory.update({ id: Number(id) || 0, key: (patch && patch.key) || '', content: (patch && patch.content) || '' });
+            return { success: !!(res && res.success), updated: (res && res.updated) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '记忆更新失败' };
         }
     },
     /** 关键词检索:{ query, limit? } → { success, items } */
