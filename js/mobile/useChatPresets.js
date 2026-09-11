@@ -29,14 +29,39 @@ const PRESET_PARAM_KEYS = [
 ];
 
 /**
- * 从预设 JSON 中提取生效的提示词列表（按 prompt_order 排序，只取 enabled）
+ * 归一化 prompt_order（兼容酒馆两种形态）
+ *   扁平: [{ identifier, enabled }, ...]
+ *   嵌套: [{ character_id: 100000, order: [{ identifier, enabled }, ...] }, ...]
+ * 移动端不做角色区分，嵌套形态取各分组并集（同 identifier 后者覆盖前者）。
+ * @param {Array} raw
+ * @returns {Array} [{ identifier, enabled }]
+ */
+export function normalizePromptOrder(raw) {
+    if (!Array.isArray(raw)) return [];
+    if (raw.some((it) => it && Array.isArray(it.order))) {
+        const merged = new Map();
+        for (const grp of raw) {
+            if (!grp || !Array.isArray(grp.order)) continue;
+            for (const sub of grp.order) {
+                if (sub && sub.identifier) merged.set(sub.identifier, sub);
+            }
+        }
+        return [...merged.values()];
+    }
+    return raw.filter((it) => it && it.identifier);
+}
+
+/**
+ * 从预设 JSON 中提取生效的提示词列表（按 prompt_order 排序，跳过已关闭项）
+ * 关闭判定同时看 prompt_order[].enabled === false 与 prompt.enabled === false，
+ * 这样测卡侧边栏的开关无论预设用哪种结构都能真正生效。
  * @param {object} presetData - 预设 JSON 对象
  * @returns {Array} 生效的提示词数组 [{ identifier, name, content, role }]
  */
 export function getOrderedPrompts(presetData) {
     if (!presetData) return [];
     const prompts = Array.isArray(presetData.prompts) ? presetData.prompts : [];
-    const order = Array.isArray(presetData.prompt_order) ? presetData.prompt_order : [];
+    const order = normalizePromptOrder(presetData.prompt_order);
 
     // 构建 identifier → prompt 映射
     const promptMap = new Map();
@@ -44,20 +69,48 @@ export function getOrderedPrompts(presetData) {
         if (p && p.identifier) promptMap.set(p.identifier, p);
     }
 
-    // 按 prompt_order 排序，只取 enabled
+    // 按 prompt_order 排序，只取 enabled（去重防同一 identifier 出现多次）
     const ordered = [];
+    const seen = new Set();
     for (const item of order) {
-        if (!item || !item.enabled) continue;
+        if (!item || item.enabled === false) continue;
         const p = promptMap.get(item.identifier);
-        if (p) ordered.push(p);
+        if (p && p.enabled !== false && !seen.has(item.identifier)) {
+            ordered.push(p);
+            seen.add(item.identifier);
+        }
     }
 
-    // 如果没有 prompt_order，直接用 prompts 数组
+    // 如果没有可用的 prompt_order，直接用 prompts 数组
     if (ordered.length === 0 && prompts.length > 0) {
-        return prompts.filter((p) => p && p.identifier !== 'chatHistory');
+        return prompts.filter((p) => p && p.identifier !== 'chatHistory' && p.enabled !== false);
     }
 
     return ordered;
+}
+
+/**
+ * 设置某条提示词的启用状态（同步 prompt 自身与 prompt_order，保证真正生效）
+ * @param {object} presetData - 预设 JSON
+ * @param {object} prompt - prompts 数组中的条目对象
+ * @param {boolean} enabled
+ */
+export function setPromptEnabled(presetData, prompt, enabled) {
+    if (!presetData || !prompt) return;
+    prompt.enabled = !!enabled;
+    const id = prompt.identifier;
+    if (!id) return;
+    const raw = presetData.prompt_order;
+    if (!Array.isArray(raw)) return;
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') continue;
+        if (item.identifier === id) item.enabled = !!enabled;
+        if (Array.isArray(item.order)) {
+            for (const sub of item.order) {
+                if (sub && sub.identifier === id) sub.enabled = !!enabled;
+            }
+        }
+    }
 }
 
 /**
