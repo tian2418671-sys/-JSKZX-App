@@ -345,7 +345,7 @@ export default {
 .pv-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; flex-wrap: wrap; }
 .pv-count { margin-left: auto; font-size: 12px; color: var(--van-gray-6, #969799); }
 .pv-loading { padding: 48px 0; text-align: center; }
-.pv-list { padding: 4px 12px 20px; display: flex; flex-direction: column; gap: 8px; }
+.pv-list { padding: 6px 12px 20px; display: flex; flex-direction: column; gap: 9px; }
 .pv-pager-bar {
     display: flex; align-items: center; justify-content: center; gap: 14px;
     padding: 8px 14px 12px;
@@ -356,15 +356,20 @@ export default {
 .pv-pager-bar .pager-size :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 28px; }
 .pv-pager-bar .pager-size :deep(.van-dropdown-menu__title) { font-size: 12px; }
 .pv-card {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
     background: var(--van-background-2, #fff);
-    border: 1px solid var(--van-gray-3, #ebedf0);
-    border-radius: 10px; padding: 12px;
+    border: 1px solid var(--van-gray-2, #ebedf0);
+    border-left: 3px solid #06b6d4;
+    border-radius: 12px; padding: 13px 13px 13px 11px;
+    box-shadow: 0 1px 4px rgba(6,182,212,.06);
+    transition: box-shadow .16s ease, transform .16s ease;
 }
+.pv-card:active { transform: scale(.99); box-shadow: 0 2px 10px rgba(6,182,212,.14); }
 .pv-card-main { flex: 1; min-width: 0; }
 .pv-name { font-size: 14px; font-weight: 600; color: var(--van-text-color, #323233); }
-.pv-meta { margin-top: 3px; font-size: 11px; color: var(--van-gray-6, #969799); display: flex; align-items: center; gap: 6px; }
-.pv-actions { display: flex; gap: 14px; color: var(--van-gray-6, #969799); }
+.pv-meta { margin-top: 4px; font-size: 11px; color: var(--van-gray-6, #969799); display: flex; align-items: center; gap: 6px; }
+.pv-actions { display: flex; gap: 6px; color: var(--van-gray-6, #969799); }
+.pv-actions .van-icon { padding: 5px; border-radius: 8px; background: #f4f7f9; }
 .pv-editor-popup { height: 80vh; display: flex; flex-direction: column; }
 .pv-editor-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; border-bottom: 1px solid var(--van-gray-3, #ebedf0); }
 .pv-editor-title { font-size: 15px; font-weight: 600; }

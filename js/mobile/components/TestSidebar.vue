@@ -47,6 +47,46 @@
                         placeholder="粘贴预设 JSON..." spellcheck="false" class="ts-paste-field" />
                     <van-button block type="primary" size="small" @click="applyPastedPreset" style="margin-top: 6px">导入粘贴的预设</van-button>
 
+                    <!-- 🚀 预设条目:导入后可直接查看/编辑/删除/开关,不再只有一个名字 -->
+                    <template v-if="activePresetName">
+                        <div class="ts-sec-title" style="margin-top: 12px">
+                            <span>📝 预设条目</span>
+                            <van-tag size="mini" round>{{ activePresetPrompts.length }}</van-tag>
+                        </div>
+                        <div class="ts-pp-tip">点条目展开可改名称/角色/正文；开关决定该条是否参与生成</div>
+                        <div v-if="activePresetPrompts.length" class="ts-pp-list">
+                            <div v-for="(p, i) in activePresetPrompts" :key="ppKey(p, i)" class="ts-pp-item" :class="{ off: !ppEnabled(p) }">
+                                <div class="ts-pp-head" @click="togglePpExpand(ppKey(p, i))">
+                                    <van-switch :model-value="ppEnabled(p)" size="18px" @click.stop
+                                        @update:model-value="(v) => setPpEnabled(p, v)" />
+                                    <span class="ts-pp-name" :class="{ disabled: !ppEnabled(p) }">{{ p.name || p.identifier || ('条目 ' + (i + 1)) }}</span>
+                                    <span class="ts-pp-role" :class="'r-' + ppRole(p)">{{ ppRole(p) }}</span>
+                                    <van-icon :name="ppExpanded[ppKey(p, i)] ? 'arrow-up' : 'arrow-down'" size="14" class="ts-pp-arrow" />
+                                </div>
+                                <div v-if="ppExpanded[ppKey(p, i)]" class="ts-pp-body">
+                                    <van-field v-model="p.name" label="名称" placeholder="条目名称" @blur="emitPresetChanged" />
+                                    <div class="ts-pp-role-row">
+                                        <span class="ts-pp-role-label">角色</span>
+                                        <van-radio-group v-model="p.role" direction="horizontal" @update:model-value="emitPresetChanged">
+                                            <van-radio name="system">system</van-radio>
+                                            <van-radio name="user">user</van-radio>
+                                            <van-radio name="assistant">assistant</van-radio>
+                                        </van-radio-group>
+                                    </div>
+                                    <van-field v-model="p.content" label="内容" type="textarea" rows="4" autosize
+                                        placeholder="提示词正文" @blur="emitPresetChanged" />
+                                    <div class="ts-pp-id">identifier: {{ p.identifier || '(无)' }}</div>
+                                    <div class="ts-pp-ops">
+                                        <van-button size="mini" plain type="primary" @click="clonePresetPrompt(i)">克隆</van-button>
+                                        <van-button size="mini" plain type="danger" @click="removePresetPrompt(i)">删除此条</van-button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <van-empty v-else description="此预设没有提示词条目" image-size="40" />
+                        <van-button block plain type="primary" size="small" style="margin-top: 8px" @click="addPresetPrompt">＋ 新增条目</van-button>
+                    </template>
+
                     <!-- 预设参数 -->
                     <template v-if="activePresetName">
                         <div class="ts-sec-title" style="margin-top: 12px"><span>⚙️ 预设参数</span></div>
@@ -168,18 +208,49 @@
                         <van-button size="mini" plain icon="revoke" :disabled="!varsStats.ops" @click="$emit('undo-vars')">撤销</van-button>
                         <van-button size="mini" plain type="danger" icon="delete-o" :disabled="!varsStats.leaves" @click="confirmResetVars">重置</van-button>
                     </div>
-                    <van-field
-                        v-model="varsJsonDraft"
-                        type="textarea"
-                        rows="6"
-                        autosize
-                        spellcheck="false"
-                        placeholder="变量树 JSON（可编辑后应用合并）"
-                        class="ts-paste-field"
-                        @focus="varsEditing = true"
-                        @blur="varsEditing = false"
-                    />
-                    <van-button block size="small" type="primary" plain style="margin-top: 6px" @click="applyVarsJsonEdit">应用变量树修改</van-button>
+                    <!-- 工具条:搜索 / 展开收起 / JSON 源码入口 -->
+                    <div class="ts-vt-bar">
+                        <van-field v-model="vtQuery" placeholder="搜索路径或值" clearable class="ts-vt-search" />
+                        <van-button size="mini" plain @click="toggleVtAll">{{ vtAllExpanded ? '收起' : '展开' }}</van-button>
+                        <van-button size="mini" plain :type="showVarsJson ? 'primary' : 'default'"
+                            @click="showVarsJson = !showVarsJson">JSON</van-button>
+                    </div>
+
+                    <!-- 🌳 渲染后的变量树:点值直接编辑,点 ⋯ 打开操作面板 -->
+                    <div v-if="vtRows.length" class="ts-vt-tree">
+                        <div v-for="row in vtRows" :key="row.path" class="ts-vt-row"
+                            :style="{ paddingLeft: (2 + row.depth * 14) + 'px' }">
+                            <span class="ts-vt-caret" @click="row.hasChildren && toggleVtNode(row.path)">
+                                <van-icon v-if="row.hasChildren" :name="row.expanded ? 'arrow-down' : 'arrow'" size="12" />
+                                <span v-else class="ts-vt-dot">•</span>
+                            </span>
+                            <span v-if="vtQuery" class="ts-vt-path">{{ row.path }}</span>
+                            <span v-else class="ts-vt-key">{{ row.key }}</span>
+                            <span class="ts-vt-val" :class="'v-' + row.type" @click="vtOpenValue(row)">{{ row.preview }}</span>
+                            <span class="ts-vt-type">{{ row.typeLabel }}</span>
+                            <van-icon name="ellipsis" size="15" class="ts-vt-more" @click.stop="vtOpenOps(row)" />
+                        </div>
+                    </div>
+                    <van-empty v-else
+                        :description="vtQuery ? '没有匹配的变量' : '变量树为空（AI 回复含 UpdateVariable 指令后生成）'"
+                        image-size="40" />
+
+                    <!-- 高级:JSON 源码编辑（批量粘贴场景保留） -->
+                    <template v-if="showVarsJson">
+                        <div class="ts-vt-json-tip">高级:直接编辑整棵树 JSON，点下方按钮合并（不会删除未提及的键）</div>
+                        <van-field
+                            v-model="varsJsonDraft"
+                            type="textarea"
+                            rows="6"
+                            autosize
+                            spellcheck="false"
+                            placeholder="变量树 JSON（可编辑后应用合并）"
+                            class="ts-paste-field"
+                            @focus="varsEditing = true"
+                            @blur="varsEditing = false"
+                        />
+                        <van-button block size="small" type="primary" plain style="margin-top: 6px" @click="applyVarsJsonEdit">应用变量树修改</van-button>
+                    </template>
 
                     <!-- OpLog 最近记录 -->
                     <div class="ts-sec-title" style="margin-top: 10px"><span>📜 更新日志</span>
@@ -296,6 +367,32 @@
             </div>
         </div>
     </van-popup>
+
+    <!-- 🚀 变量操作面板（点条目右侧 ⋯ 弹出） -->
+    <van-action-sheet v-model:show="showVtOps" :actions="vtOpsActions" cancel-text="取消"
+        :description="vtOpsRow ? vtOpsRow.path : ''" @select="vtOnOpSelect" />
+
+    <!-- 变量 编辑值 / 新增子项 / 重命名 弹窗 -->
+    <van-dialog v-model:show="showVtEdit" :title="vtEditTitle" :show-confirm-button="false" style="padding: 8px 0">
+        <div class="ts-vt-edit-body">
+            <van-field v-if="vtEditMode !== 'value'" v-model="vtEditKey" label="键名" placeholder="变量名（不含 . ）" />
+            <van-field v-if="vtEditMode !== 'rename'" v-model="vtEditRaw" label="值" type="textarea" rows="3" autosize placeholder="值" />
+            <div v-if="vtEditMode !== 'rename'" class="ts-vt-type-row">
+                <span class="ts-vt-type-label">类型</span>
+                <van-radio-group v-model="vtEditType" direction="horizontal">
+                    <van-radio name="auto">自动</van-radio>
+                    <van-radio name="string">文本</van-radio>
+                    <van-radio name="number">数字</van-radio>
+                    <van-radio name="boolean">布尔</van-radio>
+                    <van-radio name="json">JSON</van-radio>
+                </van-radio-group>
+            </div>
+            <div class="ts-vt-edit-ops">
+                <van-button size="small" plain @click="showVtEdit = false">取消</van-button>
+                <van-button size="small" type="primary" @click="vtApplyEdit">确定</van-button>
+            </div>
+        </div>
+    </van-dialog>
 </template>
 
 <script>
@@ -309,6 +406,7 @@ export default {
     props: {
         visible: { type: Boolean, default: false },
         activePresetName: { type: String, default: '' },
+        activePresetPrompts: { type: Array, default: () => [] },
         plugins: { type: Array, default: () => [] },
         allRegexScripts: { type: Array, default: () => [] },
         externalPresets: { type: Array, default: () => [] },
@@ -337,13 +435,14 @@ export default {
     },
     emits: [
         'update:visible', 'scan-presets', 'apply-preset', 'clear-preset',
+        'toggle-preset-prompt', 'remove-preset-prompt', 'add-preset-prompt', 'clone-preset-prompt', 'preset-changed',
         'import-regex', 'import-plugin', 'remove-plugin', 'toggle-plugin',
         'update-params', 'toggle-wb-entry', 'update-wb-entry', 'sync-wb-keys',
         'new-session', 'switch-session', 'delete-session', 'rename-session',
         'update-api-config', 'update-reply-count', 'update-user-name', 'update-user-persona',
         'update-memory-enabled', 'update-memory-limit', 'update-max-floors',
         'update-mvu-enabled', 'update-ejs-enabled', 'update-seg-render',
-        'apply-vars-json', 'undo-vars', 'reset-vars'
+        'apply-vars-json', 'apply-vars-ops', 'undo-vars', 'reset-vars'
     ],
     setup(props, { emit }) {
         const activeTab = ref('config');
@@ -365,7 +464,8 @@ export default {
         const paramOverrides = reactive({});
 
         const paramKeys = [
-            { key: 'temperature', label: 'Temperature', min: 0, max: 2, step: 0.1, decimal: 1 },
+            // temperature / top_p 用 2 位小数：预设常见 0.85/0.95，只留 1 位会把 0.85 显示成 0.8
+            { key: 'temperature', label: 'Temperature', min: 0, max: 2, step: 0.05, decimal: 2 },
             { key: 'max_tokens', label: 'Max Tokens', min: 1, max: 32768, step: 1, decimal: 0 },
             { key: 'top_p', label: 'Top P', min: 0, max: 1, step: 0.05, decimal: 2 },
             { key: 'top_k', label: 'Top K', min: 0, max: 100, step: 1, decimal: 0 },
@@ -532,6 +632,37 @@ export default {
             catch (e) { showToast('JSON 解析失败: ' + e.message); }
         }
 
+        // ---------- 🚀 预设条目(查看/编辑/删除/开关) ----------
+        const ppExpanded = reactive({});
+        /** 条目稳定 key（identifier 可能缺失/重复，拼下标兜底） */
+        function ppKey(p, i) { return String((p && (p.identifier || p.name)) || 'entry') + '@' + i; }
+        /** 条目是否启用（prompt_order 未标注时视作启用） */
+        function ppEnabled(p) { return !p || p.enabled !== false; }
+        /** 角色归一化（酒馆仅 system/user/assistant 三种） */
+        function ppRole(p) {
+            const r = (p && p.role) || 'system';
+            return (r === 'user' || r === 'assistant') ? r : 'system';
+        }
+        function togglePpExpand(k) { ppExpanded[k] = !ppExpanded[k]; }
+        function setPpEnabled(p, v) { emit('toggle-preset-prompt', p, v); }
+        function emitPresetChanged() { emit('preset-changed'); }
+        /** 删除前二次确认（WebView 里 window.confirm 不可靠，统一用 van-dialog） */
+        async function removePresetPrompt(index) {
+            const p = props.activePresetPrompts[index];
+            const label = (p && (p.name || p.identifier)) || '该条目';
+            try {
+                await showConfirmDialog({
+                    title: '删除预设条目',
+                    message: `确定删除「${label}」？`,
+                    confirmButtonText: '删除', confirmButtonColor: '#ee0a24',
+                });
+                emit('remove-preset-prompt', index);
+            } catch (e) { /* 用户取消 */ }
+        }
+        function addPresetPrompt() { emit('add-preset-prompt'); }
+        /** 克隆某条：在宿主侧深拷一份插到原条目后面（含 prompt_order 同步） */
+        function clonePresetPrompt(index) { emit('clone-preset-prompt', index); }
+
         function importPastedRegex() {
             const raw = (regexPasteText.value || '').trim();
             if (!raw) { showToast('请粘贴正则 JSON'); return; }
@@ -614,6 +745,300 @@ export default {
         function applyVarsJsonEdit() {
             emit('apply-vars-json', varsJsonDraft.value);
         }
+
+        // ---------- 🌳 变量树渲染 + 操作面板 ----------
+        const vtExpanded = reactive({});
+        const vtQuery = ref('');
+        const vtAllExpanded = ref(false);
+        const showVarsJson = ref(false);
+        const showVtOps = ref(false);
+        const vtOpsRow = ref(null);
+        const showVtEdit = ref(false);
+        const vtEditMode = ref('value');   // value | add | rename
+        const vtEditTitle = ref('');
+        const vtEditPath = ref('');
+        const vtEditKey = ref('');
+        const vtEditRaw = ref('');
+        const vtEditType = ref('auto');
+
+        /** 解析变量树 JSON（computed 按 props 字符串缓存，避免每次渲染都 parse） */
+        const vtParsed = computed(() => {
+            try {
+                const o = JSON.parse(props.varsTreeJson || '{}');
+                return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+            } catch (e) { return {}; }
+        });
+
+        function vtTypeOf(v) {
+            if (v === null || v === undefined) return 'null';
+            if (Array.isArray(v)) return 'array';
+            return typeof v; // string / number / boolean / object
+        }
+        function vtTypeLabel(t) {
+            return { object: '对象', array: '数组', string: '文本', number: '数值', boolean: '布尔', null: '空' }[t] || t;
+        }
+        /** 子项列表：数组转 [index, value]，对象转 [key, value] */
+        function vtEntries(v) {
+            if (Array.isArray(v)) return v.map((x, i) => [String(i), x]);
+            if (v && typeof v === 'object') return Object.keys(v).map((k) => [k, v[k]]);
+            return [];
+        }
+        function vtPreview(v, t) {
+            if (t === 'object') return '{' + Object.keys(v).length + ' 项}';
+            if (t === 'array') return '[' + v.length + ' 项]';
+            if (t === 'null') return 'null';
+            const s = String(v);
+            return s === '' ? '(空文本)' : s;
+        }
+        function vtJoin(parent, key) { return parent ? parent + '.' + key : String(key); }
+        /** 取路径对应的值（在已解析的变量树上；空路径 = 整棵树） */
+        function vtGetByPath(path) {
+            let cur = vtParsed.value;
+            for (const seg of String(path || '').split('.').filter(Boolean)) {
+                if (cur == null || typeof cur !== 'object') return undefined;
+                cur = Array.isArray(cur) ? cur[Number(seg)] : cur[seg];
+            }
+            return cur;
+        }
+        /** 该路径的父级是否为数组（数组元素没有「键名」概念，重命名无意义） */
+        function vtParentIsArray(path) {
+            const segs = String(path || '').split('.').filter(Boolean);
+            if (segs.length < 2) return false;
+            return Array.isArray(vtGetByPath(segs.slice(0, -1).join('.')));
+        }
+
+        /** 扁平化可见行（v-for 直接渲染，避免递归组件） */
+        const vtRows = computed(() => {
+            const rows = [];
+            const q = vtQuery.value.trim().toLowerCase();
+            const make = (key, value, path, depth) => {
+                const t = vtTypeOf(value);
+                return {
+                    key, path, depth, value, type: t, typeLabel: vtTypeLabel(t),
+                    preview: vtPreview(value, t),
+                    hasChildren: vtEntries(value).length > 0,
+                    expanded: !!vtExpanded[path],
+                };
+            };
+            // 搜索模式:平坦列出匹配项，显示完整路径
+            if (q) {
+                const walk = (value, path, depth) => {
+                    const t = vtTypeOf(value);
+                    if (path && (path.toLowerCase().includes(q) || vtPreview(value, t).toLowerCase().includes(q))) {
+                        rows.push(make(path.split('.').pop(), value, path, depth));
+                    }
+                    for (const [k, v] of vtEntries(value)) walk(v, vtJoin(path, k), depth + 1);
+                };
+                walk(vtParsed.value, '', 0);
+                return rows;
+            }
+            // 树模式:仅展开可见
+            const walk = (value, path, depth, key) => {
+                const row = make(key, value, path, depth);
+                rows.push(row);
+                if (row.hasChildren && row.expanded) {
+                    for (const [k, v] of vtEntries(value)) walk(v, vtJoin(path, k), depth + 1, k);
+                }
+            };
+            for (const [k, v] of vtEntries(vtParsed.value)) walk(v, k, 0, k);
+            return rows;
+        });
+
+        function toggleVtNode(path) { vtExpanded[path] = !vtExpanded[path]; }
+        function toggleVtAll() {
+            if (vtAllExpanded.value) {
+                for (const k of Object.keys(vtExpanded)) delete vtExpanded[k];
+                vtAllExpanded.value = false;
+                return;
+            }
+            const collect = (value, path, out) => {
+                const kids = vtEntries(value);
+                if (!kids.length) return;
+                out.push(path);
+                for (const [k, v] of kids) collect(v, vtJoin(path, k), out);
+            };
+            const out = [];
+            for (const [k, v] of vtEntries(vtParsed.value)) collect(v, k, out);
+            for (const p of out) vtExpanded[p] = true;
+            vtAllExpanded.value = true;
+        }
+
+        // ---- 操作面板 ----
+        const vtOpsActions = computed(() => {
+            const row = vtOpsRow.value;
+            if (!row) return [];
+            const out = [];
+            if (row.hasChildren) out.push({ name: '➕ 新增子项', value: 'add' });
+            out.push({ name: '✏️ 编辑值', value: 'edit' });
+            if (!vtParentIsArray(row.path)) out.push({ name: '🔤 重命名', value: 'rename' });
+            out.push({ name: '📋 复制路径', value: 'copy' });
+            out.push({ name: '🗑️ 删除此变量', value: 'delete', color: '#ee0a24' });
+            return out;
+        });
+
+        function vtOpenOps(row) { vtOpsRow.value = row; showVtOps.value = true; }
+        function vtOpenValue(row) { vtOpsRow.value = row; vtStartEdit(row, 'value'); }
+
+        function vtRawOf(v, t) {
+            if (t === 'object' || t === 'array') return JSON.stringify(v, null, 2);
+            if (t === 'null') return 'null';
+            return String(v);
+        }
+        function vtTypeToEditType(t) {
+            if (t === 'number') return 'number';
+            if (t === 'boolean') return 'boolean';
+            if (t === 'object' || t === 'array') return 'json';
+            return t === 'null' ? 'auto' : 'string';
+        }
+        /** 文本 + 类型 → 目标值（auto 按内容猜测，与 MVU 简写语法一致） */
+        function vtParseValue(type, raw) {
+            const s = String(raw == null ? '' : raw);
+            if (type === 'string') return s;
+            if (type === 'number') {
+                const n = Number(s.trim());
+                if (!Number.isFinite(n)) throw new Error('不是合法数字');
+                return n;
+            }
+            if (type === 'boolean') return s.trim() === 'true';
+            if (type === 'json') return JSON.parse(s);
+            const t = s.trim();
+            if (t === '') return '';
+            if (t === 'null') return null;
+            if (t === 'true') return true;
+            if (t === 'false') return false;
+            if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+            if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+                try { return JSON.parse(t); } catch (e) { return s; }
+            }
+            return s;
+        }
+
+        function vtStartEdit(row, mode) {
+            vtEditMode.value = mode;
+            vtEditPath.value = row.path;
+            if (mode === 'add') {
+                vtEditKey.value = '';
+                vtEditRaw.value = '';
+                vtEditType.value = 'auto';
+                vtEditTitle.value = '新增子项 · ' + row.path;
+            } else if (mode === 'rename') {
+                vtEditKey.value = row.key;
+                vtEditRaw.value = '';
+                vtEditType.value = 'auto';
+                vtEditTitle.value = '重命名 · ' + row.path;
+            } else {
+                vtEditKey.value = row.key;
+                vtEditRaw.value = vtRawOf(row.value, row.type);
+                vtEditType.value = vtTypeToEditType(row.type);
+                vtEditTitle.value = '编辑值 · ' + row.path;
+            }
+            showVtEdit.value = true;
+        }
+
+        function vtOnOpSelect(action) {
+            showVtOps.value = false;
+            const row = vtOpsRow.value;
+            if (!row || !action) return;
+            const kind = action.value;
+            if (kind === 'copy') { vtCopyPath(row.path); return; }
+            if (kind === 'delete') { vtConfirmDelete(row); return; }
+            vtStartEdit(row, kind);
+        }
+
+        async function vtConfirmDelete(row) {
+            try {
+                await showConfirmDialog({
+                    title: '删除变量',
+                    message: `确定删除「${row.path}」${row.hasChildren ? '（含其全部子项）' : ''}？`,
+                    confirmButtonText: '删除', confirmButtonColor: '#ee0a24',
+                });
+            } catch (e) { return; }
+            emit('apply-vars-ops', [{ type: 'delete', path: row.path }]);
+            showSuccessToast('已删除变量');
+        }
+
+        /** 校验键名：空 / 含点（与路径分隔符冲突）直接拦下 */
+        function vtCheckKey(key) {
+            const k = String(key || '').trim();
+            if (!k) { showToast('请填写键名'); return ''; }
+            if (k.includes('.')) { showToast('键名不能包含 "."（与路径分隔符冲突）'); return ''; }
+            return k;
+        }
+
+        function vtApplyEdit() {
+            const mode = vtEditMode.value;
+            const base = vtEditPath.value;
+            const row = vtOpsRow.value;
+            if (!row) return;
+            if (mode === 'rename') {
+                const key = vtCheckKey(vtEditKey.value);
+                if (!key) return;
+                if (key === row.key) { showVtEdit.value = false; return; }
+                const parent = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : '';
+                const parentVal = parent ? vtGetByPath(parent) : undefined;
+                // 🚀 保序重命名：父级是对象时整对象重建后一次性 set。
+                //    引擎只有 set/delete（RFC6902 的 move 未实现），若用「set 新键 + delete 旧键」
+                //    会把键挪到对象末尾，用户会觉得“重命名后变量跑了”。
+                if (parentVal && typeof parentVal === 'object' && !Array.isArray(parentVal)) {
+                    const rebuilt = {};
+                    for (const k of Object.keys(parentVal)) {
+                        rebuilt[k === row.key ? key : k] = parentVal[k];
+                    }
+                    emit('apply-vars-ops', [{ type: 'set', path: parent, value: rebuilt }]);
+                } else {
+                    // 顶层键 / 数组元素：退回 set+delete（功能正确，仅键序变化）
+                    emit('apply-vars-ops', [
+                        { type: 'set', path: vtJoin(parent, key), value: row.value },
+                        { type: 'delete', path: base },
+                    ]);
+                }
+                showVtEdit.value = false;
+                showSuccessToast('已重命名为 ' + key);
+                return;
+            }
+            let value;
+            try { value = vtParseValue(vtEditType.value, vtEditRaw.value); }
+            catch (e) { showToast('值解析失败: ' + e.message); return; }
+            if (mode === 'add') {
+                const key = vtCheckKey(vtEditKey.value);
+                if (!key) return;
+                emit('apply-vars-ops', [{ type: 'set', path: vtJoin(base, key), value }]);
+                vtExpanded[base] = true;
+                showVtEdit.value = false;
+                showSuccessToast('已新增子项');
+                return;
+            }
+            emit('apply-vars-ops', [{ type: 'set', path: base, value }]);
+            showVtEdit.value = false;
+            showSuccessToast('已更新变量');
+        }
+
+        /** 复制路径（WebView 无 clipboard 权限时回退 execCommand） */
+        async function vtCopyPath(path) {
+            try {
+                await navigator.clipboard.writeText(path);
+                showSuccessToast('已复制路径');
+            } catch (e) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = path;
+                    ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    showSuccessToast('已复制路径');
+                } catch (e2) { showToast('复制失败，路径已显示在面板顶部'); }
+            }
+        }
+
+        // 变量树首次到达时自动展开根层，避免「有数据但一片空白」
+        watch(() => props.varsTreeJson, () => {
+            if (Object.keys(vtExpanded).length) return;
+            for (const [k, v] of vtEntries(vtParsed.value)) {
+                if (vtEntries(v).length) vtExpanded[k] = true;
+            }
+        }, { immediate: true });
         async function confirmResetVars() {
             try {
                 await showConfirmDialog({
@@ -676,8 +1101,13 @@ export default {
             memFilters, memFilter, setMemFilter, editMemoryRow, typeLabel,
             emitParams, resetParams, applyPastedPreset, importPastedRegex, importPastedPlugin,
             importPresetFromFile, importRegexFromFile, importPluginFromFile,
+            ppExpanded, ppKey, ppEnabled, ppRole, togglePpExpand, setPpEnabled,
+            removePresetPrompt, addPresetPrompt, clonePresetPrompt, emitPresetChanged,
             emitApiConfig, toggleWbExpand, promptRename, confirmDelete,
             varsJsonDraft, varsEditing, applyVarsJsonEdit, confirmResetVars, formatOps,
+            showVarsJson, vtQuery, vtAllExpanded, vtRows, toggleVtAll, toggleVtNode,
+            showVtOps, vtOpsRow, vtOpsActions, vtOpenOps, vtOpenValue, vtOnOpSelect,
+            showVtEdit, vtEditMode, vtEditTitle, vtEditKey, vtEditRaw, vtEditType, vtApplyEdit,
             formatPlacement, regexSourceLabel, formatTime,
         };
     }
@@ -698,37 +1128,53 @@ export default {
 /* 侧边栏面板：从右侧滑出 */
 .ts-panel-wrap {
     position: relative; z-index: 2;
-    width: 300px; max-width: 82vw; height: 100%;
+    width: 312px; max-width: 84vw; height: 100%;
     padding-top: env(safe-area-inset-top, 0px);
     box-sizing: border-box;
     background: var(--van-background, #fff);
-    box-shadow: -2px 0 12px rgba(0,0,0,0.12);
+    border-radius: 14px 0 0 14px;
+    box-shadow: -6px 0 24px rgba(0,0,0,0.18);
     display: flex; flex-direction: column; overflow: hidden;
 }
 .ts-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 14px; border-bottom: 1px solid var(--van-gray-2, #ebedf0); flex-shrink: 0;
+    padding: 11px 14px; flex-shrink: 0;
+    background: linear-gradient(135deg, #ecfbfe 0%, #f4f8fb 60%, #f7f8fa 100%);
+    border-bottom: 1px solid var(--van-gray-2, #ebedf0);
 }
-.ts-title { font-size: 14px; font-weight: 600; }
+.ts-title { font-size: 14px; font-weight: 700; color: #0e7490; letter-spacing: .3px; }
 .ts-close { cursor: pointer; color: var(--van-gray-5, #969799); }
 .ts-tabs { flex: 0 0 auto; display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch; border-bottom: 1px solid var(--van-gray-2, #ebedf0); background: var(--van-background-2, #fff); }
 /* 双保险:禁止外部深选择器(如详情页 .detail-page :deep(.van-tabs))把本组件二级标签栏拉伸成 flex:1,
    避免标签栏下方出现大面积空白塌陷 */
 .ts-tabs :deep(.van-tabs) { flex: none; }
 .ts-tabs::-webkit-scrollbar { display: none; }
-.ts-tab-item { flex-shrink: 0; padding: 0 12px; height: 40px; line-height: 40px; font-size: 13px; color: var(--van-gray-7, #646566); cursor: pointer; white-space: nowrap; position: relative; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
-.ts-tab-item.active { color: var(--van-primary-color, #1989fa); font-weight: 600; }
-.ts-tab-item.active::after { content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: 20px; height: 3px; background: var(--van-primary-color, #1989fa); border-radius: 3px; }
+.ts-tab-item { flex-shrink: 0; padding: 0 10px; height: 40px; line-height: 40px; font-size: 12.5px; color: var(--van-gray-7, #646566); cursor: pointer; white-space: nowrap; position: relative; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+.ts-tab-item.active { color: #06b6d4; font-weight: 600; }
+.ts-tab-item.active::after { content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 18px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, #06b6d4, #3b82f6); }
 .ts-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 16px; -webkit-overflow-scrolling: touch; }
 .ts-panel { padding-top: 8px; }
-.ts-sec-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 0 6px; font-size: 13px; font-weight: 600; }
+.ts-sec-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 12px 0 6px; font-size: 13px; font-weight: 600; }
 .ts-sec-title .van-button { margin-left: auto; }
+/* 区块标题左侧彩色渐变竖条，弱化“一坡树”感 */
+.ts-sec-title > span:first-child { position: relative; padding-left: 10px; }
+.ts-sec-title > span:first-child::before {
+    content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 13px; border-radius: 2px;
+    background: linear-gradient(180deg, #06b6d4, #3b82f6);
+}
 
 .ts-preset-active { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; margin-bottom: 6px; border-bottom: 1px solid var(--van-gray-2, #ebedf0); }
 .ts-preset-name { font-size: 13px; font-weight: 600; color: #06b6d4; }
 .ts-preset-list { margin-bottom: 8px; }
-.ts-preset-item { padding: 10px 12px; border-radius: 8px; background: var(--van-background-2, #f7f8fa); margin-bottom: 6px; cursor: pointer; }
-.ts-preset-item:active { background: var(--van-active-color, #f2f3f5); }
+.ts-preset-item {
+    padding: 10px 12px; border-radius: 10px; margin-bottom: 7px; cursor: pointer;
+    background: var(--van-background-2, #fff);
+    border: 1px solid var(--van-gray-2, #ebedf0);
+    border-left: 3px solid #06b6d4;
+    transition: box-shadow .16s ease, transform .16s ease;
+}
+.ts-preset-item:active { background: #f2fbfd; transform: scale(.985); }
 .ts-preset-item-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
 .ts-preset-item-meta { font-size: 11px; color: var(--van-gray-5, #969799); }
 
@@ -780,6 +1226,63 @@ export default {
 .ts-oplog-item { display: flex; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--van-gray-1, #f7f8fa); font-size: 11px; }
 .ts-oplog-ai { flex-shrink: 0; color: #06b6d4; font-weight: 600; }
 .ts-oplog-ops { color: var(--van-gray-7, #646566); word-break: break-all; }
+
+/* 🌳 变量树（渲染式） */
+.ts-vt-bar { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; }
+.ts-vt-bar .ts-vt-search { flex: 1; min-width: 0; padding: 0; }
+.ts-vt-bar .ts-vt-search :deep(.van-field__control) { font-size: 12px; height: 24px; }
+.ts-vt-tree {
+    border: 1px solid var(--van-gray-2, #ebedf0); border-radius: 10px;
+    background: linear-gradient(180deg, #fbfdfe 0%, #fff 40%);
+    max-height: 46vh; overflow-y: auto; padding: 3px 0;
+    box-shadow: inset 0 1px 3px rgba(6,182,212,.05);
+}
+.ts-vt-row { display: flex; align-items: center; gap: 4px; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--van-gray-1, #f4f6f8); }
+.ts-vt-row:last-child { border-bottom: none; }
+.ts-vt-row:active { background: #f2fbfd; }
+.ts-vt-caret { width: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--van-gray-5, #969799); }
+.ts-vt-dot { font-size: 10px; color: var(--van-gray-4, #c8c9cc); }
+.ts-vt-key { font-size: 12px; font-weight: 600; color: var(--van-text-color, #323233); flex-shrink: 0; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-vt-path { font-size: 11px; color: #b8860b; flex-shrink: 0; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-vt-val { font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--van-gray-7, #646566); border-radius: 4px; padding: 1px 4px; background: #fafbfc; }
+.ts-vt-val.v-string { color: #389e0d; background: #f2fbf5; }
+.ts-vt-val.v-number { color: #d48806; background: #fffaf0; }
+.ts-vt-val.v-boolean { color: #06b6d4; background: #f0fbfd; }
+.ts-vt-val.v-null { color: var(--van-gray-5, #969799); font-style: italic; background: #f7f8fa; }
+.ts-vt-val.v-object, .ts-vt-val.v-array { color: #722ed1; background: #f8f5ff; font-weight: 500; }
+.ts-vt-type { font-size: 9px; color: var(--van-gray-6, #646566); flex-shrink: 0; background: var(--van-gray-1, #f2f3f5); padding: 2px 5px; border-radius: 4px; }
+.ts-vt-more { color: var(--van-gray-5, #969799); flex-shrink: 0; padding: 3px; border-radius: 50%; background: #f7f8fa; }
+.ts-vt-json-tip { font-size: 11px; color: var(--van-gray-6, #969799); padding: 8px 0 2px; }
+.ts-vt-edit-body { padding: 0 0 8px; }
+.ts-vt-type-row { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+.ts-vt-type-label { font-size: 12px; color: var(--van-gray-6, #646566); flex-shrink: 0; }
+.ts-vt-edit-ops { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px 0; }
+
+/* 🚀 预设条目（测卡侧边栏） */
+.ts-pp-tip { font-size: 11px; color: var(--van-gray-6, #969799); padding: 2px 0 6px; line-height: 1.5; }
+.ts-pp-list { margin-bottom: 4px; }
+.ts-pp-item {
+    border: 1px solid var(--van-gray-2, #ebedf0);
+    border-left: 3px solid #06b6d4;
+    border-radius: 9px;
+    background: var(--van-background-2, #fff);
+    margin-bottom: 6px; padding: 2px 9px;
+    transition: background .15s ease, border-color .15s ease;
+}
+.ts-pp-item.off { border-left-color: var(--van-gray-4, #c8c9cc); background: var(--van-gray-1, #fafafa); }
+.ts-pp-head { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
+.ts-pp-name { font-size: 12.5px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-pp-name.disabled { color: var(--van-gray-5, #c8c9cc); }
+.ts-pp-role { font-size: 9px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; background: #f2f3f5; color: var(--van-gray-6, #646566); font-weight: 600; }
+.ts-pp-role.r-system { background: #fff7e6; color: #d48806; }
+.ts-pp-role.r-user { background: #e8f5e9; color: #389e0d; }
+.ts-pp-role.r-assistant { background: #eef7fb; color: #06b6d4; }
+.ts-pp-arrow { color: var(--van-gray-5, #969799); flex-shrink: 0; }
+.ts-pp-body { padding: 2px 0 8px; border-top: 1px dashed var(--van-gray-2, #ebedf0); margin-top: 2px; }
+.ts-pp-role-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.ts-pp-role-label { font-size: 12px; color: var(--van-gray-6, #646566); flex-shrink: 0; }
+.ts-pp-id { font-size: 10px; color: var(--van-gray-5, #969799); padding: 2px 0 6px; word-break: break-all; }
+.ts-pp-ops { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
 
 .ts-slide-enter-active, .ts-slide-leave-active { transition: transform 0.3s ease; }
 .ts-slide-enter-from, .ts-slide-leave-to { transform: translateX(100%); }

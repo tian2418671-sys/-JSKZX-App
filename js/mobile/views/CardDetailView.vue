@@ -343,6 +343,7 @@
                         <TestSidebar
                             v-model:visible="sidebarOpen"
                             :active-preset-name="activePresetName"
+                            :active-preset-prompts="activePresetPrompts"
                             :plugins="plugins"
                             :all-regex-scripts="allRegexScripts"
                             :external-presets="externalPresets"
@@ -370,6 +371,11 @@
                             @scan-presets="scanExternalPresetDir"
                             @apply-preset="applyPreset"
                             @clear-preset="clearPreset"
+                            @toggle-preset-prompt="handleTogglePresetPrompt"
+                            @remove-preset-prompt="handleRemovePresetPrompt"
+                            @add-preset-prompt="handleAddPresetPrompt"
+                            @clone-preset-prompt="handleClonePresetPrompt"
+                            @preset-changed="persistActivePreset"
                             @import-regex="handleImportRegex"
                             @import-plugin="handleImportPlugin"
                             @remove-plugin="removePluginByName"
@@ -393,6 +399,7 @@
                             @update-ejs-enabled="handleUpdateEjs"
                             @update-seg-render="handleUpdateSegRender"
                             @apply-vars-json="applyVarsJson"
+                            @apply-vars-ops="applyVarsOps"
                             @undo-vars="undoVars"
                             @reset-vars="resetVars"
                         />
@@ -573,7 +580,7 @@ import { applyRegexScripts, extractRegexFromCard, coercePlacement } from '../use
 import { createVariableEngine, countVars, extractMvu } from '../useChatVariables';
 import { renderEjs, looksLikeEjs, buildTemplateContext } from '../useChatEjs';
 import { segmentMessage, promoteHtmlSegments } from '../useChatRender';
-import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset } from '../useChatPresets';
+import { getOrderedPrompts, getPresetParams, buildPresetMessages, loadActivePreset, saveActivePreset, clearActivePreset, isValidPresetStructure, extractRegexFromPreset, extractPluginsFromPreset, setPromptEnabled } from '../useChatPresets';
 import { loadSessions, createSession, upsertSession, persistMessages, deleteSession as deleteSessionById, renameSession as renameSessionById, getLastSessionId, setLastSessionId } from '../useChatSessions';
 import { loadPlugins, savePlugins, addPlugin, removePlugin, togglePlugin, mergePluginMacros, collectPluginSystemPrompts, collectPluginRegex, parsePlugin } from '../useChatPlugins';
 
@@ -1653,6 +1660,17 @@ export default {
                 return false;
             }
         }
+
+        /**
+         * 变量树操作面板下发的指令（set / delete / insert）。
+         * 走 varEngine.applyOps：进 OpLog、持久化、可被「撤销」回退（优于整树覆盖）。
+         */
+        function applyVarsOps(ops) {
+            if (!Array.isArray(ops) || !ops.length) return;
+            if (!varEngine) ensureVarEngine(activeSessionId.value);
+            const n = varEngine.applyOps(ops);
+            if (!n) showToast('变量操作未生效');
+        }
         // ---------- 分段渲染（对齐「渲染方案.MD」：文本段 + HTML 面板段） ----------
         // 🚀 结果缓存:v-for 每次重渲染(切 Tab/滚动/输入)都会重算分段+宏替换+srcdoc,
         //    大段消息(142KB 面板模板)重算秒级 → 切 Tab 卡顿根因。按消息文本缓存,消息变才重算。
@@ -1707,6 +1725,88 @@ export default {
             if (!activePreset.value || !activePreset.value.data) return {};
             return getPresetParams(activePreset.value.data);
         });
+
+        // 🚀 当前预设的提示词条目（测卡侧边栏可直接查看/编辑/删除/开关）
+        const activePresetPrompts = computed(() => {
+            const d = activePreset.value && activePreset.value.data;
+            return (d && Array.isArray(d.prompts)) ? d.prompts : [];
+        });
+
+        /** 预设条目改动后写回 localStorage（下次打开测卡仍生效） */
+        function persistActivePreset() {
+            if (activePreset.value && activePreset.value.data) saveActivePreset(activePreset.value.data);
+        }
+
+        /** 开关某条：同步 prompt 自身 + prompt_order，保证真的影响生成 */
+        function handleTogglePresetPrompt(prompt, enabled) {
+            const d = activePreset.value && activePreset.value.data;
+            if (!d) return;
+            setPromptEnabled(d, prompt, enabled);
+            persistActivePreset();
+        }
+
+        /** 删除某条（二次确认已在侧边栏弹过） */
+        function handleRemovePresetPrompt(index) {
+            const d = activePreset.value && activePreset.value.data;
+            if (!d || !Array.isArray(d.prompts)) return;
+            if (index < 0 || index >= d.prompts.length) return;
+            d.prompts.splice(index, 1);
+            persistActivePreset();
+            showSuccessToast('已删除条目');
+        }
+
+        /** 新增条目（同步写入 prompt_order，避免加了却不生效） */
+        function handleAddPresetPrompt() {
+            const d = activePreset.value && activePreset.value.data;
+            if (!d) return;
+            if (!Array.isArray(d.prompts)) d.prompts = [];
+            const identifier = 'p_' + Date.now().toString(36);
+            d.prompts.push({ identifier, name: '新条目', role: 'system', content: '', enabled: true });
+            const order = d.prompt_order;
+            if (Array.isArray(order) && order.length) {
+                if (order.some((it) => it && Array.isArray(it.order))) {
+                    for (const grp of order) {
+                        if (grp && Array.isArray(grp.order)) grp.order.push({ identifier, enabled: true });
+                    }
+                } else {
+                    order.push({ identifier, enabled: true });
+                }
+            }
+            persistActivePreset();
+            showSuccessToast('已新增条目');
+        }
+
+        /** 克隆条目：深拷源条目插到其后，identifier 换新并同步 prompt_order（避免同名冲突） */
+        function handleClonePresetPrompt(index) {
+            const d = activePreset.value && activePreset.value.data;
+            if (!d || !Array.isArray(d.prompts)) return;
+            const src = d.prompts[index];
+            if (!src) return;
+            const identifier = 'p_' + Date.now().toString(36);
+            const copy = JSON.parse(JSON.stringify(src));
+            copy.identifier = identifier;
+            copy.name = (src.name || '条目') + ' 副本';
+            d.prompts.splice(index + 1, 0, copy);
+            // prompt_order 同步：紧跟原条目之后插入，顺序与列表一致
+            const order = d.prompt_order;
+            if (Array.isArray(order) && order.length) {
+                const enabled = copy.enabled !== false;
+                if (order.some((it) => it && Array.isArray(it.order))) {
+                    for (const grp of order) {
+                        if (!grp || !Array.isArray(grp.order)) continue;
+                        const at = grp.order.findIndex((it) => it && it.identifier === src.identifier);
+                        if (at >= 0) grp.order.splice(at + 1, 0, { identifier, enabled });
+                        else grp.order.push({ identifier, enabled });
+                    }
+                } else {
+                    const at = order.findIndex((it) => it && it.identifier === src.identifier);
+                    if (at >= 0) order.splice(at + 1, 0, { identifier, enabled });
+                    else order.push({ identifier, enabled });
+                }
+            }
+            persistActivePreset();
+            showSuccessToast('已克隆条目');
+        }
 
         // 应用预设到测卡
         function applyPreset(presetData) {
@@ -2661,14 +2761,16 @@ export default {
             chatMessages, chatDraft, chatSending, chatListEl, chatRenderMode, toggleChatRender, renderChatHtml,
             // MVU 变量 + EJS + 分段渲染（第三波方案落地）
             mvuEnabled, ejsEnabled, segRenderEnabled, varsStats, varsTreeJson, varsOpLog,
-            resetVars, undoVars, applyVarsJson, messageSegments,
+            resetVars, undoVars, applyVarsJson, applyVarsOps, messageSegments,
             handleUpdateMvu, handleUpdateEjs, handleUpdateSegRender,
             chatApiEndpoint, chatApiKey, chatApiModel, chatApiType,
             replyCount, userName, userPersona, bubbleName, messageText, goApiSettings, showUserRole, openUserRole, saveInlineUser,
             sendChat, clearChat,
             nextSwipe, prevSwipe, onSwipeStart, onSwipeEnd, moreSwipe, continueSwipe, regenerateSwipe,
             // 测卡增强：预设 / 正则 / 插件 / 宏
-            activePreset, activePresetName, currentPresetParams, applyPreset, clearPreset,
+            activePreset, activePresetName, currentPresetParams, activePresetPrompts,
+            applyPreset, clearPreset, persistActivePreset,
+            handleTogglePresetPrompt, handleRemovePresetPrompt, handleAddPresetPrompt, handleClonePresetPrompt,
             showPresetPicker, externalPresets, presetScanning, scanExternalPresetDir,
             showRegexImport, regexImportText, importRegexFromText,
             plugins, showPluginPanel, showPluginImport, pluginImportText, importPluginFromText,
