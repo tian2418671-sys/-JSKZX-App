@@ -705,6 +705,13 @@ public class LibraryFsPlugin extends Plugin {
             return;
         }
         boolean ok = src.renameTo(newName);
+        // F1 一致性:重命名成功后索引同步(旧路径移除,新路径写入)
+        if (ok) {
+            String oldRel = path.replace('\\', '/').replaceAll("^/+", "");
+            String newRel = newPath.replace('\\', '/').replaceAll("^/+", "");
+            if (!oldRel.isEmpty()) relIndex.remove(oldRel);
+            if (!newRel.isEmpty()) relIndex.put(newRel, src);
+        }
         JSObject ret = new JSObject();
         ret.put("success", ok);
         ret.put("error", ok ? JSObject.NULL : "重命名失败");
@@ -814,6 +821,16 @@ public class LibraryFsPlugin extends Plugin {
             }
         }
         boolean ok = f.delete();
+        // F1 一致性:删除成功后清除索引中该路径的旧引用(旧 DocumentFile URI 已失效,
+        // 残留会导致后续 writeBuffer/readThumb 用失效引用操作失败 → 保存链路文件丢失)
+        if (ok) {
+            String r = path.replace('\\', '/').replaceAll("^/+", "");
+            relIndex.remove(r);
+            // 清理该目录下所有子路径(目录递归删除场景)
+            for (java.util.Iterator<String> it = relIndex.keySet().iterator(); it.hasNext(); ) {
+                if (it.next().startsWith(r + "/")) it.remove();
+            }
+        }
         JSObject ret = new JSObject();
         ret.put("success", ok);
         call.resolve(ret);
@@ -2316,9 +2333,26 @@ public class LibraryFsPlugin extends Plugin {
         }
         try {
             byte[] bytes = Base64.decode(value, Base64.NO_WRAP);
-            OutputStream out = getContext().getContentResolver().openOutputStream(f.getUri(), "wt");
+            // F1 一致性:先尝试当前引用;若 relIndex 缓存的是失效旧引用(delete+rename 后),
+            // openOutputStream 会失败 → 慢路径重新解析路径(绕过索引)重试一次,防保存链路丢文件
+            OutputStream out = null;
+            try {
+                out = getContext().getContentResolver().openOutputStream(f.getUri(), "wt");
+            } catch (Exception openErr) { /* 引用失效,落慢路径重试 */ }
+            if (out == null) {
+                DocumentFile fresh = fileByRelPathSlow(path.replace('\\', '/').replaceAll("^/+", ""));
+                if (fresh != null) {
+                    f = fresh;
+                    try {
+                        out = getContext().getContentResolver().openOutputStream(fresh.getUri(), "wt");
+                    } catch (Exception openErr2) { out = null; }
+                }
+            }
             if (out == null) { call.reject("打开文件失败"); return; }
             try { out.write(bytes); } finally { out.close(); }
+            // 成功后回填索引(fresh 引用)
+            String r = path.replace('\\', '/').replaceAll("^/+", "");
+            if (!r.isEmpty()) relIndex.put(r, f);
             JSObject ret = new JSObject();
             ret.put("success", true);
             call.resolve(ret);
