@@ -175,7 +175,7 @@ export default {
         }
 
         async function scan() {
-            if (!treeUri.value) return;
+            if (!treeUri.value || loading.value) return; // 扫描进行中(图标无 loading,防连点叠加重扫)
             loading.value = true;
             try {
                 const res = await api.scanExternalPresets(treeUri.value);
@@ -206,6 +206,7 @@ export default {
         }
 
         async function saveEditor() {
+            if (saving.value) return; // 保存进行中,忽略连点
             let data;
             try {
                 data = JSON.parse(edJson.value);

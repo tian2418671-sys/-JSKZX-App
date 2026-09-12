@@ -57,12 +57,20 @@ export function buildLightItem(file, fields) {
  */
 export function restoreItemsFromCacheText(text) {
     if (typeof text !== 'string' || !text) return null;
-    const parsed = JSON.parse(text);
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    } catch (e) {
+        return null; // 🐛 损坏缓存(写盘中断/升级残留):容错返回 null,走全量 scan 重建,不中断库加载
+    }
     if (!parsed || parsed.version !== CACHE_VERSION || !parsed.items) return null;
     const keys = Object.keys(parsed.items);
     if (!keys.length) return null;
     const items = [];
     const categories = new Set();
+    // 🐛 防增值:同一路径可能残留多条缓存指纹(每次保存 mtime/size 变化换键,旧键未清理),
+    // 若全部还原会造成「一张卡出现多张」;按 path 去重,保留 mtime 最新的一条。
+    const byPath = new Map(); // path → { idx, mtime }
     for (const key of keys) {
         const val = parsed.items[key];
         if (!val || val.nc) continue; // F6 负缓存条目:直接跳过
@@ -71,6 +79,8 @@ export function restoreItemsFromCacheText(text) {
         const path = parts.slice(0, -2).join('|');
         const mtime = Number(parts[parts.length - 2]) || 0;
         const size = Number(parts[parts.length - 1]) || 0;
+        const prev = byPath.get(path);
+        if (prev && prev.mtime >= mtime) continue; // 已有更新的条目,跳过旧指纹
         const rel = path.replace(/^\/library\//, '');
         const segs = rel.split('/');
         const fileName = segs.pop() || '';
@@ -80,7 +90,15 @@ export function restoreItemsFromCacheText(text) {
         if (!fields || fields === 'SKIP') continue;
         // mtime/size 必须带上:轻量条目的 _mtime/_size 是 readThumb 缩略图指纹来源
         const file = { name: fileName, path, subFolder, category, mtime, size };
-        items.push(buildLightItem(file, fields));
+        if (prev !== undefined) {
+            // 同路径更旧条目被新条目替换
+            items[prev.idx] = buildLightItem(file, fields);
+            byPath.set(path, { idx: prev.idx, mtime });
+        } else {
+            const idx = items.length;
+            items.push(buildLightItem(file, fields));
+            byPath.set(path, { idx, mtime });
+        }
         if (category !== '未分类') categories.add(category);
     }
     return items.length ? { items, categories: [...categories] } : null;

@@ -611,6 +611,7 @@ async function parseLightCard(file, prefetchedText, cache) {
                     console.warn(`[库] 跳过非角色卡 JSON [${getCardRejectReason(parsed)}]: ${file.name}`);
                     // F6: 混入库的普通 json(非角色卡非世界书)写负缓存,只探测一次
                     if (cache && fp) {
+                        evictSamePathCache(cache, fp);
                         cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
                         cacheDirty = true;
                         scheduleCacheFlush();
@@ -651,6 +652,7 @@ async function parseLightCard(file, prefetchedText, cache) {
             }
             // F6: 不可解析文件写负缓存,后续 scan/reconcile 零成本跳过
             if (cache && fp) {
+                evictSamePathCache(cache, fp);
                 cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
                 cacheDirty = true;
                 scheduleCacheFlush();
@@ -666,6 +668,7 @@ async function parseLightCard(file, prefetchedText, cache) {
         });
         if (cache && fp) {
             try {
+                evictSamePathCache(cache, fp);
                 cache.items[fp] = lightFieldsToCache(fields);
                 cacheDirty = true;
                 scheduleCacheFlush();
@@ -791,7 +794,37 @@ export function findCard(path) {
  * @param {object} card 轻量条目(只需 path/fileName)
  * @returns {Promise<object|null>} normalized 完整卡片
  */
+/** 🐛 缓存条目覆写:同一路径的旧指纹条目一并清除(指纹=path|mtime|size,保存后换键;
+ *  不清旧键会导致缓存里同路径多条目 → 缓存先行还原时同一张卡出现多张)。 */
+function evictSamePathCache(cache, key) {
+    if (!cache || !cache.items || !key) return;
+    const path = key.split('|').slice(0, -2).join('|');
+    if (!path) return;
+    const prefix = path + '|';
+    for (const k of Object.keys(cache.items)) {
+        if (k !== key && k.startsWith(prefix)) delete cache.items[k];
+    }
+}
+
+// 全量数据读取短期去重缓存:同一路径的并发 loadCardFullData 共享同一次读取,
+// 完成后立即失效(避免陈旧数据);防详情页水合 + 兜底 watch 并发整卡读桥
+const fullDataInflight = new Map(); // path → Promise<data|null>
+
 export async function loadCardFullData(card) {
+    const key = card && card.path;
+    if (key) {
+        const inflight = fullDataInflight.get(key);
+        if (inflight) return inflight;
+    }
+    const promise = loadCardFullDataInner(card);
+    if (key) {
+        fullDataInflight.set(key, promise);
+        promise.finally(() => fullDataInflight.delete(key));
+    }
+    return promise;
+}
+
+async function loadCardFullDataInner(card) {
     if (!card || !card.path) return null;
     const name = (card.fileName || card.path || '').toLowerCase();
     try {
@@ -866,7 +899,13 @@ export function syncCardLightFields(cardLike) {
         mobileLibrary.revision++;
         if (embeddedCache) {
             try {
-                embeddedCache.items[cacheFingerprint(light)] = lightFieldsToCache(fields);
+                // 🐛 修复:原 cacheFingerprint(light) 读 light.mtime/light.size 但轻量条目只有
+                // _mtime/_size → 始终写入 path|0|0,与扫描键 path|mtime|size 不同 → 同路径两键
+                // → 缓存还原时一张卡出现两份(3×保存→3键→3份,用户报"一张卡变三张")。
+                // 改为用 _mtime/_size 组合指纹(与 parseLightCard 写入的键相同)。
+                const fp = `${light.path}|${light._mtime || 0}|${light._size || 0}`;
+                evictSamePathCache(embeddedCache, fp);
+                embeddedCache.items[fp] = lightFieldsToCache(fields);
                 cacheDirty = true;
                 scheduleCacheFlush();
             } catch (e) { /* 忽略 */ }

@@ -480,16 +480,23 @@ export default {
         }
 
         // ---------- 保存 ----------
+        const saving = ref(false); // 重操作防抖:保存写盘防连点
+
         async function save() {
-            if (!preset.value) return;
-            // 剥离临时 _uid(不写入文件)
-            const data = JSON.parse(JSON.stringify(preset.value.data, (k, v) => (k === '_uid' ? undefined : v)));
-            const res = await api.saveExternalPreset({ treeUri: preset.value.treeUri, rel: preset.value.rel, data });
-            if (res && res.success) {
-                dirty.value = false;
-                showSuccessToast('已保存');
-            } else {
-                showToast((res && res.error) || '保存失败');
+            if (!preset.value || saving.value) return; // 保存进行中,忽略连点
+            saving.value = true;
+            try {
+                // 剥离临时 _uid(不写入文件)
+                const data = JSON.parse(JSON.stringify(preset.value.data, (k, v) => (k === '_uid' ? undefined : v)));
+                const res = await api.saveExternalPreset({ treeUri: preset.value.treeUri, rel: preset.value.rel, data });
+                if (res && res.success) {
+                    dirty.value = false;
+                    showSuccessToast('已保存');
+                } else {
+                    showToast((res && res.error) || '保存失败');
+                }
+            } finally {
+                saving.value = false;
             }
         }
 

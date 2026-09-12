@@ -2235,10 +2235,13 @@ public class LibraryFsPlugin extends Plugin {
                                JSArray sizes, int maxDim, int n) {
         gcThumbsIfNeeded();
         final JSObject[] collected = new JSObject[n];
-        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(n);
+        // 🚀 性能修复:原实现 CountDownLatch 等整批完成(坏卡/超大图可能拖满 20s),
+        // 首屏封面被一批卡死全部延迟;改为每项 Future.get 独立超时(1.5s),单卡卡住
+        // 只丢这一张(标记失败),其余结果按时返回,不再整批等待。
+        final java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>(n);
         for (int t = 0; t < n; t++) {
             final int i = t;
-            THUMB_POOL.execute(() -> {
+            futures.add(THUMB_POOL.submit(() -> {
                 try {
                     JSObject item = new JSObject();
                     String p = null; long mtime = 0L, size = 0L;
@@ -2256,13 +2259,21 @@ public class LibraryFsPlugin extends Plugin {
                     if (b64 != null) item.put("value", b64);
                     else item.put("error", "生成失败");
                     collected[i] = item;
-                } finally {
-                    done.countDown();
+                } catch (Exception e) {
+                    JSObject item = new JSObject();
+                    item.put("success", false);
+                    item.put("error", "生成异常");
+                    collected[i] = item;
                 }
-            });
+            }));
         }
-        try { done.await(20, java.util.concurrent.TimeUnit.SECONDS); } // 上限保护,防坏卡卡死
-        catch (InterruptedException ignored) { /* 忽略 */ }
+        final long perItemTimeoutMs = 1500L; // 单卡缩略图生成上限:超时视为失败,不阻塞整批
+        final long deadline = System.currentTimeMillis() + 8000L; // 整批兜底上限(原 20s → 8s)
+        for (int i = 0; i < n && System.currentTimeMillis() < deadline; i++) {
+            try {
+                futures.get(i).get(perItemTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception ignore) { /* 超时/中断/执行异常:该项视为失败,继续下一项 */ }
+        }
         JSArray results = new JSArray();
         for (int i = 0; i < n; i++) { if (collected[i] != null) results.put(collected[i]); }
         JSObject ret = new JSObject();
@@ -2287,6 +2298,68 @@ public class LibraryFsPlugin extends Plugin {
             } catch (Exception e) { /* 删除失败不影响主流程 */ }
         }
         call.resolve(new JSObject());
+    }
+
+    /**
+     * 🚀 性能修复:库内 SAF 流式复制(快照创建/恢复专用,免 base64 过桥)。
+     * 原 JS 快照链路 readBuffer 整图 base64 + writeBuffer 回写,20MB PNG 一次快照
+     * 要过桥 54MB+ base64 载荷;原生流式复制只做字节流拷贝,载荷零过桥,快照/恢复秒级。
+     * 入参 { srcPath, destPath }(库内相对路径);dest 目标目录(如 .bak_history)不存在
+     * 时逐级创建,dest 已存在先删再建(SAF 无法原地覆写 document)。返回 { success }
+     */
+    @PluginMethod()
+    public void copyWithin(PluginCall call) {
+        String srcPath = call.getString("srcPath");
+        String destPath = call.getString("destPath");
+        if (srcPath == null || destPath == null) { call.reject("参数缺失"); return; }
+        try {
+            DocumentFile src = fileByRelPath(srcPath);
+            if (src == null || !src.canRead()) { call.reject("源文件不存在或不可读"); return; }
+            String drel = destPath.replace('\\', '/').replaceAll("^/+", "");
+            String dirRel = drel.contains("/") ? drel.substring(0, drel.lastIndexOf('/')) : "";
+            String name = drel.contains("/") ? drel.substring(drel.lastIndexOf('/') + 1) : drel;
+            DocumentFile parent;
+            if (!dirRel.isEmpty()) {
+                // 目标目录可能不存在(.bak_history/分组):逐级 find/create,不能依赖 relIndex
+                String acc = "";
+                boolean ok = true;
+                for (String seg : dirRel.split("/")) {
+                    acc = acc.isEmpty() ? seg : acc + "/" + seg;
+                    DocumentFile d = fileByRelPath(acc);
+                    if (d == null || !d.isDirectory()) {
+                        DocumentFile p = acc.contains("/")
+                                ? fileByRelPath(acc.substring(0, acc.lastIndexOf('/')))
+                                : rootFile();
+                        if (p == null || !p.canWrite()) { ok = false; break; }
+                        DocumentFile created = p.createDirectory(seg);
+                        if (created == null) { ok = false; break; }
+                    }
+                }
+                if (!ok) { call.reject("创建目标目录失败"); return; }
+                parent = fileByRelPath(dirRel);
+            } else {
+                parent = rootFile();
+            }
+            if (parent == null || !parent.canWrite()) { call.reject("目标目录不可写"); return; }
+            DocumentFile existing = parent.findFile(name);
+            if (existing != null) existing.delete();
+            DocumentFile nf = parent.createFile(mimeForName(name), name);
+            if (nf == null) { call.reject("创建目标文件失败"); return; }
+            InputStream in = getContext().getContentResolver().openInputStream(src.getUri());
+            if (in == null) { call.reject("读取源文件失败"); return; }
+            boolean ok;
+            try {
+                ok = writeUriFromStream(nf.getUri(), in);
+            } finally {
+                try { in.close(); } catch (IOException ignore) { /* 忽略 */ }
+            }
+            if (!ok) { call.reject("复制失败"); return; }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("复制失败: " + (e.getMessage() != null ? e.getMessage() : e.toString()));
+        }
     }
 
     private String inferMime(String name) {

@@ -94,9 +94,10 @@
                 <van-empty v-else-if="!filtered.length" description="没有卡片" />
                 <div v-else-if="viewMode !== 'page'" class="cards-wrap" :class="{ list: viewMode === 'list', poster: viewMode === 'poster' }">
                     <div
-                        v-for="card in visibleList"
+                        v-for="(card, i) in visibleList"
                         :key="card.path"
                         class="card-item"
+                        :style="{ '--card-idx': i % 12 }"
                         :class="{ 'is-list': viewMode === 'list', 'is-poster': viewMode === 'poster', 'batch-on': batchMode }"
                         @click="batchMode ? toggleBatch(card.path) : openCard(card)"
                         @longpress="batchMode ? toggleBatch(card.path) : showActions(card)"
@@ -362,6 +363,10 @@ export default {
         const refreshing = ref(false);
         const pullDisabled = ref(false);
         const loading = ref(false);
+        // 🚀 防抖守卫:刷新/导入是重操作(全量重扫/系统选择器),连点会叠加重入;
+        // 用时间戳节流:同一操作 1.2s 内的重复触发直接忽略(图标 + 下拉会双绑同一 onRefresh)
+        const importGuard = ref(false);   // 导入选择器进行中(系统文件选择器模态期间禁用重入)
+        let lastRefreshAt = 0;
         const libraryReady = ref(false);
         const needsAuth = ref(false);
         const authLost = ref(false);
@@ -612,23 +617,29 @@ export default {
 
         /** 导入卡片:系统文件选择器多选 → 复制入库(当前查看的分组内导入) */
         async function onImport() {
-            const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
-                ? LIBRARY_ROOT + '/' + selected.value
-                : LIBRARY_ROOT;
-            const res = await window.electronAPI.importExternalCards([], dest);
-            if (res && res.success) {
-                const m = [`导入 ${(res.copied || []).length} 张`];
-                if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
-                if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
-                showSuccessToast(m.join(' · '));
-                // 修复缺陷 #001:增量导入——只解析新增卡追加内存库,不再全库重扫。
-                // 4 张卡导入耗时从全库重扫(SAF 全树+全量解析)降到亚秒级;
-                // 搜索索引由 mobileLibrary.revision watch 自动重建,新卡立即可搜。
-                await appendImportedCards(res.copied || []);
-                // 第三波：导入自动打标（开关开启时后台低并发执行，定位内存新卡）
-                autoTagImportedCards(res.copied || []);
-            } else {
-                showToast((res && res.error) || '已取消导入');
+            if (importGuard.value) return;         // 文件选择器已弹出,忽略连点
+            importGuard.value = true;
+            try {
+                const dest = (selected.value && selected.value !== '全部' && selected.value !== '未分类')
+                    ? LIBRARY_ROOT + '/' + selected.value
+                    : LIBRARY_ROOT;
+                const res = await window.electronAPI.importExternalCards([], dest);
+                if (res && res.success) {
+                    const m = [`导入 ${(res.copied || []).length} 张`];
+                    if (res.skipped && res.skipped.length) m.push(`跳过同名 ${res.skipped.length} 张`);
+                    if (res.failed && res.failed.length) m.push(`失败 ${res.failed.length} 张`);
+                    showSuccessToast(m.join(' · '));
+                    // 修复缺陷 #001:增量导入——只解析新增卡追加内存库,不再全库重扫。
+                    // 4 张卡导入耗时从全库重扫(SAF 全树+全量解析)降到亚秒级;
+                    // 搜索索引由 mobileLibrary.revision watch 自动重建,新卡立即可搜。
+                    await appendImportedCards(res.copied || []);
+                    // 第三波：导入自动打标（开关开启时后台低并发执行，定位内存新卡）
+                    autoTagImportedCards(res.copied || []);
+                } else {
+                    showToast((res && res.error) || '已取消导入');
+                }
+            } finally {
+                importGuard.value = false;
             }
         }
 
@@ -652,9 +663,20 @@ export default {
         }
 
         async function onRefresh() {
+            // 重入守卫:全量重扫正在进行 / 正在加载,或 1.2s 内刚刷过(图标+下拉双绑)直接忽略;
+            // 注意下拉刷新走 v-model=refreshing,被守卫拦截时也必须复位,否则下拉圈卡死不收起
+            const now = Date.now();
+            if (loading.value || now - lastRefreshAt < 1200) {
+                refreshing.value = false;
+                return;
+            }
+            lastRefreshAt = now;
             refreshing.value = true;
-            await load(true);
-            refreshing.value = false;
+            try {
+                await load(true);
+            } finally {
+                refreshing.value = false;
+            }
         }
 
         async function grantLib() {
@@ -723,6 +745,7 @@ export default {
         const batchTagMode = ref('append');
         const batchTagInput = ref('');
         const showBatchGroup = ref(false);
+        const batchDeleting = ref(false); // 批量删除防连点(逐卡落盘是重操作)
         // 批量 AI 打标状态
         const showBatchAiTag = ref(false);
         const aiTagRunning = ref(false);
@@ -949,6 +972,7 @@ export default {
         }
 
         async function onBatchDelete() {
+            if (batchDeleting.value) return; // 批量删除进行中,忽略连点
             const cards = batchSelectedCards();
             if (!cards.length) return;
             try {
@@ -957,14 +981,19 @@ export default {
                     message: `确定将选中的 ${cards.length} 张卡片移入回收站吗？`
                 });
             } catch (e) { return; }
-            let okCount = 0;
-            for (const c of cards) {
-                const res = await removeCard(c);
-                if (res && res.success) { okCount++; batchSet.delete(c.path); }
+            batchDeleting.value = true;
+            try {
+                let okCount = 0;
+                for (const c of cards) {
+                    const res = await removeCard(c);
+                    if (res && res.success) { okCount++; batchSet.delete(c.path); }
+                }
+                showSuccessToast(`已移入回收站 ${okCount}/${cards.length} 张`);
+                if (!batchSet.size) exitBatch();
+                load();
+            } finally {
+                batchDeleting.value = false;
             }
-            showSuccessToast(`已移入回收站 ${okCount}/${cards.length} 张`);
-            if (!batchSet.size) exitBatch();
-            load();
         }
 
 
@@ -1247,10 +1276,13 @@ export default {
     font-size: 13px;
     background: var(--van-gray-2, #f2f3f5);
     color: var(--van-text-color, #323233);
+    transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .15s ease;
 }
+.cat-chip:active { transform: scale(.94); }
 .cat-chip.active {
-    background: #06b6d4;
+    background: linear-gradient(135deg, #06b6d4, #0ea5e9);
     color: #fff;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, .35);
 }
 .manage-chip {
     display: flex;
@@ -1298,8 +1330,14 @@ export default {
     font-size: 13px;
     background: var(--van-gray-2, #f2f3f5);
     color: var(--van-text-color, #323233);
+    transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .15s ease;
 }
-.vm-btn.active { background: #06b6d4; color: #fff; }
+.vm-btn:active { transform: scale(.94); }
+.vm-btn.active {
+    background: linear-gradient(135deg, #06b6d4, #0ea5e9);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, .35);
+}
 
 .cards-wrap {
     display: grid;
@@ -1315,7 +1353,15 @@ export default {
     overflow: hidden;
     background: var(--van-background-2, #fff);
     box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    transition: transform .18s ease, box-shadow .18s ease;
+    animation: card-pop-in .28s ease-out both;
+    animation-delay: calc(var(--card-idx, 0) * 18ms);
 }
+@keyframes card-pop-in {
+    from { opacity: 0; transform: translateY(10px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.card-item:active { transform: scale(.97); box-shadow: 0 2px 8px rgba(0,0,0,.1); }
 .card-item.batch-on { outline: 2px solid rgba(6,182,212,.35); }
 .batch-dot {
     position: absolute; top: 6px; right: 6px; z-index: 3;

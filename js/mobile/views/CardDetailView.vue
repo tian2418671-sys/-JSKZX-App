@@ -605,6 +605,30 @@ export default {
         const personalityOpen = ref([]); // 性格默认折叠
         const selectedTagIndex = ref(null);
         let saved = ref(true);
+        // 🚀 重操作防抖:保存/快照/恢复都是整文件读写,连点会叠加重入排队(每次都在做
+        // 全图 base64 过桥),用布尔锁拦截并发;保存前自动备份额外用时间戳节流:
+        // 同一卡片 5 分钟内只备份一次(首次保存备份「编辑前原版」,之后恢复点可回到该版)。
+        const saving = ref(false);
+        const snapshotting = ref(false);
+        const restoringSnapshot = ref(false);
+        const deletingSnapshot = ref(false);
+        const cleaningSnapshots = ref(false);
+        const lastAutoBackupAt = new Map(); // path → 上次自动备份时间戳
+        // 自动快照策略(短缓存):读一次 AppConfig 缓存 10s,保存不走 IPC 每回都查设置
+        let snapPolicyCache = null;
+        let snapPolicyAt = 0;
+        async function getSnapAutoPolicy() {
+            if (snapPolicyCache && Date.now() - snapPolicyAt < 10000) return snapPolicyCache;
+            let policy = { enabled: true, cooldownMs: 5 * 60 * 1000 };
+            try {
+                const cfg = await api.loadAppConfig();
+                const sc = (cfg && cfg.snapshotConfig) || {};
+                policy = { enabled: sc.enabled !== false, cooldownMs: Number(sc.cooldownMs) || 5 * 60 * 1000 };
+            } catch (e) { /* 读取失败用默认 */ }
+            snapPolicyCache = policy;
+            snapPolicyAt = Date.now();
+            return policy;
+        }
 
         // ---------- 推送酒馆 ----------
         const showPush = ref(false);
@@ -1263,6 +1287,17 @@ export default {
         });
 
         async function save() {
+            // 🐛 背景:与 createSnapshot 互斥(两者都整图写盘),之前只单向锁,save 会打断正在创建的快照
+            if (!card.value || saving.value || snapshotting.value) return;
+            saving.value = true;
+            try {
+                await doSave();
+            } finally {
+                saving.value = false;
+            }
+        }
+
+        async function doSave() {
             if (!card.value) return;
             // WebP 卡片不支持原地编辑(桥接层 _saveCardWebp 拒绝),提前拦截避免无意义的内存修改与误导
             if (/\.webp$/i.test(card.value.path || '')) {
@@ -1290,10 +1325,22 @@ export default {
             }
             // 内嵌世界书 entries 字典 → 数组(对齐桌面 character_book.entries 标准)
             serializeCardEmbeddedWb(card.value);
-            // 覆盖保存前自动备份旧版本到 .bak_history（对齐桌面行为；新建卡无旧版时静默跳过）
-            try {
-                await api.createManualSnapshot(card.value.path);
-            } catch (e) { /* 首次保存无旧文件，忽略 */ }
+            // 覆盖保存前自动备份旧版本到 .bak_history（对齐桌面行为；新建卡无旧版时静默跳过）。
+            // 🚀 性能修复:备份是整文件读+写,连点保存会每点一次全量拷贝;
+            // 同一卡片按冷却间隔只备份一次(进入编辑后的第一次保存即备份「编辑前原版」)。
+            // 尊重设置页「自动快照」开关:关闭时完全不生成备份快照(用户反馈:多余快照无需增值)。
+            const now = Date.now();
+            const snapPolicy = await getSnapAutoPolicy(); // 短缓存,避免每存必读 AppConfig
+            if (snapPolicy.enabled) {
+                const cooldownMs = snapPolicy.cooldownMs > 0 ? snapPolicy.cooldownMs : 5 * 60 * 1000;
+                const lastAt = lastAutoBackupAt.get(card.value.path) || 0;
+                if (now - lastAt > cooldownMs) {
+                    try {
+                        const bk = await api.createManualSnapshot(card.value.path);
+                        if (bk && bk.success) lastAutoBackupAt.set(card.value.path, now);
+                    } catch (e) { /* 首次保存无旧文件，忽略 */ }
+                }
+            }
             const res = await saveCardData(card.value);
             if (res.success) {
                 saved.value = true;
@@ -1340,9 +1387,21 @@ export default {
         async function previewCover() {
             if (!card.value) return;
             try {
-                const r = await window.electronAPI.readBuffer(card.value.path);
-                if (r && r.success && r.buffer) {
-                    const url = URL.createObjectURL(new Blob([r.buffer]));
+                // 🚀 性能修复:预览优先读取 12KB 缩略图(列表同款磁盘缓存,命中即秒开),
+                // 未命中再走整图兜底;之前直读整图 base64 过桥,大卡要等数秒才弹预览。
+                let buffer = null;
+                if (typeof window.electronAPI.readThumb === 'function') {
+                    try {
+                        const t = await window.electronAPI.readThumb(card.value.path, card.value._mtime || 0, card.value._size || 0);
+                        if (t && t.success && t.buffer && t.buffer.byteLength > 0) buffer = t.buffer;
+                    } catch (e) { /* 落整图兜底 */ }
+                }
+                if (!buffer) {
+                    const r = await window.electronAPI.readBuffer(card.value.path);
+                    if (r && r.success && r.buffer) buffer = r.buffer;
+                }
+                if (buffer) {
+                    const url = URL.createObjectURL(new Blob([buffer]));
                     showImagePreview([url]);
                     setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ } }, 60000);
                 } else {
@@ -1373,78 +1432,97 @@ export default {
         }
 
         async function createSnapshot() {
-            if (!card.value) return;
-            // 先保存当前编辑,确保快照反映最新内容
-            const saveRes = await saveCardData(card.value);
-            if (!saveRes.success) {
-                showToast(saveRes.error || '保存失败');
-                return;
-            }
-            saved.value = true;
-            const res = await api.createManualSnapshot(card.value.path);
-            if (res && res.success) {
-                showSuccessToast('已创建快照');
-                await loadSnapshots();
-            } else {
-                showToast((res && res.error) || '创建快照失败');
+            if (!card.value || snapshotting.value || saving.value) return; // 快照/保存进行中,忽略连点(两操作都整图写盘,互斥)
+            snapshotting.value = true;
+            try {
+                // 先保存当前编辑,确保快照反映最新内容
+                const saveRes = await saveCardData(card.value);
+                if (!saveRes.success) {
+                    showToast(saveRes.error || '保存失败');
+                    return;
+                }
+                saved.value = true;
+                const res = await api.createManualSnapshot(card.value.path);
+                if (res && res.success) {
+                    showSuccessToast('已创建快照');
+                    await loadSnapshots();
+                } else {
+                    showToast((res && res.error) || '创建快照失败');
+                }
+            } finally {
+                snapshotting.value = false;
             }
         }
 
         async function restoreSnapshot(snap) {
-            if (!card.value) return;
+            if (!card.value || restoringSnapshot.value) return;
+            restoringSnapshot.value = true;
             try {
-                await showConfirmDialog({
+                const ok = await showConfirmDialog({
                     title: '恢复快照',
                     message: `将当前卡片恢复为该快照内容（自动备份当前版本）。\n${snap.fileName || ''}`,
                     confirmButtonText: '恢复',
                     confirmButtonColor: '#ee0a24'
-                });
-            } catch (e) { return; } // 用户取消
-            const res = await api.restoreCardSnapshot({ filePath: card.value.path, snapshotPath: snap.path });
-            if (res && res.success) {
-                showSuccessToast('已恢复');
-                await loadLibrary(true); // 快照恢复会覆盖文件内容,强制重扫以重解析卡片数据
-                card.value = await hydrateCardForEdit(locateCard(id.value));
-                initChat();
-                showSnapshots.value = false;
-            } else {
-                showToast((res && res.error) || '恢复失败');
+                }).catch(() => false);
+                if (!ok) return; // 用户取消
+                const res = await api.restoreCardSnapshot({ filePath: card.value.path, snapshotPath: snap.path });
+                if (res && res.success) {
+                    showSuccessToast('已恢复');
+                    await loadLibrary(true); // 快照恢复会覆盖文件内容,强制重扫以重解析卡片数据
+                    card.value = await hydrateCardForEdit(locateCard(id.value));
+                    initChat();
+                    showSnapshots.value = false;
+                } else {
+                    showToast((res && res.error) || '恢复失败');
+                }
+            } finally {
+                restoringSnapshot.value = false;
             }
         }
 
         async function deleteSnapshot(snap) {
+            if (deletingSnapshot.value) return;
+            deletingSnapshot.value = true;
             try {
-                await showConfirmDialog({
+                const ok = await showConfirmDialog({
                     title: '删除快照',
                     message: `删除后不可恢复：\n${snap.fileName || ''}`,
                     confirmButtonText: '删除',
                     confirmButtonColor: '#ee0a24'
-                });
-            } catch (e) { return; }
-            const res = await api.deleteCardSnapshot(snap.path);
-            if (res && res.success) {
-                showSuccessToast('已删除');
-                await loadSnapshots();
-            } else {
-                showToast((res && res.error) || '删除失败');
+                }).catch(() => false);
+                if (!ok) return;
+                const res = await api.deleteCardSnapshot(snap.path);
+                if (res && res.success) {
+                    showSuccessToast('已删除');
+                    await loadSnapshots();
+                } else {
+                    showToast((res && res.error) || '删除失败');
+                }
+            } finally {
+                deletingSnapshot.value = false;
             }
         }
 
         async function cleanSnapshots() {
+            if (cleaningSnapshots.value) return;
+            cleaningSnapshots.value = true;
             try {
-                await showConfirmDialog({
+                const ok = await showConfirmDialog({
                     title: '清理全部快照',
                     message: '将删除库内所有 .bak_history 快照，不可恢复。',
                     confirmButtonText: '清理',
                     confirmButtonColor: '#ee0a24'
-                });
-            } catch (e) { return; }
-            const res = await api.cleanAllSnapshots();
-            if (res && res.success) {
-                showSuccessToast(`已清理 ${res.removedCount || 0} 处快照`);
-                snapshots.value = [];
-            } else {
-                showToast((res && res.error) || '清理失败');
+                }).catch(() => false);
+                if (!ok) return;
+                const res = await api.cleanAllSnapshots();
+                if (res && res.success) {
+                    showSuccessToast(`已清理 ${res.removedCount || 0} 处快照`);
+                    snapshots.value = [];
+                } else {
+                    showToast((res && res.error) || '清理失败');
+                }
+            } finally {
+                cleaningSnapshots.value = false;
             }
         }
 
@@ -2731,12 +2809,18 @@ export default {
         });
 
         // 兜底:库数据到达/刷新后若仍未找到卡(并发加载、导入后重扫等场景),再解析一次
+        // 🚀 性能修复:原实现监听 library 引用——库是渐进式分批 push 的,每批都会触发本 watch,
+        // 水合未完成期间会堆积 N 次并发整卡读取(千卡库 80 批 = 80 次重复读桥),
+        // 这是「点开详情页加载半天」的主因之一。修复:① 库未就绪(ready=false,仍在分批
+        // 加载)不触发;② 水合进行中(hydrating)去重,同卡只读一次;③ 完成后若已有 card 不再覆盖。
+        let hydrating = false;
         watch(() => mobileLibrary.library, () => {
-            if (!card.value && id.value) {
-                hydrateCardForEdit(locateCard(id.value)).then((c) => {
-                    if (c) { card.value = c; initChat(); }
-                });
-            }
+            if (card.value || !id.value || hydrating || !mobileLibrary.ready) return;
+            hydrating = true;
+            hydrateCardForEdit(locateCard(id.value))
+                .then((c) => { if (c && !card.value) { card.value = c; initChat(); } })
+                .catch(() => { /* 单次水合失败可忽略,onMounted 兜底重试 */ })
+                .finally(() => { hydrating = false; });
         });
 
         return {
@@ -2816,14 +2900,22 @@ export default {
 .basic-wrap { padding: 4px 12px; }
 .id-row { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 4px; }
 .id-cover-wrap { position: relative; width: 84px; flex-shrink: 0; }
-.id-cover { width: 84px; height: 84px; border-radius: 10px; }
+.id-cover {
+    width: 84px; height: 84px; border-radius: 12px;
+    box-shadow: 0 3px 10px rgba(0,0,0,.16);
+    transition: transform .18s ease, box-shadow .18s ease;
+}
+.id-cover-wrap:active .id-cover { transform: scale(.96); box-shadow: 0 1px 5px rgba(0,0,0,.14); }
 .id-cover-edit {
     position: absolute; right: -4px; bottom: -4px;
     width: 26px; height: 26px; border-radius: 50%;
     background: rgba(0,0,0,0.55); color: #fff;
     display: flex; align-items: center; justify-content: center;
     font-size: 13px; cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    transition: background .2s ease, transform .15s ease;
 }
+.id-cover-edit:active { transform: scale(.9); background: rgba(6,182,212,.8); }
 .id-info { flex: 1; min-width: 0; }
 .id-info :deep(.van-field) { padding: 6px 0; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 10px; align-items: center; }
@@ -2835,14 +2927,33 @@ export default {
 .tag-collapse-title { width: 100%; display: flex; align-items: center; gap: 3px; }
 .tag-selected-count { color: #06b6d4; margin-left: 4px; font-size: 11px; }
 .pt-label { font-size: 11px; color: var(--van-gray-6); flex-shrink: 0; margin-right: 2px; cursor: pointer; }
-.pt-item { cursor: pointer; }
-.sec-label { font-size: 12px; color: var(--van-gray-6); margin: 6px 0 2px; }
+.pt-item {
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .2s ease;
+}
+.pt-item:active { transform: scale(.94); }
+.sec-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--van-text-color-2, #646566);
+    margin: 10px 0 2px;
+}
+.sec-label::before {
+    content: '';
+    width: 3px; height: 12px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #06b6d4, #0ea5e9);
+}
 .token-analysis {
     background: var(--van-gray-1); border-radius: 8px; padding: 10px; margin-bottom: 8px;
 }
 /* Token 构成面板 */
 .token-panel {
-    background: var(--van-gray-1); border-radius: 10px; padding: 12px; margin-bottom: 8px;
+    background: var(--van-gray-1); border-radius: 12px; padding: 14px; margin-bottom: 10px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.04);
 }
 .tp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .tp-title { font-size: 13px; font-weight: 600; color: var(--van-text-color); }
@@ -2850,7 +2961,9 @@ export default {
 .tp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .tp-label { width: 62px; flex-shrink: 0; font-size: 11px; color: var(--van-gray-6); }
 .tp-bar-wrap { flex: 1; height: 8px; background: var(--van-gray-2); border-radius: 4px; overflow: hidden; }
-.tp-bar { height: 100%; border-radius: 4px; transition: width .25s; }
+.tp-bar { height: 100%; border-radius: 4px; transition: width .3s ease-out; }
+.tp-num { width: 28px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--van-text-color-2); }
+.tp-pct { width: 32px; text-align: right; font-size: 10px; color: var(--van-gray-5, #969799); }
 .tp-num { width: 40px; flex-shrink: 0; text-align: right; font-size: 11px; color: var(--van-text-color); font-variant-numeric: tabular-nums; }
 .tp-pct { width: 32px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--van-gray-5); }
 .tp-divider { height: 1px; background: var(--van-gray-3); margin: 8px 0; }

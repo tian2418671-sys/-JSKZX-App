@@ -14,6 +14,35 @@ const Http = registerPlugin('HttpPlugin');
 const Update = registerPlugin('UpdatePlugin');
 const Keystore = registerPlugin('KeystorePlugin');
 const Memory = registerPlugin('MemoryPlugin');
+const KeepAlive = registerPlugin('KeepAlivePlugin');
+
+/** 后台保活(原生前台服务 + WakeLock;必须在应用前台时调用,Android 12+ 禁止后台起 FGS) */
+export const keepAlive = {
+    async start() {
+        try {
+            const res = await KeepAlive.start();
+            return !!(res && res.success);
+        } catch (e) {
+            return false;
+        }
+    },
+    async stop() {
+        try {
+            const res = await KeepAlive.stop();
+            return !!(res && res.success);
+        } catch (e) {
+            return false;
+        }
+    },
+    async isRunning() {
+        try {
+            const res = await KeepAlive.isRunning();
+            return !!(res && res.running);
+        } catch (e) {
+            return false;
+        }
+    }
+};
 
 // 虚拟库根:渲染层眼中的"绝对路径"前缀(与桌面 file:// 语义对齐)
 export const LIBRARY_ROOT = '/library';
@@ -326,6 +355,8 @@ export const androidImpl = {
         if (res && res.error) return { folderPath: null, files: [], error: res.error };
         return this.rescanLibrary(LIBRARY_ROOT);
     },
+    /** 后台保活:委托到独立 keepAlive 模块(前台服务 + WakeLock,设置页开关与启动自动拉起共用) */
+    keepAlive,
     async loadConfig() {
         return this.rescanLibrary(LIBRARY_ROOT);
     },
@@ -513,11 +544,16 @@ export const androidImpl = {
             if (!writeRes || !writeRes.success) {
                 return { success: false, error: '写入临时文件失败' };
             }
-            // 6. 校验临时文件:重新读取并验证卡片 JSON 可解析
-            const verifyRes = await LibraryFs.readBuffer({ path: tmpRel });
-            if (!verifyRes || !verifyRes.success) {
+            // 6. 校验临时文件 🚀 性能修复:原实现 readBuffer 整图回读(大 PNG 一次全量 base64
+            //    过桥)只为了验证 JSON 可解析;改为 readCharaBatch 流式提取 chara 文本块
+            //    (原生仅跳过 IDAT 图像数据,载荷几十 KB),大卡保存省掉一次整图往返。
+            const verifyRes = await LibraryFs.readCharaBatch({ paths: [tmpRel] });
+            const verifyOk = !!(verifyRes && verifyRes.success && Array.isArray(verifyRes.results)
+                && verifyRes.results[0] && verifyRes.results[0].success
+                && typeof verifyRes.results[0].value === 'string');
+            if (!verifyOk) {
                 await LibraryFs.delete({ path: tmpRel }).catch(() => {});
-                return { success: false, error: '校验失败:无法读取临时文件' };
+                return { success: false, error: '校验失败:临时文件无法解析' };
             }
             // 7. 用临时文件替换原文件(SAF 下:先删原文件,再重命名临时文件)
             await LibraryFs.delete({ path: rel }).catch(() => {});
@@ -911,16 +947,22 @@ export const androidImpl = {
         const rel = toRelativePath(filePath);
         if (!rel) return { success: false, error: '路径无效' };
         try {
-            const bufRes = await LibraryFs.readBuffer({ path: rel });
-            if (!bufRes || !bufRes.success) return { success: false, error: '读取卡片失败' };
             const dot = rel.lastIndexOf('.');
             const ext = dot > 0 ? rel.slice(dot) : '.png';
             const baseName = dot > 0 ? rel.slice(rel.lastIndexOf('/') + 1, dot) : rel.slice(rel.lastIndexOf('/') + 1);
             const sDir = snapshotDir(rel);
             const sName = snapshotFileName(baseName, ext, true);
             const sRel = sDir + sName;
+            // 🚀 性能修复:原生流式复制(免 base64 过桥)——大 PNG 快照从数百 MB 过桥载荷
+            // 降到零载荷;原生不可用(旧包/浏览器)时回退旧 read+write 链路。
+            try {
+                const cp = await LibraryFs.copyWithin({ srcPath: rel, destPath: sRel });
+                if (cp && cp.success) return { success: true, snapshotPath: LIBRARY_ROOT + '/' + sRel };
+            } catch (e) { /* 回退 base64 链路 */ }
             // 确保快照目录存在（.bak_history 不存在时 writeBuffer 会失败，必须先 mkdir）
             await LibraryFs.mkdir({ path: sDir.replace(/\/+$/, '') }).catch(() => {});
+            const bufRes = await LibraryFs.readBuffer({ path: rel });
+            if (!bufRes || !bufRes.success) return { success: false, error: '读取卡片失败' };
             const mkRes = await LibraryFs.writeBuffer({ path: sRel, value: bufRes.value || bufRes.data || '' });
             if (!mkRes || !mkRes.success) return { success: false, error: (mkRes && mkRes.error) || '创建快照失败' };
             return { success: true, snapshotPath: LIBRARY_ROOT + '/' + sRel };
@@ -961,22 +1003,37 @@ export const androidImpl = {
         if (!rel || !sRel) return { success: false, error: '路径无效' };
         try {
             // 备份当前版本
-            const bufRes = await LibraryFs.readBuffer({ path: rel });
-            if (bufRes && bufRes.success) {
-                const dot = rel.lastIndexOf('.');
-                const ext = dot > 0 ? rel.slice(dot) : '.png';
-                const baseName = dot > 0 ? rel.slice(rel.lastIndexOf('/') + 1, dot) : rel.slice(rel.lastIndexOf('/') + 1);
-                const bkDir = snapshotDir(rel);
-                const bkName = snapshotFileName(baseName, ext, true);
-                const bkRel = bkDir + bkName;
-                await LibraryFs.mkdir({ path: bkDir.replace(/\/+$/, '') }).catch(() => {});
-                await LibraryFs.writeBuffer({ path: bkRel, value: bufRes.value || bufRes.data || '' }).catch(() => {});
+            const dot = rel.lastIndexOf('.');
+            const ext = dot > 0 ? rel.slice(dot) : '.png';
+            const baseName = dot > 0 ? rel.slice(rel.lastIndexOf('/') + 1, dot) : rel.slice(rel.lastIndexOf('/') + 1);
+            const bkDir = snapshotDir(rel);
+            const bkName = snapshotFileName(baseName, ext, true);
+            const bkRel = bkDir + bkName;
+            // 🚀 性能修复:备份与覆盖都优先走原生流式复制(免 base64 过桥)
+            let backedUp = false;
+            try {
+                const cp = await LibraryFs.copyWithin({ srcPath: rel, destPath: bkRel });
+                backedUp = !!(cp && cp.success);
+            } catch (e) { backedUp = false; }
+            if (!backedUp) {
+                const bufRes = await LibraryFs.readBuffer({ path: rel });
+                if (bufRes && bufRes.success) {
+                    await LibraryFs.mkdir({ path: bkDir.replace(/\/+$/, '') }).catch(() => {});
+                    await LibraryFs.writeBuffer({ path: bkRel, value: bufRes.value || bufRes.data || '' }).catch(() => {});
+                }
             }
             // 读取快照 → 覆盖原文件
-            const snapBuf = await LibraryFs.readBuffer({ path: sRel });
-            if (!snapBuf || !snapBuf.success) return { success: false, error: '读取快照失败' };
-            const writeRes = await LibraryFs.writeBuffer({ path: rel, value: snapBuf.value || snapBuf.data || '' });
-            if (!writeRes || !writeRes.success) return { success: false, error: (writeRes && writeRes.error) || '恢复快照失败' };
+            let restored = false;
+            try {
+                const cp2 = await LibraryFs.copyWithin({ srcPath: sRel, destPath: rel });
+                restored = !!(cp2 && cp2.success);
+            } catch (e) { restored = false; }
+            if (!restored) {
+                const snapBuf = await LibraryFs.readBuffer({ path: sRel });
+                if (!snapBuf || !snapBuf.success) return { success: false, error: '读取快照失败' };
+                const writeRes = await LibraryFs.writeBuffer({ path: rel, value: snapBuf.value || snapBuf.data || '' });
+                if (!writeRes || !writeRes.success) return { success: false, error: (writeRes && writeRes.error) || '恢复快照失败' };
+            }
             return { success: true };
         } catch (e) {
             return { success: false, error: (e && e.message) || '恢复快照失败' };
@@ -988,7 +1045,12 @@ export const androidImpl = {
         if (!sRel) return { success: false, error: '路径无效' };
         try {
             // 安全检查:必须在 .bak_history 目录下
-            if (!sRel.includes('/' + SNAPSHOT_DIR + '/')) return { success: false, error: '非法快照路径' };
+            // 🐛 修复:原实现 includes('/.bak_history/') 要求前导斜杠,而 sRel 是
+            // '.bak_history/xxx' 相对路径(无前导 /),永远匹配不上 → 删除必然报「非法快照路径」。
+            const norm = sRel.replace(/^\/+/, '');
+            if (norm !== SNAPSHOT_DIR && !norm.startsWith(SNAPSHOT_DIR + '/')) {
+                return { success: false, error: '非法快照路径' };
+            }
             const res = await LibraryFs.delete({ path: sRel });
             return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
         } catch (e) {
@@ -1610,7 +1672,11 @@ export const androidImpl = {
         const sRel = toRelativePath(snapshotPath);
         if (!sRel) return { success: false, error: '路径无效' };
         try {
-            if (!sRel.includes('/' + SNAPSHOT_DIR + '/')) return { success: false, error: '非法快照路径' };
+            // 🐛 与 deleteCardSnapshot 同款修复:相对路径无前导 /,原 includes 检查永远失败
+            const norm = sRel.replace(/^\/+/, '');
+            if (norm !== SNAPSHOT_DIR && !norm.startsWith(SNAPSHOT_DIR + '/')) {
+                return { success: false, error: '非法快照路径' };
+            }
             const res = await LibraryFs.delete({ path: sRel });
             return { success: !!(res && res.success), error: (res && !res.success && res.error) || undefined };
         } catch (e) {

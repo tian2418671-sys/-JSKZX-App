@@ -209,6 +209,9 @@ export default {
     width: 100%;
     color: rgba(255, 255, 255, 0.45);
     font-size: 26px;
+    background:
+        radial-gradient(120% 90% at 20% 0%, rgba(255,255,255,.06), transparent 60%),
+        linear-gradient(150deg, #0f172a, #1e293b);
 }
 .cover-ph.is-loading {
     color: transparent;
@@ -219,6 +222,13 @@ export default {
 }
 .cover-ph.is-failed {
     color: rgba(148, 163, 184, 0.5);
+}
+.cover-ph:not(.is-loading):not(.is-failed) > :not(.ph-badge) {
+    animation: cover-float 2.4s ease-in-out infinite;
+}
+@keyframes cover-float {
+    0%, 100% { transform: translateY(0); opacity: .5; }
+    50% { transform: translateY(-4px); opacity: .9; }
 }
 .ph-badge {
     display: inline-flex;

@@ -125,7 +125,7 @@ export default {
 
         /** 导入勾选文件到库根(同名跳过不覆盖) */
         async function doImport() {
-            if (!treeUri.value || !selected.value.length) return;
+            if (!treeUri.value || !selected.value.length || importing.value) return; // 导入进行中忽略连点
             importing.value = true;
             try {
                 const paths = selected.value.map((i) => files.value[i].path);

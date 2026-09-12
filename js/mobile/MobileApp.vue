@@ -8,9 +8,11 @@
 <template>
     <div class="mobile-shell">
         <router-view v-slot="{ Component }">
-            <keep-alive include="CardLibraryView,WorldbookView,PresetsView,SettingsView">
-                <component :is="Component" />
-            </keep-alive>
+            <transition name="page-fade" mode="out-in">
+                <keep-alive include="CardLibraryView,WorldbookView,PresetsView,SettingsView">
+                    <component :is="Component" />
+                </keep-alive>
+            </transition>
         </router-view>
         <van-tabbar v-if="showTabbar" route safe-area-inset-bottom class="mobile-tabbar">
             <van-tabbar-item replace to="/" icon="apps-o">卡片库</van-tabbar-item>
@@ -239,6 +241,48 @@ html .van-tabbar-item__text {
 }
 .mobile-shell .mobile-tabbar {
     flex-shrink: 0;
+}
+
+/* =========================================================
+   🎨 通用质感提升（对所有主题生效，全部走 --van-* 变量适配）
+   ========================================================= */
+
+/* ① 页面路由转场：淡入 + 轻微上浮（180ms，切页不再生硬） */
+.page-fade-enter-active,
+.page-fade-leave-active { transition: opacity .18s ease, transform .18s ease; }
+.page-fade-enter-from { opacity: 0; transform: translateY(6px); }
+.page-fade-leave-to { opacity: 0; }
+
+/* ② 底部 Tab 高亮：图标缩放 + 文字主色 + 顶部指示小圆点 */
+.van-tabbar-item .van-icon {
+    transition: transform .2s cubic-bezier(.34,1.56,.64,1);
+}
+.van-tabbar-item--active .van-icon { transform: scale(1.18); }
+.van-tabbar-item--active .van-tabbar-item__text {
+    font-weight: 600;
+    color: var(--van-tabbar-item-active-color, var(--van-primary-color, #1989fa));
+}
+.mobile-tabbar .van-tabbar-item { position: relative; }
+.mobile-tabbar .van-tabbar-item--active::before {
+    content: '';
+    position: absolute;
+    top: 5px; left: 50%;
+    width: 4px; height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: var(--van-tabbar-item-active-color, var(--van-primary-color, #1989fa));
+    opacity: .85;
+}
+
+/* ③ 通用按压反馈：列表项/图标按钮轻缩（触屏响应感） */
+.mobile-shell .van-icon,
+.mobile-shell .van-cell--clickable,
+.mobile-shell .van-button {
+    -webkit-tap-highlight-color: transparent;
+}
+.mobile-shell .van-button:active:not([disabled]) {
+    transform: scale(.97);
+    opacity: .9;
 }
 
 /* 抑制系统长按菜单(复制/分享),保证自定义长按动作单优先触发(鸿蒙/国产 WebView 兼容) */

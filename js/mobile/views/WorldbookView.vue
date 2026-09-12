@@ -289,6 +289,8 @@ export default {
     setup() {
         const router = useRouter();
         const editing = ref(null); // { path, name, entries, payload, wrapped, external?, treeUri?, rel? }
+        // 🚀 重操作防抖:saveAll 是整卡/整书写盘,连点会叠加重入
+        const savingAll = ref(false);
         const library = mobileLibrary;
         const showDedupe = ref(false);
 
@@ -1166,23 +1168,28 @@ export default {
 
         async function saveAll() {
             const ed = editing.value;
-            if (!ed) return;
-            stripTempFields(ed.entries);
-            let payload;
-            if (ed.card) {
-                // 卡内世界书:保存整卡(entries 字典→数组对齐桌面 character_book.entries 标准)
-                serializeCardEmbeddedWb(ed.card);
-                const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(JSON.parse(JSON.stringify(ed.card.data)), null, 2));
-                res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
-            } else if (ed.external) {
-                // 外部世界书目录:写回原 SAF 树
-                const res = await api.saveExternalWorldbook({ treeUri: ed.treeUri, rel: ed.rel, wb: ed.payload, wrapped: ed.wrapped });
-                res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
-            } else {
-                // 独立世界书文件:按原结构回写
-                const body = ed.wrapped ? { extensions: { world_book: ed.payload } } : ed.payload;
-                const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(body, null, 2));
-                res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
+            if (!ed || savingAll.value) return; // 保存进行中,忽略连点
+            savingAll.value = true;
+            try {
+                stripTempFields(ed.entries);
+                let payload;
+                if (ed.card) {
+                    // 卡内世界书:保存整卡(entries 字典→数组对齐桌面 character_book.entries 标准)
+                    serializeCardEmbeddedWb(ed.card);
+                    const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(JSON.parse(JSON.stringify(ed.card.data)), null, 2));
+                    res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
+                } else if (ed.external) {
+                    // 外部世界书目录:写回原 SAF 树
+                    const res = await api.saveExternalWorldbook({ treeUri: ed.treeUri, rel: ed.rel, wb: ed.payload, wrapped: ed.wrapped });
+                    res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
+                } else {
+                    // 独立世界书文件:按原结构回写
+                    const body = ed.wrapped ? { extensions: { world_book: ed.payload } } : ed.payload;
+                    const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(body, null, 2));
+                    res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
+                }
+            } finally {
+                savingAll.value = false;
             }
         }
 
@@ -1424,7 +1431,14 @@ export default {
     padding: 8px 10px 4px;
     margin: 10px 12px 0;
     background: var(--van-background-2, #fff);
+    transition: transform .16s ease, box-shadow .16s ease;
+    animation: wb-pop-in .26s ease-out both;
 }
+@keyframes wb-pop-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.wb-item:active { transform: scale(.985); }
 .wb-head { display: flex; align-items: center; gap: 6px; }
 .wb-head > * { flex-shrink: 0; }
 .wb-name { flex: 1; min-width: 0; }

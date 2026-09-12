@@ -34,6 +34,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- 后台保活前台服务(切后台防杀;API 34+ 需声明 FGS 类型与对应权限) -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
     </application>
 
     <!-- Permissions -->
@@ -45,4 +52,13 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- 后台保活:WakeLock 防止后台 CPU 休眠冻结 WebView 会话 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- API 34+ 前台服务 dataSync 类型声明(普通权限,安装即授予) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- API 33+ 常驻通知显示权限(未授予时服务照常运行,仅通知不展示) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 电池优化豁免(可选:用户可跳转系统设置关闭本应用电池限制,进一步防杀) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

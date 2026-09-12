@@ -19,6 +19,20 @@ async function boot() {
     await registerPlatform(app);
     app.config.errorHandler = errorHandler;
     app.mount('#app');
+    // 🚀 后台保活(Bug 反馈#2):应用启动(前台)即拉起前台服务,WakeLock 防切后台被杀;
+    // 用户可在设置页关闭;浏览器预览/非原生环境静默跳过。读取 AppConfig 持久化开关。
+    maybeAutoStartKeepAlive();
+}
+
+/** 按持久化开关启动保活(默认开;设置页可关) */
+async function maybeAutoStartKeepAlive() {
+    if (!isNative) return;
+    try {
+        const { androidImpl, keepAlive } = await import('./bridge/android');
+        const cfg = await androidImpl.loadAppConfig().catch(() => null);
+        const enabled = cfg && cfg.keepAlive !== undefined ? !!cfg.keepAlive : true;
+        if (enabled) await keepAlive.start();
+    } catch (e) { /* 保活启动失败不影响主流程 */ }
 }
 
 // 移动端:注册路由与 Vant + Android 桥接

@@ -101,6 +101,11 @@
                         <van-loading v-if="updating" size="16" />
                     </template>
                 </van-cell>
+                <van-cell title="后台保活" label="切后台时保持进程存活，返回不重载（常驻通知 + WakeLock）">
+                    <template #value>
+                        <van-switch :model-value="keepAliveOn" :loading="keepAliveBusy" @update:model-value="onKeepAliveChange" />
+                    </template>
+                </van-cell>
             </van-cell-group>
 
             <!-- 快照与备份 -->
@@ -574,6 +579,7 @@ export default {
                 if (typeof sc.cooldownMs === 'number') snapCooldown.value = Math.round(sc.cooldownMs / 1000);
                 if (typeof sc.maxKeep === 'number') snapMaxKeep.value = sc.maxKeep;
             } catch (e) { /* 使用默认值 */ }
+            loadKeepAliveState();
         });
 
         async function saveSnapshotConfig() {
@@ -626,6 +632,46 @@ export default {
             showSuccessToast(v ? '导入后将自动打标' : '导入自动打标已关闭');
         }
 
+        // ---------- 后台保活开关（Bug 反馈#2:切后台被杀;持久化到 AppConfig,启动时自动拉起） ----------
+        const keepAliveOn = ref(true);
+        const keepAliveBusy = ref(false);
+        async function loadKeepAliveState() {
+            try {
+                const cfg = await api.loadAppConfig();
+                if (cfg && typeof cfg.keepAlive === 'boolean') keepAliveOn.value = cfg.keepAlive;
+                if (window.electronAPI && typeof window.electronAPI.keepAlive === 'object') {
+                    const running = await window.electronAPI.keepAlive.isRunning();
+                    // 服务实际运行状态优先(首次升级安装后旧包无服务时以持久化值为准)
+                    if (running) keepAliveOn.value = true;
+                }
+            } catch (e) { /* 保活状态读取失败,保持默认 */ }
+        }
+        async function onKeepAliveChange(v) {
+            if (keepAliveBusy.value) return;
+            keepAliveBusy.value = true;
+            try {
+                if (v) {
+                    const ok = await window.electronAPI.keepAlive.start();
+                    if (ok) {
+                        keepAliveOn.value = true;
+                        showSuccessToast('后台保活已开启');
+                    } else {
+                        showToast('开启保活失败（通知权限被禁用时服务可能无法启动）');
+                    }
+                } else {
+                    const ok = await window.electronAPI.keepAlive.stop();
+                    keepAliveOn.value = false;
+                    showSuccessToast(ok ? '后台保活已关闭' : '已关闭（保活服务未在运行）');
+                }
+                const cfg = (await api.loadAppConfig()) || {};
+                await api.saveAppConfig({ ...cfg, keepAlive: keepAliveOn.value });
+            } catch (e) {
+                showToast('保活开关失败: ' + (e && e.message));
+            } finally {
+                keepAliveBusy.value = false;
+            }
+        }
+
         return {
             granted, authLost, rootUri, scanInfo, darkTheme, theme, uiFs, onThemePick, onFsPick,
             showThemePicker, themeOptions, themeColor, THEME_LABELS,
@@ -639,7 +685,8 @@ export default {
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
             snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
             ignoreImportTags, onIgnoreTagsChange,
-            importAutoTag, onImportAutoTagChange
+            importAutoTag, onImportAutoTagChange,
+            keepAliveOn, keepAliveBusy, onKeepAliveChange
         };
     }
 };
