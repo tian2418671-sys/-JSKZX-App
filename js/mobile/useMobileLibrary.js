@@ -376,6 +376,8 @@ export async function loadLibrary(refresh = false) {
     mobileLibrary.error = '';
     mobileLibrary.ready = false;
     mobileLibrary.worldbooks = [];
+    // 🐛 修复:重扫前先清空库,防止渐进上屏 publishProgress() 将新卡 push 到旧数据上→同卡重复出现
+    mobileLibrary.library = [];
     try {
         // 阶段打点:重置计时器
         perf.t0 = pnow(); perf.scan = perf.read = perf.parse = perf.publish = perf.cacheWrite = 0;

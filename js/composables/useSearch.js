@@ -152,13 +152,18 @@ export function useSearch({
             if (currentCategoryKey.value === 'all') return true;
             if (currentCategoryKey.value === 'has_lorebook') {
                 // 📖 带世界书：卡片内嵌世界书且有条目
-                // 🛡️ extractBookEntries 全形态安全判定（字典形态 entries / 数组形态 book 均正确识别）
+                // � 移动端轻量条目:优先读预提取标记 _lb(全量 data 为 null)
+                if (typeof card._lb === 'boolean') return card._lb;
+                // 🛡️ 桌面全量条目:extractBookEntries 全形态安全判定
                 const d = card.data?.data || card.data || {};
                 const book = d.character_book || card.data?.character_book || {};
                 return extractBookEntries(book).length > 0;
             }
             if (currentCategoryKey.value === 'has_regex') {
                 // ⚡ 带正则脚本：卡片内嵌正则脚本
+                // 🚀 移动端轻量条目:优先读预提取标记 _rx
+                if (typeof card._rx === 'boolean') return card._rx;
+                // 🛡️ 桌面全量条目
                 const d = card.data?.data || card.data || {};
                 const regex = d.extensions?.regex_scripts || d.regex_scripts || [];
                 return (regex || []).length > 0;

@@ -31,19 +31,24 @@ public class KeepAliveService extends Service {
         return running;
     }
 
+    /** onCreate 中 startForeground 是否成功;失败时服务已 stopSelf,onStartCommand 不得复位状态 */
+    private volatile boolean foregroundStarted = false;
+
     private PowerManager.WakeLock wakeLock;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        running = true;
         createChannel();
         // 🐛 防御:START_STICKY 由系统在**应用可能处于后台**时重建服务,此时直接调
         // startForeground 会抛 ForegroundServiceStartNotAllowedException(Android 12+)
         // 导致崩溃;失败则停止自身,等应用回前台后由设置页/启动逻辑重新拉起。
         try {
             startForeground(NOTIFY_ID, buildNotification());
+            foregroundStarted = true;
+            running = true;
         } catch (Throwable t) {
+            foregroundStarted = false;
             running = false;
             stopSelf();
             return;
@@ -53,6 +58,13 @@ public class KeepAliveService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // 🐛 时序修复:onCreate 在 onStartCommand 之前执行;若 onCreate 阶段
+        // startForeground 失败已 stopSelf,running 已置 false,此时不能再复位为 true
+        // (否则设置页 isRunning 误报"运行中",且 START_STICKY 可能反复拉起)。
+        if (!foregroundStarted) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         // START_STICKY:进程被系统杀死后重建时自动恢复(带 null intent)
         running = true;
         return START_STICKY;

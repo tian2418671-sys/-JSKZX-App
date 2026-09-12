@@ -157,6 +157,25 @@
             </div>
         </van-pull-refresh>
 
+        <!-- 浮动导航：快速回到顶部/底部（大卡库滚动 UX） -->
+        <transition name="fab-fade">
+            <div
+                v-if="showFab && viewMode !== 'page'"
+                class="fab-group"
+                :class="{ 'fab-under-batch': batchMode }"
+            >
+                <button class="fab-btn" title="回到顶部" @click="scrollToTop">
+                    <van-icon name="arrow-up" size="18" />
+                </button>
+                <div class="fab-progress" @click="scrollToTop">
+                    {{ scrollPercent }}%
+                </div>
+                <button class="fab-btn" title="回到底部" @click="scrollToBottom">
+                    <van-icon name="arrow-down" size="18" />
+                </button>
+            </div>
+        </transition>
+
         <!-- 长按操作 -->
         <van-action-sheet
             v-model:show="showSheet"
@@ -407,6 +426,26 @@ export default {
         let touchStartListener = null;
         const sentinelThreshold = 180;
         let scroller = null;
+        // 浮动导航按钮状态
+        const showFab = ref(false);
+        const scrollPercent = ref(0);
+        const SCROLL_HIDE_THRESHOLD = 30; // 距顶部/底部 < 30px 时隐藏按钮
+        function scrollToTop() {
+            if (scroller) scroller.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        function scrollToBottom() {
+            if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+        }
+        function updateFab(st) {
+            if (!scroller) { showFab.value = false; return; }
+            const sh = scroller.scrollHeight;
+            const ch = scroller.clientHeight;
+            if (sh <= ch + 10) { showFab.value = false; return; } // 内容不足一屏，隐藏
+            const maxScroll = sh - ch;
+            const pct = maxScroll > 0 ? Math.round((st / maxScroll) * 100) : 0;
+            scrollPercent.value = Math.min(100, Math.max(0, pct));
+            showFab.value = st > SCROLL_HIDE_THRESHOLD && st < maxScroll - SCROLL_HIDE_THRESHOLD;
+        }
         function bindScroll() {
             unbindScroll();
             scroller = document.querySelector('.van-pull-refresh__track');
@@ -420,6 +459,8 @@ export default {
             scroller.addEventListener('touchstart', touchStartListener, { passive: true });
             scrollListener = () => {
                 const st = scroller.scrollTop;
+                // 浮动导航实时更新
+                updateFab(st);
                 if (sentinelGuard) return;
                 if (st < lastScrollTop) { lastScrollTop = st; return; } // 上滑忽略
                 lastScrollTop = st;
@@ -1248,7 +1289,8 @@ export default {
             showMore, moreActions, onMoreSelect,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
             showBatchAiTag, aiTagRunning, aiTagProgress, onBatchAiTag, onBatchAiTagClose,
-            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode
+            toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode,
+            showFab, scrollPercent, scrollToTop, scrollToBottom
         };
     }
 };
@@ -1390,6 +1432,34 @@ export default {
 .aitag-bar .van-progress { margin-bottom: 10px; }
 .aitag-status { font-size: 13px; color: #06b6d4; margin: 0 0 4px; }
 .aitag-count { font-size: 12px; color: var(--van-gray-5, #969799); margin: 0; font-variant-numeric: tabular-nums; }
+/* 浮动导航按钮组(大卡库滚动 UX):滚出顶部/底部时显示,点击跳转 */
+.fab-group {
+    position: fixed; right: 14px; bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 120;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.fab-under-batch { bottom: calc(150px + env(safe-area-inset-bottom)); }
+.fab-btn {
+    width: 42px; height: 42px; border-radius: 50%;
+    border: none; padding: 0; margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--van-primary-color, #06b6d4);
+    color: #fff; box-shadow: 0 3px 10px rgba(0,0,0,.22);
+    -webkit-tap-highlight-color: transparent;
+}
+.fab-btn:active { transform: scale(.92); opacity: .85; }
+.fab-progress {
+    width: 42px; text-align: center;
+    font-size: 11px; font-weight: 600;
+    color: var(--van-text-color-2, #646566);
+    background: var(--van-background-2, #fff);
+    border-radius: 12px; padding: 4px 0;
+    box-shadow: 0 1px 6px rgba(0,0,0,.12);
+    font-variant-numeric: tabular-nums;
+    user-select: none; -webkit-user-select: none;
+}
+.fab-fade-enter-active, .fab-fade-leave-active { transition: opacity .2s, transform .2s; }
+.fab-fade-enter-from, .fab-fade-leave-to { opacity: 0; transform: translateY(8px); }
 .grid-cover { aspect-ratio: 3 / 4; }
 .poster-cover { aspect-ratio: 3 / 4; }
 .card-meta { padding: 8px 10px 10px; }

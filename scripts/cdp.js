@@ -25,12 +25,36 @@ ws.onmessage = (ev) => {
 
 ws.onerror = (e) => { console.error('WS error', e.message || e); process.exit(1); };
 
+// touch 模式:protocol 级触摸。用法:
+//   node scripts/cdp.js <ws> touch <x> <y> [holdMs]
+// 发送 touchStart(点按) → 等待 holdMs(默认 500) → touchEnd(抬起)。
+// 模拟真实长按(能触发 entry.js 的 v-longpress 指令 500ms 定时器)。
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 ws.onopen = async () => {
     try {
-        if (process.argv[4] === 'shot') {
+        if (process.argv[3] === 'touch') {
+            const x = parseFloat(process.argv[4]);
+            const y = parseFloat(process.argv[5]);
+            const hold = parseInt(process.argv[6] || '500', 10);
+            const base = { x, y, radiusX: 2, radiusY: 2, force: 1, id: 1 };
+            await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [base] });
+            await sleep(hold);
+            await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            console.log(`touched (${x},${y}) hold ${hold}ms`);
+        } else if (process.argv[4] === 'shot') {
             const r = await send('Page.captureScreenshot', { format: 'png' });
             require('fs').writeFileSync(process.argv[5] || 'shot.png', Buffer.from(r.data, 'base64'));
             console.log('screenshot saved');
+        } else if (process.argv[4] === 'touch') {
+            const x = parseFloat(process.argv[5]);
+            const y = parseFloat(process.argv[6]);
+            const hold = parseInt(process.argv[7] || '500', 10);
+            const base = { x, y, radiusX: 2, radiusY: 2, force: 1, id: 1 };
+            await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [base] });
+            await sleep(hold);
+            await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            console.log(`touched (${x},${y}) hold ${hold}ms`);
         } else {
             const r = await send('Runtime.evaluate', {
                 expression: expr,

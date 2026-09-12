@@ -75,6 +75,51 @@ public class LibraryFsPlugin extends Plugin {
         prefs().edit().putString(KEY_ROOT_URI, uri.toString()).apply();
     }
 
+    private static boolean allDigits(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if (!Character.isDigit(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    /** PNG/JSON 安全写入（tmp 替换）残留的临时文件过滤:buildRelIndex / walkDir 跳过这些孤儿文件,
+     *  防止扫描将其视为正常卡片/世界书 →「假卡多张」。
+     *  模式:① .jszkx-tmp 后缀(_saveCardPng);② .tmp_+数字后缀(replaceCardImage);
+     *        ③ <卡名>.png.<pid>.<tid>.tmp / .webp.<pid>.<tid>.tmp / .json.<pid>.<tid>.tmp(外部工具残留,实测 Blind Wife.png.26912.76.tmp 含 chara 被当卡)。 */
+    private static boolean isTransientFile(String name) {
+        if (name == null) return false;
+        String lc = name.toLowerCase(Locale.ROOT);
+        if (lc.endsWith(".jszkx-tmp")) return true;
+        int tmpIdx = lc.lastIndexOf(".tmp_");
+        if (tmpIdx > 0) {
+            // .tmp_ 后面必须全是数字（时间戳），才算临时文件，避免误伤合法文件
+            boolean allDigits = true;
+            for (int i = tmpIdx + 5; i < lc.length(); i++) {
+                if (!Character.isDigit(lc.charAt(i))) { allDigits = false; break; }
+            }
+            if (allDigits) return true;
+        }
+        // 模式③: 外部工具/中断的写入残留 <卡名>.<pid>.<tid>.tmp，如 Blind Wife.png.26912.76.tmp
+        // 限制:卡扩展名(png/webp/json) + 数字.数字 + .tmp，避免误伤 v1.2.3.tmp 等合法文件
+        if (lc.endsWith(".tmp")) {
+            String core = lc.substring(0, lc.length() - 4); // 去掉 .tmp
+            int lastDot = core.lastIndexOf('.');
+            if (lastDot > 0) {
+                String tidTail = core.substring(lastDot + 1);
+                String pre = core.substring(0, lastDot);
+                int preDot = pre.lastIndexOf('.');
+                if (preDot > 0 && allDigits(tidTail) && allDigits(pre.substring(preDot + 1))) {
+                    String head = pre.substring(0, preDot);
+                    if (head.endsWith(".png") || head.endsWith(".webp") || head.endsWith(".json")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     // ---------- F1: rescan 一次深度遍历建索引,此后路径解析 O(1) ----------
     // 千卡基线实测 read=344s(占83%)根因是每次路径解析逐 seg findFile 树查找;建表后 O(1) 命中
     private final java.util.Map<String, DocumentFile> relIndex = new java.util.concurrent.ConcurrentHashMap<>();
@@ -107,6 +152,8 @@ public class LibraryFsPlugin extends Plugin {
                     rels.push(rel);
                     dirList.add(new Object[]{ rel, f });
                 } else {
+                    // 🐛 过滤 tmp 替换残留(.jszkx-tmp / .tmp_<时间戳>),避免残留被当卡片扫描入库
+                    if (isTransientFile(name)) continue;
                     String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
                     m.put(rel, f);
                     fileList.add(new Object[]{ rel, f });
@@ -520,6 +567,8 @@ public class LibraryFsPlugin extends Plugin {
                 if (!ext.equals("png") && !ext.equals("webp") && !ext.equals("json")) continue;
                 // 跳过应用自身缓存文件(避免被当成卡片/世界书扫描)
                 if (name.startsWith(".jskzx")) continue;
+                // 🐛 过滤 tmp 替换残留(.jszkx-tmp / .tmp_<时间戳>),与 buildRelIndex 保持一致
+                if (isTransientFile(name)) continue;
                 JSObject o = new JSObject();
                 o.put("name", name);
                 o.put("path", "/library/" + relDir + name);
