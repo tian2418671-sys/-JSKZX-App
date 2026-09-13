@@ -23,6 +23,7 @@
                 <div class="pv-toolbar">
                     <van-button size="small" icon="replay" plain @click="scan">重新扫描</van-button>
                     <van-button size="small" icon="plus" type="primary" plain @click="createPreset">新建预设</van-button>
+                    <van-button size="small" plain @click="openStitch">🧵 缝合</van-button>
                     <van-button size="small" icon="folder-o" plain @click="pickDir">更换目录</van-button>
                     <span class="pv-count">{{ filtered.length }} 个</span>
                 </div>
@@ -85,6 +86,13 @@
         >
             <van-field v-model="inputValue" :placeholder="inputPlaceholder" style="margin: 16px 0" />
         </van-dialog>
+
+        <!-- 预设缝合中心 -->
+        <PresetStitchView v-if="showStitch" 
+                          :presets="presets" 
+                          :active-preset="null"
+                          @close="showStitch = false" 
+                          @save="onStitchSave" />
     </div>
 </template>
 
@@ -93,12 +101,14 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
+import PresetStitchView from './PresetStitchView.vue';
 
 const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir';
 const SS_PRESET_DATA = 'jsmobile-preset-detail-data'; // { uri, title }
 
 export default {
     name: 'PresetsView',
+    components: { PresetStitchView },
     setup() {
         const router = useRouter();
         const title = ref('⚙️ 预设管理');
@@ -108,6 +118,7 @@ export default {
         const loading = ref(false);
         const presets = ref([]);
         const showEditor = ref(false);
+        const showStitch = ref(false);
         const edName = ref('');
         const edJson = ref('');
         const edTarget = ref(null); // { treeUri, rel }
@@ -316,6 +327,34 @@ export default {
             if (inputResolver) { inputResolver(null); inputResolver = null; }
         }
 
+        function openStitch() {
+            if (!presets.value.length) {
+                showToast('请先扫描预设');
+                return;
+            }
+            showStitch.value = true;
+        }
+
+        async function onStitchSave(preset) {
+            try {
+                if (preset && preset.treeUri && preset.rel) {
+                    const res = await api.createExternalPreset({
+                        treeUri: preset.treeUri,
+                        rel: preset.rel,
+                        data: preset.data
+                    });
+                    if (!res || !res.success) {
+                        showToast((res && res.error) || '缝合结果保存失败');
+                        return;
+                    }
+                }
+                showSuccessToast('缝合完成');
+                await scan();
+            } catch (e) {
+                showToast('缝合结果保存失败: ' + (e.message || e));
+            }
+        }
+
         onMounted(async () => {
             try {
                 const s = JSON.parse(localStorage.getItem(LS_EXT_PRESET_DIR) || '{}');
@@ -330,6 +369,7 @@ export default {
 
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
+            showStitch, openStitch, onStitchSave,
             title, treeUri, q, loading, filtered, presets, showEditor, edName, edJson, saving, edError,
             pageSize, pageSizeOptions, currentPage, totalPages, paginatedList, nextPage, prevPage,
             pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta, openDetail

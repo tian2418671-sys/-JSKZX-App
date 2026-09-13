@@ -1,0 +1,24 @@
+{
+  "name": "StitchSource",
+  "temperature": 0.9,
+  "prompts": [
+    {
+      "identifier": "source_only",
+      "name": "Source only",
+      "role": "system",
+      "content": "stitched prompt",
+      "enabled": true
+    }
+  ],
+  "prompt_order": [
+    {
+      "character_id": 100001,
+      "order": [
+        {
+          "identifier": "source_only",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

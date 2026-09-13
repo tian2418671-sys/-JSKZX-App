@@ -491,7 +491,16 @@ export default {
             // 回库时同步「忽略卡自带标签」开关(可能在设置页被切换)→ 标签搜索语义即时生效
             sanitizeImportedTags.value = localStorage.getItem('jsmobile-ignore-import-tags') === '1';
         });
-        onDeactivated(unbindScroll);
+        // 🛡️ BUG-13:keep-alive deactivate 时必须清理防抖定时器并复位搜索状态，
+        // 否则延迟写入的 searchQuery 会在后台触发「幽灵过滤」（返回后列表被旧搜索词错误过滤）；
+        // 同时清空输入框与内部 query，避免返回时出现「输入框有词但列表全量」的显示不一致。
+        // onBeforeUnmount 仅覆盖组件真正销毁（非 keep-alive）的场景。
+        onDeactivated(() => {
+            unbindScroll();
+            searchEngine.dispose?.();
+            queryInput.value = '';
+            searchEngine.searchQuery.value = '';
+        });
 // 🛡️ BUG-13:组件销毁时释放 useSearch 防抖定时器
 onBeforeUnmount(() => {
     searchEngine.dispose?.();

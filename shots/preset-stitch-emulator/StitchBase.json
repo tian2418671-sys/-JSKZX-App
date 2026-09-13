@@ -1,0 +1,24 @@
+{
+  "name": "StitchBase",
+  "temperature": 0.7,
+  "prompts": [
+    {
+      "identifier": "main",
+      "name": "Main",
+      "role": "system",
+      "content": "base prompt",
+      "enabled": true
+    }
+  ],
+  "prompt_order": [
+    {
+      "character_id": 100001,
+      "order": [
+        {
+          "identifier": "main",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

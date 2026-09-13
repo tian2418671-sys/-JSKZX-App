@@ -22,8 +22,9 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ### 🟡 中 Bug 修复：useSearch 防抖定时器泄漏（BUG-13）
 
-- **根因**：`watch(searchQueryInput)` 设置的 300ms `setTimeout` 在组件卸载/停用时从不清理，keep-alive 返回后旧搜索词"幽灵生效"。
-- **修复**：composable 暴露 `dispose()`，组件 `onBeforeUnmount` 调用。
+- **根因**：`watch(searchQueryInput)` 设置的 300ms `setTimeout` 在组件停用时从不清理，keep-alive 返回后旧搜索词"幽灵生效"。
+- **修复**：composable 暴露 `dispose()`；组件 `onBeforeUnmount` 与 `onDeactivated`（keep-alive 切 tab）双钩子调用，并在 deactivate 时复位搜索状态，杜绝返回后的幽灵过滤与显示不一致。
+- **验证**：模拟器实测输入搜索词后 300ms 内切 tab → 返回列表全量、输入框已清空（详见测试日志 9.4）。
 
 ### 🔬 验证
 
