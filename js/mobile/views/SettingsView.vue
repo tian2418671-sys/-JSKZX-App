@@ -145,7 +145,7 @@
 
             <!-- 关于 -->
             <van-cell-group inset title="关于">
-                <van-cell title="版本" value="v1.10.22 (移动端)" />
+                <van-cell title="版本" value="v1.10.23 (移动端)" />
                 <van-cell title="数据存储" :label="rootUri || '使用系统文件夹(SAF 目录树授权)'" />
             </van-cell-group>
         </div>

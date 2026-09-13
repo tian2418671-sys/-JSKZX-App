@@ -6,6 +6,30 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.23] - 2026-09-13
+
+### 🔴 严重 Bug 修复：数据层并发竞态（脆弱感溯源）
+
+对加载/修正双入口做并发专项审计，修复 3 个竞态条件：
+
+**① BUG-11：`loadLibrary` 无并发互斥，双 scan 竞态**
+- **根因**：缓存先行秒开时 `reconcileLibraryInBackground` 仍在跑，用户点刷新 → 两个全量 scan 并发，后完成的覆盖先完成的，列表抖动/卡片闪变。
+- **修复**：模块级 `loadPromise` 互斥 —— 非刷新请求复用进行中的 promise，刷新请求先等待再扫描。
+
+**② BUG-12：`reconcile` 竞态 + worldbooks 累积翻倍**
+- **根因**：`reconcileLibraryInBackground` 无并发守卫（可并行跑），且每次修正不清空 `worldbooks` → 世界书逐次翻倍。
+- **修复**：`reconciling` 标志 + 迁移中早退 + 扫描前 `worldbooks = []` + `finally` 释放标志。
+
+### 🟡 中 Bug 修复：useSearch 防抖定时器泄漏（BUG-13）
+
+- **根因**：`watch(searchQueryInput)` 设置的 300ms `setTimeout` 在组件卸载/停用时从不清理，keep-alive 返回后旧搜索词"幽灵生效"。
+- **修复**：composable 暴露 `dispose()`，组件 `onBeforeUnmount` 调用。
+
+### 🔬 验证
+
+- `npm test` → 131 / 131 pass
+- `build:android` → BUILD SUCCESSFUL
+
 ## [1.10.22] - 2026-09-13
 
 ### 🔴 严重 Bug 修复：刷新/搜索期间卡片重复出现

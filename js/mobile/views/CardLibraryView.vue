@@ -492,6 +492,10 @@ export default {
             sanitizeImportedTags.value = localStorage.getItem('jsmobile-ignore-import-tags') === '1';
         });
         onDeactivated(unbindScroll);
+// 🛡️ BUG-13:组件销毁时释放 useSearch 防抖定时器
+onBeforeUnmount(() => {
+    searchEngine.dispose?.();
+});
         onBeforeUnmount(unbindScroll);
         // 修复 TDZ：quickFilter 在下方才初始化，watch 不能在此处先行执行
         // watch([() => selected.value, () => quickFilter.value, () => queryInput.value], () => { lastScrollTop = 0; renderCount.value = 24; });

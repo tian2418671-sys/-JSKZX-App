@@ -305,12 +305,23 @@ async function restoreLibraryFromCache(cache) {
 }
 
 /** 缓存先行后的后台校验:scan 全树 → 增量解析(缓存命中免读文件) → 覆盖式更新 */
+// 🛡️ BUG-12:加 loading 守卫——缓存先行秒开后用户立刻点刷新(loadLibrary 进行中)时,
+// reconcile 的 staging 全量覆盖会把正在渐进上屏的新库闪回旧缓存视图;且 worldbooks 未清空,
+// 每次 reconcile 都会把全库世界书重复 push 到 worldbooks 累积翻倍。
+let reconciling = false;
+// 🛡️ BUG-11:加载重入守卫。防止缓存先行(s)与用户触发的 refresh(t)双 scan 并发,
+// 后完成的覆盖先完成的→列表闪变/世界书累积翻倍
+let loadPromise = null;
 async function reconcileLibraryInBackground() {
+    if (reconciling || mobileLibrary.loading) return;
+    reconciling = true;
     try {
         const res = await window.electronAPI.rescanLibrary(LIBRARY_ROOT);
         if (!res || res.error) return;
         const files = (res.files || []).filter((f) => f && !f.isDirectory);
         mobileLibrary.categories = (res.categories || []).filter(Boolean);
+        // 清空世界书再重建:防止多次 reconcile 累积重复条目
+        mobileLibrary.worldbooks = [];
         const cache = await loadEmbeddedCache();
         const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE);
         const imgFiles = files.filter((f) => !jsonFiles.includes(f));
@@ -362,9 +373,18 @@ async function reconcileLibraryInBackground() {
         mobileLibrary.revision++;
         scheduleCacheFlush();
     } catch (e) { /* 后台修正失败:保留缓存先行视图 */ }
+    finally { reconciling = false; }
 }
 
 export async function loadLibrary(refresh = false) {
+    // 🛡️ BUG-11:加载重入守卫。loadLibrary 是重操作(全量 scan+解析,秒级),视图层虽有 loading 节流,
+    // 但 reconcileLibraryInBackground 与 loadLibrary 是两个独立入口,可并发触发(缓存先行秒开时
+    // reconcile 仍在跑,用户点刷新 → 双 scan 并发,后完成的覆盖先完成的,期间列表抖动/卡片闪变)。
+    // 用模块级 Promise 互斥:新请求等待进行中的加载结束,避免叠加第二个 scan。
+    if (loadPromise) {
+        if (!refresh) return loadPromise; // 非刷新请求直接复用
+        try { await loadPromise; } catch (e) { /* 旧请求失败不阻塞新请求 */ }
+    }
     // 已加载完成且库非空时跳过重复扫描（返回页面/组件重复挂载不重扫；下拉刷新等传 true 强制重扫）
     if (!refresh && mobileLibrary.ready && mobileLibrary.library.length > 0) return;
     // 🚀 二次启动秒开:轻量缓存先行直接上屏(零 scan 零读文件),scan 后台增量校验
@@ -372,6 +392,7 @@ export async function loadLibrary(refresh = false) {
         const cache = await loadEmbeddedCache();
         if (await restoreLibraryFromCache(cache)) return;
     }
+    loadPromise = (async () => {
     mobileLibrary.loading = true;
     mobileLibrary.error = '';
     mobileLibrary.ready = false;
@@ -499,6 +520,9 @@ export async function loadLibrary(refresh = false) {
         await drainParseRetries();
         if (flavorCallback) flavorCallback();
     }
+    })();
+    loadPromise.finally(() => { loadPromise = null; });
+    return loadPromise;
 }
 
 /**

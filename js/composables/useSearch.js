@@ -144,6 +144,13 @@ export function useSearch({
         }, 300);
     });
 
+    // 🛡️ BUG-13:组件卸载时清理防抖定时器,防止 keep-alive 缓存的旧实例
+    // 延迟写回 searchQuery 触发幽灵过滤(已切走的分组/搜索词在返回后错误生效)。
+    // Vue 3 的 composable 不自动清理,需调用方在 onBeforeUnmount 手动调用。
+    function dispose() {
+        if (searchTimeout) { clearTimeout(searchTimeout); searchTimeout = null; }
+    }
+
     // ================= 🚀 超级搜索引擎：全字段穿透 + 高级语法检索 + 全规范兼容 =================
     // 支持：多词 AND（傲娇 女仆）/ -排除词 / tag:/t: / author:/a: / file:/f: / wb:/w:
     const filteredLibrary = computed(() => {
@@ -460,6 +467,6 @@ export function useSearch({
     return {
         searchQueryInput, searchQuery,
         filteredLibrary, totalPages, paginatedLibrary,
-        changePage
+        changePage, dispose
     };
 }
