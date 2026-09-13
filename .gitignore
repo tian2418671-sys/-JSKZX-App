@@ -9,6 +9,9 @@ out/
 web/
 css/tailwind.out.css
 
+# 构建清理时腾挪出的「被占用」目录（句柄释放后由发布脚本自动回收）
+.trash/
+
 # Electron 二进制副本/缓存（本地构建用，勿提交）
 sillytavern-card-manager/
 *.zip

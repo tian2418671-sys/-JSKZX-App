@@ -5,9 +5,12 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build:web": "node -e \"require('fs').rmSync('web',{recursive:true,force:true})\" && vite build",
+    "build:web": "node scripts/clean-build-outputs.mjs && vite build",
     "sync:android": "npm run build:web && npx cap sync android && node scripts/post-cap-sync.mjs",
     "build:android": "npm run sync:android && cd android && gradlew.bat assembleDebug",
+    "release:android": "node scripts/release-android.mjs",
+    "release:android:upload": "node scripts/release-android.mjs --upload",
+    "verify:apk": "node scripts/release-android.mjs --skip-build",
     "test": "node --test"
   },
   "devDependencies": {
