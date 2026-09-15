@@ -449,12 +449,42 @@ public class LibraryFsPlugin extends Plugin {
 
     // region 扫描
 
+    // 🚀 BUG-14: 全树扫描专用线程。Capacitor 的全部插件方法在同一桥线程("CapacitorPlugins")
+    // 上串行排队;800 卡的一次 scan() 占线 5~8 秒(实测),期间用户点开任意卡片详情,
+    // 其 readCharaBatch/readText/readThumb 只能干等(实测排队 5.5s)→「列表秒开但点详情极慢」。
+    // 与 readThumbBatch 的 BATCH_ORCH 同模式:重活移交本线程,桥线程立即让出,详情读取不再排队。
+    private static final java.util.concurrent.ExecutorService SCAN_EXEC =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "jsx-scan"));
+
+    // 🚀 BUG-14: 批量读取编排线程(单线程,批内仍开 8 路并行 worker)——把「整批 join」从
+    // 桥线程挪走;readTextBatch / readCharaBatch / getFileStats 共用,天然串行互不竞争 SAF。
+    private static final java.util.concurrent.ExecutorService BATCH_EXEC =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "jsx-batch"));
+
+    // 🚀 BUG-14 快速通道:单文件读取(详情页水合 readText([1])/readCharaBatch([1卡])/readBuffer)
+    // 不走 BATCH_EXEC 队列——否则用户点开卡片会排在 reconcile 的几十批后台读之后(实测仍要等数秒)。
+    // 2 线程足够(水合一次仅 1~2 个并发读),与批读并发由 SAF 侧自然调度。
+    private static final java.util.concurrent.ExecutorService FAST_EXEC =
+            java.util.concurrent.Executors.newFixedThreadPool(2, r -> new Thread(r, "jsx-fast"));
+
     /**
      * 递归扫描库目录树,返回与桌面 scanAndSaveFolder 结构一致的 files/categories
      */
     @PluginMethod()
     public void scan(final PluginCall call) {
-        String rel = call.getString("path", "");
+        // 参数在桥线程读取后转入扫描线程(PluginCall 数据取出即用,跨线程只传不可变值)
+        final String rel = call.getString("path", "");
+        SCAN_EXEC.execute(() -> {
+            try {
+                scanOnWorker(call, rel);
+            } catch (Exception e) {
+                call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
+    }
+
+    /** scan 的实际实现,运行于 SCAN_EXEC 线程(relIndex 为 ConcurrentHashMap,relIndexReady/列表为 volatile) */
+    private void scanOnWorker(final PluginCall call, final String rel) {
         DocumentFile root = rootFile();
         if (root == null || !root.exists()) {
             JSObject err = new JSObject();
@@ -913,25 +943,32 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void readText(PluginCall call) {
         String path = call.getString("path");
-        DocumentFile f = fileByRelPath(path);
-        if (f == null || !f.canRead()) {
-            call.reject("文件不存在或不可读");
-            return;
-        }
-        String text = readStream(f.getUri(), false, 0);
-        if (text == null) {
-            call.reject("读取失败");
-            return;
-        }
-        JSObject ret = new JSObject();
-        ret.put("success", true);
-        ret.put("value", text);
-        call.resolve(ret);
+        // 🚀 BUG-14:单文件读走快速通道,不占桥线程、也不排 reconcile 批读队
+        final String rel = path == null ? "" : path;
+        FAST_EXEC.execute(() -> {
+            DocumentFile f;
+            try { f = fileByRelPath(rel); } catch (Exception e) { f = null; }
+            if (f == null || !f.canRead()) {
+                call.reject("文件不存在或不可读");
+                return;
+            }
+            String text = readStream(f.getUri(), false, 0);
+            if (text == null) {
+                call.reject("读取失败");
+                return;
+            }
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("value", text);
+            call.resolve(ret);
+        });
     }
 
     /**
      * 批量读文本（万卡优化：单次 IPC 拉取多个 json 文件，减少桥接往返）。
      * 🚀 v1.10.4:批内并行读取(8 线程)——SAF 流式读取是加载耗时大头,串行时每批 ~1s。
+     * 🚀 BUG-14:整批 join 移交 jsx-batch 编排线程(同 readThumbBatch 模式)——
+     * 桥线程立即返回,后台 reconcile 的批读期间,详情页单文件读取不再排在批后。
      * 入参 paths: ["/library/a.json", ...]；返回 results: [{path, success, value|error}]
      */
     @PluginMethod()
@@ -941,6 +978,17 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(new JSObject());
             return;
         }
+        BATCH_EXEC.execute(() -> {
+            try {
+                readTextBatchOnWorker(call);
+            } catch (Exception e) {
+                call.reject("批量读取失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
+    }
+
+    private void readTextBatchOnWorker(PluginCall call) {
+        com.getcapacitor.JSArray paths = call.getArray("paths");
         final int n = paths.length();
         final JSObject[] collected = new JSObject[n];
         final java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger(0);
@@ -988,6 +1036,8 @@ public class LibraryFsPlugin extends Plugin {
      * 🚀 v1.10.2 轻量化:批量提取 PNG 内嵌 chara 文本块。
      * 与 readTextBatch 同构:单次 IPC 提取多个 PNG 的文本块(不传输图像二进制),
      * 使 300+/2000 卡库加载时的桥接载荷有界(每批 24 个 × 每卡几十 KB)。
+     * 🚀 BUG-14:整批 join 移交 jsx-batch 编排线程(同 readTextBatch)——桥线程立即返回,
+     * reconcile 批读期间详情页 PNG 读取(readCharaBatch([单卡])/readThumb)不再排队 5s+。
      * 入参 paths: ["/library/a.png", ...];返回 results: [{path, success, value|error}]
      */
     @PluginMethod()
@@ -997,6 +1047,21 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(new JSObject());
             return;
         }
+        // 🚀 BUG-14 快速通道:≤2 卡的批读即「前台水合」(详情页 loadCardFullData 走
+        // readCharaBatch([单卡])),直接进 FAST 队列,不排在 reconcile 几十批后台读之后;
+        // 大批(加载期 24 卡/批)仍走 BATCH_EXEC 串行编排,互不干扰。
+        final boolean foreground = paths.length() <= 2;
+        (foreground ? FAST_EXEC : BATCH_EXEC).execute(() -> {
+            try {
+                readCharaBatchOnWorker(call);
+            } catch (Exception e) {
+                call.reject("批量提取失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
+    }
+
+    private void readCharaBatchOnWorker(PluginCall call) {
+        com.getcapacitor.JSArray paths = call.getArray("paths");
         final int n = paths.length();
         final JSObject[] collected = new JSObject[n];
         final java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger(0);
@@ -1449,15 +1514,19 @@ public class LibraryFsPlugin extends Plugin {
     /** 批量获取库内文件物理状态(修改时间/大小),供查重等按物理文件判定的功能使用 */
     @PluginMethod()
     public void getFileStats(PluginCall call) {
-        JSArray paths = call.getArray("paths");
-        JSObject out = new JSObject();
-        if (paths == null) {
-            call.resolve(out);
-            return;
-        }
-        try {
-            for (int i = 0; i < paths.length(); i++) {
-                String rel = paths.optString(i, "");
+        // 🚀 BUG-14:每文件 2 次 SAF query,大列表下同样占线;移交编排线程,桥线程立即返回
+        BATCH_EXEC.execute(() -> {
+            JSArray paths = call.getArray("paths");
+            JSObject out = new JSObject();
+            if (paths == null) {
+                call.resolve(out);
+                return;
+            }
+            java.util.List<String> rels = new ArrayList<>(paths.length());
+            try {
+                for (int i = 0; i < paths.length(); i++) rels.add(paths.optString(i, ""));
+            } catch (Exception e) { /* 截断在已收集处 */ }
+            for (String rel : rels) {
                 if (rel.isEmpty()) continue;
                 DocumentFile f = fileByRelPath(rel);
                 if (f == null || !f.canRead()) continue;
@@ -1466,8 +1535,8 @@ public class LibraryFsPlugin extends Plugin {
                 st.put("size", f.length());
                 out.put(rel, st);
             }
-        } catch (Exception e) { /* 单个失败不影响整体 */ }
-        call.resolve(out);
+            call.resolve(out);
+        });
     }
 
     /**
