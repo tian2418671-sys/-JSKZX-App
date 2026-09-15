@@ -202,6 +202,10 @@ export default {
 
             // MinHash 签名 + LSH 候选 + 精确相似度确认（阈值 85%）
             const sigs = valid.map((v) => computeMinHash(getShingles(v.text)));
+            // 🐛 BUG-15 修复:签名回填到条目自身(v.sig),供分组展示按 master 复算相似度;
+            // 此前只存并行数组 sigs[i],而下方 _simPct 读 v.sig → undefined →
+            // estimateSimilarity 取 undefined.length 抛 TypeError,整轮内容查重「查重失败」,从未成功过。
+            valid.forEach((v, i) => { v.sig = sigs[i]; });
             const buckets = new Map();
             valid.forEach((_, i) => {
                 for (let b = 0; b < LSH_BANDS; b++) {

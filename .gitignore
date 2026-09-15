@@ -51,3 +51,4 @@ _备份_签名密钥/
 
 # 插件样例工程（大体积 zip + 解压目录，勿提交；真实插件样例见 资料库/*.json 与 资料库/脚本/）
 资料库/_git_samples/
+shots/p0-test-validation/

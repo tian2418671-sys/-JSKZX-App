@@ -167,9 +167,9 @@
             @delete="deleteWbSnapshot"
         />
 
-        <!-- 查重弹窗(独立世界书) -->
+        <!-- 查重弹窗(独立世界书)。🐛 BUG-16 修复:同 CardLibraryView,v-model 对齐 modelValue prop -->
         <DedupeModal
-            v-model:show="showDedupe"
+            v-model="showDedupe"
             mode="worldbook"
             @cleaned="reload"
         />

@@ -270,8 +270,9 @@
             @cancel="showGroupSheet = false"
         />
 
-        <!-- 查重弹窗(角色卡) -->
-        <DedupeModal v-model:show="showDedupe" :mode="dedupeMode" @cleaned="onDedupeCleaned" @switch-mode="dedupeMode = $event" />
+        <!-- 查重弹窗(角色卡)。🐛 BUG-16 修复:组件声明的是 modelValue(v-model + watch 触发 runScan),
+             原写法 v-model:show 传成名为 show 的 prop → modelValue 恒 false → 扫描永不触发。 -->
+        <DedupeModal v-model="showDedupe" :mode="dedupeMode" @cleaned="onDedupeCleaned" @switch-mode="dedupeMode = $event" />
 
         <!-- 分组管理 -->
         <van-action-sheet
