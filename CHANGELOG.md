@@ -6,6 +6,41 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.24] - 2026-09-16
+
+### 🔴 严重 Bug 修复：秒开后点详情极慢（BUG-14，原生桥线程独占）
+
+800 卡「列表秒开但点开详情转圈数秒」。CDP 真机实测定位根因：Capacitor 所有插件方法
+串行在单条 `CapacitorPlugins` 线程；缓存秒开后 reconcile 的全树 `scan()` 独占该线程
+5~9s（实测 scan=7871ms），期间详情页的文件读取排队最长 5596ms。
+
+- 修复（`LibraryFsPlugin.java`）：`scan`→独立线程；批量读（`readTextBatch`/
+  `readCharaBatch`/`getFileStats`）→编排线程；**单卡读取开快速通道**（`FAST_EXEC`），
+  不与后台批读排队。
+- 验证：扫描进行中连点三卡 244/272/239ms（修复前 ~5.6s）。
+- 探针入库：`scripts/probe-detail-perf.mjs`、`probe-detail-chain.mjs`、
+  `probe-bridge-queue.mjs`、`probe-bridge-realuse.mjs`（CDP 真机计时，可回归）。
+
+### 🔴 功能级 Bug 修复：内容指纹查重从未产出过结果（BUG-15 + BUG-16）
+
+「查重 → 内容指纹」自上线起**从未显示过任何分组**，两个 bug 叠加：
+
+- **BUG-16（触发层）**：`DedupeModal` 声明 `modelValue` prop 并 watch 它才跑扫描，
+  但调用处写成 `v-model:show` → `modelValue` 恒 false，`runScan` 从不触发；
+  弹窗"能打开"只是 `show` 经 attrs 穿透给根 `van-popup` 的假象。
+  修复：`v-model` 对齐（卡库 + 世界书两处）；其余 31 处 `v-model:show` 组件审计无同类错位。
+- **BUG-15（渲染层，藏在从未执行的代码里）**：分组展示读 `v.sig` 复算相似度，
+  签名只存并行数组 → `undefined.length` 抛 TypeError（真机算法复刻实测复现）。
+  修复：签名回填 `valid.forEach((v,i) => { v.sig = sigs[i]; })`。
+- 验证（`scripts/verify-bug15-realui.mjs`，CDP 真实点击）：813 卡库内容扫描完整跑通，
+  dupz 正文相同种子被聚为「3 个版本·内容指纹聚类」分组，无 TypeError。
+
+### 🔧 验证与回归
+
+- `npm test` → 134/134 pass
+- BUG-14 修复在本版复测无退化：扫描窗口内点卡 215~327ms
+- 发布产物经 `release:android` 硬校验（入口一致性/无陈旧分块/关键功能特征/签名/体积）
+
 ## [1.10.23] - 2026-09-13
 
 ### 🔴 严重 Bug 修复：数据层并发竞态（脆弱感溯源）

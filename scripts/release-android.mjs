@@ -41,6 +41,7 @@ const REPO = 'tian2418671-sys/-JSKZX-App';
  */
 const FEATURE_MARKERS = [
     { key: '预设缝合', marker: '缝合' },
+    { key: '内容指纹查重', marker: '内容指纹' },
     { key: '世界书', marker: '世界书' },
     { key: 'MVU 变量', marker: 'MVU' }
 ];
