@@ -336,7 +336,7 @@ import { computed, ref, reactive, onMounted, watch, onBeforeUnmount, onActivated
 import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { currentTheme } from '../theme';
-import { useSearch, extractCardSearchableText, extractCardTags } from '../../composables/useSearch';
+import { useSearch, extractCardSearchableText, extractCardTags, extractCardShortFields } from '../../composables/useSearch';
 import searchIndex from '../../utils/searchIndex.js';
 import { defaultAutoTagRules, compileAutoTagRules } from '../../utils/cardLoader.js';
 import { api } from '../../bridge/api';
@@ -351,6 +351,7 @@ import {
     loadCardFullData, syncCardLightFields, LIBRARY_ROOT, setLastOpenedPath,
     appendImportedCards
 } from '../useMobileLibrary';
+import { resetMetaDb } from '../sqliteMeta.js'; // 🚀 P2 B2:授权切换时清空元数据库
 
 export default {
     name: 'CardLibraryView',
@@ -413,11 +414,20 @@ export default {
         // 增量渲染:首次只渲染 24 张,触底每次加 16 张
         const BATCH_STEP = 16;
         const renderCount = ref(24);
-        const visibleList = computed(() => filtered.value.slice(0, renderCount.value));
+        // 🚀 C3 加载期直通:库未就绪且无搜索词时,直接切增量库切片——渐进渲染期 2 万卡每批
+        // push 都触发 filtered 全量 filter+sort(约 834 批全库重排)是加载期卡顿主因;
+        // 直通后加载期零过滤零排序(正确性:加载完成的瞬间 filtered 接管,分组/搜索/标签过滤恢复)。
+        const loadingDirect = () =>
+            loading.value && !libraryReady.value && !String(queryInput.value || '').trim();
+        const visibleList = computed(() => {
+            if (loadingDirect()) return mobileLibrary.library.slice(0, renderCount.value);
+            return filtered.value.slice(0, renderCount.value);
+        });
         function extendRender() {
-            if (renderCount.value >= filtered.value.length) return;
+            const total = loadingDirect() ? mobileLibrary.library.length : filtered.value.length;
+            if (renderCount.value >= total) return;
             renderCount.value += BATCH_STEP;
-            if (renderCount.value > filtered.value.length) renderCount.value = filtered.value.length;
+            if (renderCount.value > total) renderCount.value = total;
         }
         // 触底加载:基于滚动方向判定,避免 van-pull-refresh 回弹导致哨兵反复触发。
         // 只在大于 lastScrollTop 且距底部 < 180px 时加载;筛选/搜索/分组切换时重置 scrollTop。
@@ -707,8 +717,9 @@ onBeforeUnmount(() => {
             needsAuth.value = !mobileLibrary.ready && !!mobileLibrary.error;
             libraryReady.value = mobileLibrary.ready;
             // 库加载成功后异步构建搜索倒排索引（分块构建不阻塞 UI，万卡库搜索加速）
+            // 🚀 C2:短字段倒排(C2 降量) + 长文本线性降级兜底
             if (libraryReady.value && mobileLibrary.library.length > 0) {
-                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags).catch(() => {});
+                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags, extractCardShortFields).catch(() => {});
             }
             if (needsAuth.value && !authLost.value) {
                 // 扫描失败且非"库根不可用"时,区分首次授权与授权失效(需查原生持久化状态)
@@ -738,6 +749,7 @@ onBeforeUnmount(() => {
             const res = await window.electronAPI.selectFolder();
             if (res && !res.error) {
                 authLost.value = false;
+                resetMetaDb(); // 🚀 P2 B2:库目录已切换,清空旧元数据库快照
                 load(true);
                 // 选错目录引导:授权成功但该文件夹没有角色卡
                 if (!(res.files && res.files.length)) {
@@ -1253,7 +1265,7 @@ onBeforeUnmount(() => {
         // 🚀 轻量化配套:详情页保存/批量编辑后 revision 递增 → 分块重建搜索索引(轻量 _searchText,代价极低)
         watch(() => mobileLibrary.revision, () => {
             if (mobileLibrary.library.length > 0) {
-                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags).catch(() => {});
+                searchIndex.buildAsync(mobileLibrary.library, extractCardSearchableText, extractCardTags, extractCardShortFields).catch(() => {});
             }
         });
 

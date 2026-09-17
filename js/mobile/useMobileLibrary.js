@@ -12,12 +12,13 @@
 import { reactive } from 'vue';
 import { normalizeCardData, isCharacterCardData, getCardRejectReason } from '../utils/cardLoader.js';
 import { parsePNGChunk, deepScanForJSON } from '../utils/pngParser.js';
-import { extractCardLightFields, lightFieldsToCache, lightFieldsFromCache } from '../utils/cardLight.js';
+import { extractCardLightFields, lightFieldsToCache, lightFieldsFromCache, toMemorySearchText } from '../utils/cardLight.js';
 import { prefillCoverCache } from './components/MobileCardCover.vue';
 // Worker 内联（?worker&inline）：Android WebView 加载外部 Worker 文件不可靠，内联为 data URL 后由 Vite 生成降级兜底
 import cardParseWorker from './cardParseWorker.js?worker&inline';
-import { restoreItemsFromCacheText, buildLightItem, NEG, cacheFingerprint as coreCacheFingerprint } from './libraryCacheCore.js';
+import { restoreItemsFromCacheText, restoreItemsFromShardTexts, buildLightItem, NEG, cacheFingerprint as coreCacheFingerprint, shardOfKey, shardFileName, CACHE_SHARDS } from './libraryCacheCore.js';
 import cacheRestoreWorker from './cacheRestoreWorker.js?worker&inline';
+import { restoreFromMetaDb, persistMetas, removeMetaCards, syncMetas } from './sqliteMeta.js'; // 🚀 P2 B2:SQLite 元数据库数据层
 
 // ---------- 阶段打点（缺陷 #001 排查基建，永久保留） ----------
 // plog 输出各阶段累计耗时:scan=SAF枚举 read=文件读取 parse=解析 publish=发布 cache=缓存落盘 total=总耗时
@@ -51,49 +52,130 @@ export function setLastOpenedPath(p) { lastOpenedPath = String(p || ''); }
 export function getLastOpenedPath() { return lastOpenedPath; }
 
 // ---------- 轻量内嵌缓存（二次启动秒开:v2 只存轻量字段,免读文件免解析） ----------
-// 键: 文件 path+mtime+size 指纹;值: lightFieldsToCache 紧凑对象。缓存文件存库目录 .jskzx_cache.json
-const CACHE_FILE = '/library/.jskzx_cache.json';
-const CACHE_VERSION = 2; // v2=轻量字段(与 libraryCacheCore 单一事实源保持一致,local 用于 scheduleCacheFlush 版本判断)
+// 🚀 B1(两万卡专项):缓存从单文件 .jskzx_cache.json 拆为 .jskzx_cache/ 目录 16 个分片,
+// 单卡变更只重写所在分片(≤1.25MB),两万卡总写盘仍为 ~20MB 但延迟变为增量;
+// restore 传分片原文到 Worker 避免重复 stringify。
+const CACHE_DIR = '/library/.jskzx_cache';
+const CACHE_FILE_LEGACY = '/library/.jskzx_cache.json'; // 旧版单文件(用于迁移,存在时读取并转换)
+const CACHE_VERSION = 2;
 let embeddedCache = null; // { version, items: { [fingerprint]: cachedLight } }
-let cacheDirty = false;
+let embeddedCacheTexts = null; // string[16] 分片原文(供 restoreViaWorker,避免重复 parse)
+const dirtyShards = new Set(); // B1:待写分片索引(0..15),单卡变更只加对应分片
 
 const cacheFingerprint = coreCacheFingerprint; // F3: 纯函数迁至 libraryCacheCore.js
+
+/** B1:标记某个缓存键所在分片待写(替换旧 cacheDirty=true 单词) */
+function markCacheDirty(keyOrPath) {
+    dirtyShards.add(shardOfKey(keyOrPath));
+}
+
+/** 并行读 16 个分片文件,返回 string[16](null=不存在) */
+async function readShardTexts() {
+    const api = window.electronAPI;
+    return Promise.all(Array.from({ length: CACHE_SHARDS }, (_, i) =>
+        api.readText(`${CACHE_DIR}/${shardFileName(i)}`)
+            .then(r => (r && r.success && typeof r.text === 'string') ? r.text : null)
+            .catch(() => null)
+    ));
+}
+
+/** 从分片原文构建 embeddedCache(主线程小 parse,与旧版单文件 20MB parse 成本等价) */
+function mergeShardTextsIntoCache(texts) {
+    const items = {};
+    for (const text of texts) {
+        if (!text) continue;
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed && parsed.version === CACHE_VERSION && parsed.items) {
+                Object.assign(items, parsed.items); // 分片间键天然不冲突(shard 哈希)
+            }
+        } catch (e) { /* 单片损坏跳过 */ }
+    }
+    embeddedCache = { version: CACHE_VERSION, items };
+}
 
 async function loadEmbeddedCache() {
     if (embeddedCache) return embeddedCache;
     try {
-        const r = await window.electronAPI.readText(CACHE_FILE);
+        embeddedCacheTexts = await readShardTexts();
+        const hasAny = embeddedCacheTexts.some(t => t != null);
+        if (hasAny) {
+            mergeShardTextsIntoCache(embeddedCacheTexts);
+            // 迁移遗留:清理旧单文件(后台,非阻塞)
+            if (embeddedCache && Object.keys(embeddedCache.items).length > 0) {
+                window.electronAPI.deleteFile?.(CACHE_FILE_LEGACY).catch?.(() => {});
+            }
+            return embeddedCache;
+        }
+        // 分片全空:回退旧单文件(首迁移)
+        const r = await window.electronAPI.readText(CACHE_FILE_LEGACY);
         if (r && r.success && r.text) {
             const parsed = JSON.parse(r.text);
             if (parsed && parsed.version === CACHE_VERSION && parsed.items) {
                 embeddedCache = parsed;
+                embeddedCacheTexts = null; // 分片尚空,稍后 flush 时写全量
                 return embeddedCache;
             }
         }
     } catch (e) { /* 首次无缓存/版本不兼容 */ }
     embeddedCache = { version: CACHE_VERSION, items: {} };
+    embeddedCacheTexts = Array(CACHE_SHARDS).fill(null);
     return embeddedCache;
 }
 
 let cacheFlushTimer = null;
 function scheduleCacheFlush() {
-    if (!cacheDirty) return;
+    if (!dirtyShards.size) return;
     if (cacheFlushTimer) return;
     cacheFlushTimer = setTimeout(async () => {
         cacheFlushTimer = null;
-        cacheDirty = false;
         if (!embeddedCache) return;
         try {
-            // 限制缓存体积:最多保留 20000 条轻量条目(每条 <1KB,总量 ~20MB 上限)
+            // 限制缓存体积:最多保留 20000 条轻量条目
             const keys = Object.keys(embeddedCache.items);
+            let needFullFlush = false;
             if (keys.length > 20000) {
                 for (const k of keys.slice(0, keys.length - 20000)) delete embeddedCache.items[k];
+                // 裁剪会删任意分片的键 → 全量重写所有分片
+                for (let i = 0; i < CACHE_SHARDS; i++) dirtyShards.add(i);
+                needFullFlush = true;
             }
+            // B1:增量分片写——只重写 dirtyShards 内的分片
+            const toFlush = [...dirtyShards];
+            dirtyShards.clear();
             const flushStart = pnow();
-            await window.electronAPI.writeText(CACHE_FILE, JSON.stringify(embeddedCache));
+            const api = window.electronAPI;
+            // 确保分片目录存在(SAF 首次写入需 mkdir)
+            try { await api.mkdir?.(CACHE_DIR); } catch (e) { /* 已存在忽略 */ }
+            for (const i of toFlush) {
+                const shardItems = {};
+                for (const [k, v] of Object.entries(embeddedCache.items)) {
+                    if (shardOfKey(k) === i) shardItems[k] = v;
+                }
+                const json = JSON.stringify({ version: CACHE_VERSION, items: shardItems });
+                await api.writeText(`${CACHE_DIR}/${shardFileName(i)}`, json);
+            }
             perf.cacheWrite += pnow() - flushStart;
         } catch (e) { /* 缓存写失败不影响主流程 */ }
     }, 2000);
+}
+
+// ---------- 🚀 渐进上屏(缓存/DB 一次性重建后的安全展示) ----------
+// 重型库(592+卡)一次性赋值会阻塞主线程 ~4s;分 60 张/批 push,首屏即时可见。
+function progressivePublish(items) {
+    const FIRST_BATCH = 60;
+    mobileLibrary.library = items.slice(0, FIRST_BATCH);
+    reportFullyDrawnOnce();
+    if (items.length > FIRST_BATCH) {
+        let idx = FIRST_BATCH;
+        const tick = () => {
+            if (idx >= items.length) return;
+            mobileLibrary.library.push(...items.slice(idx, idx + FIRST_BATCH));
+            idx += FIRST_BATCH;
+            setTimeout(tick, 0);
+        };
+        setTimeout(tick, 0);
+    }
 }
 
 // ---------- 卡片解析 Worker(大库加载加速:原始解析移出主线程) ----------
@@ -241,7 +323,7 @@ function hasCharaBatch() {
 const RESTORE_VIA_WORKER = true; // F3 特性开关:出问题改 false 即回退 v1.10.15 行为
 let restoreWorker = null, restoreReqId = 0;
 
-function restoreViaWorker(text) {
+function restoreViaWorker(textOrTexts) {
     return new Promise((resolve) => {
         try {
             if (!restoreWorker) restoreWorker = new cacheRestoreWorker();
@@ -252,14 +334,16 @@ function restoreViaWorker(text) {
                 clearTimeout(timer);
                 resolve(e.data.ok ? e.data : null);
             };
-            restoreWorker.postMessage({ id, text });
+            // B1:分片文本数组(免二次 stringify)或单文件文本(旧版兼容)
+            if (Array.isArray(textOrTexts)) restoreWorker.postMessage({ id, texts: textOrTexts });
+            else restoreWorker.postMessage({ id, text: textOrTexts });
         } catch (_) { resolve(null); }
     });
 }
 
 /**
- * 🚀 二次启动秒开:从 .jskzx_cache.json 直接重建轻量库(零 scan 零读文件)。
- * 缓存 key 为 path|mtime|size 指纹,可直接反解出物理元信息。
+ * 🚀 二次启动秒开:从缓存直接重建轻量库(零 scan 零读文件)。
+ * B1:优先走分片原文(embeddedCacheTexts,免重复 stringify);旧单文件缓存兼容回退。
  * 上屏后由 reconcileLibraryInBackground 后台 scan 增量校验(新增/删除/修改)。
  * @returns {boolean} 是否成功走缓存先行
  */
@@ -269,37 +353,33 @@ async function restoreLibraryFromCache(cache) {
     if (!keys.length) return false;
     let items = [];
     let categories = [];
-    if (RESTORE_VIA_WORKER) {
-        // 🚀 F3: 缓存 JSON 文本 → Worker 内 parse+重建,主线程零重活(I10)
-        const built = await restoreViaWorker(JSON.stringify(cache));
-        if (built && built.items) { items = built.items; categories = built.categories || []; }
-    }
-    if (!items.length) {
-        // 回退:主线程重建(与 v1.10.15 等价)
-        const r = restoreItemsFromCacheText(JSON.stringify(cache));
-        if (r && r.items) { items = r.items; categories = r.categories || []; }
+    const shardTexts = embeddedCacheTexts && embeddedCacheTexts.some((t) => t != null) ? embeddedCacheTexts : null;
+    if (shardTexts) {
+        if (RESTORE_VIA_WORKER) {
+            // 🚀 F3: 分片原文 → Worker 内逐片 parse+合并重建,主线程零重活(I10/B1)
+            const built = await restoreViaWorker(shardTexts);
+            if (built && built.items) { items = built.items; categories = built.categories || []; }
+        }
+        if (!items.length) {
+            const r = restoreItemsFromShardTexts(shardTexts);
+            if (r && r.items) { items = r.items; categories = r.categories || []; }
+        }
+    } else {
+        if (RESTORE_VIA_WORKER) {
+            const built = await restoreViaWorker(JSON.stringify(cache));
+            if (built && built.items) { items = built.items; categories = built.categories || []; }
+        }
+        if (!items.length) {
+            const r = restoreItemsFromCacheText(JSON.stringify(cache));
+            if (r && r.items) { items = r.items; categories = r.categories || []; }
+        }
     }
     if (!items.length) return false;
     mobileLibrary.categories = categories.length ? categories : mobileLibrary.categories;
     mobileLibrary.ready = true;
     mobileLibrary.loading = false;
     mobileLibrary.error = '';
-    // 🚀 渐进上屏:首屏只渲染前 60 张,其余分批 push 追加。
-    // 重型库实测:592 张一次性赋值 → Vue 建 592 个 DOM 项阻塞主线程 ~4s(reportFullyDrawn 被饿死);
-    // 分 60 张/批后首屏立即可见,主线程不再长阻塞。
-    const FIRST_BATCH = 60;
-    mobileLibrary.library = items.slice(0, FIRST_BATCH);
-    reportFullyDrawnOnce();
-    if (items.length > FIRST_BATCH) {
-        let idx = FIRST_BATCH;
-        const tick = () => {
-            if (idx >= items.length) return;
-            mobileLibrary.library.push(...items.slice(idx, idx + FIRST_BATCH));
-            idx += FIRST_BATCH;
-            setTimeout(tick, 0);
-        };
-        setTimeout(tick, 0);
-    }
+    progressivePublish(items);
     reconcileLibraryInBackground();
     return true;
 }
@@ -309,9 +389,37 @@ async function restoreLibraryFromCache(cache) {
 // reconcile 的 staging 全量覆盖会把正在渐进上屏的新库闪回旧缓存视图;且 worldbooks 未清空,
 // 每次 reconcile 都会把全库世界书重复 push 到 worldbooks 累积翻倍。
 let reconciling = false;
+let reconcileCancelled = false; // 🚀 E1:用户触发 refresh/loadLibrary(refresh=true) 时置 true,终止当前 reconcile
 // 🛡️ BUG-11:加载重入守卫。防止缓存先行(s)与用户触发的 refresh(t)双 scan 并发,
 // 后完成的覆盖先完成的→列表闪变/世界书累积翻倍
 let loadPromise = null;
+
+/** 🚀 E1:增量更新——对比 staging(扫描结果)与现有库,按 path 增删改,不全量替换数组,
+ * 避免两万卡每次 reconcile 都触发一次全库 filter+sort (一次 ≈ 数百 ms 卡顿)。
+ * 实现:构建 path→index 一次,替换赋值(不改长度),删除倒序 splice,追加放末尾(扫描顺序)。 */
+function applyReconcileDiff(staging) {
+    // 1. 路径索引(一次 O(N) 构建,供替换 O(1) 查找)
+    const oldPathMap = new Map();
+    mobileLibrary.library.forEach((c, i) => oldPathMap.set(c.path, i));
+    const newPathSet = new Set(staging.map((c) => c.path));
+    // 2. 替换内容变更的卡(赋值触发 Vue 单条响应式;不改数组长度,oldPathMap 索引始终有效)
+    for (const card of staging) {
+        const existIdx = oldPathMap.get(card.path);
+        if (existIdx !== undefined && mobileLibrary.library[existIdx] !== card) {
+            mobileLibrary.library[existIdx] = card;
+        }
+    }
+    // 3. 删除磁盘上已不存在的卡(倒序 splice,不影响前面未处理位置的索引)
+    for (let i = mobileLibrary.library.length - 1; i >= 0; i--) {
+        if (!newPathSet.has(mobileLibrary.library[i].path)) mobileLibrary.library.splice(i, 1);
+    }
+    // 4. 追加新增卡(按 staging 扫描顺序,追加到末尾)
+    const stillInLib = new Set(mobileLibrary.library.map((c) => c.path));
+    for (const card of staging) {
+        if (!stillInLib.has(card.path)) mobileLibrary.library.push(card);
+    }
+}
+
 async function reconcileLibraryInBackground() {
     if (reconciling || mobileLibrary.loading) return;
     reconciling = true;
@@ -323,7 +431,7 @@ async function reconcileLibraryInBackground() {
         // 清空世界书再重建:防止多次 reconcile 累积重复条目
         mobileLibrary.worldbooks = [];
         const cache = await loadEmbeddedCache();
-        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE);
+        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE_LEGACY);
         const imgFiles = files.filter((f) => !jsonFiles.includes(f));
         const staging = [];
         const append = (arr) => { for (const x of arr) if (x) staging.push(x); };
@@ -336,6 +444,7 @@ async function reconcileLibraryInBackground() {
             return true;
         };
         for (let i = 0; i < jsonFiles.length; i += JSON_BATCH) {
+            if (reconcileCancelled) break; // 🚀 E1:用户刷新时终止旧 reconcile
             const batch = jsonFiles.slice(i, i + JSON_BATCH);
             const missBatch = batch.filter((f) => !cacheHit(f));
             const textMap = new Map();
@@ -352,6 +461,7 @@ async function reconcileLibraryInBackground() {
             await yieldFrame();
         }
         for (let i = 0; i < imgFiles.length; i += PNG_BATCH) {
+            if (reconcileCancelled) break; // 🚀 E1
             const batch = imgFiles.slice(i, i + PNG_BATCH);
             const missBatch = batch.filter((f) => !cacheHit(f));
             const textMap = new Map();
@@ -369,14 +479,20 @@ async function reconcileLibraryInBackground() {
             append(items);
             await yieldFrame();
         }
-        mobileLibrary.library = staging;
+        // 🚀 E1:增量 diff 更新——替换全量赋值,避免两万卡每次 reconcile 触发全库重排
+        if (!reconcileCancelled) {
+            applyReconcileDiff(staging);
+            syncMetas(staging); // 🚀 BUG-17 fix-3:全量对齐 SQLite(清幽灵卡+变更一次落盘)
+        }
         mobileLibrary.revision++;
         scheduleCacheFlush();
     } catch (e) { /* 后台修正失败:保留缓存先行视图 */ }
-    finally { reconciling = false; }
+    finally { reconciling = false; reconcileCancelled = false; }
 }
 
 export async function loadLibrary(refresh = false) {
+    // 🚀 E1:下拉刷新时终止正在跑的后台 reconcile(避免双 scan 并发,用户动作优先)
+    if (refresh) reconcileCancelled = true;
     // 🛡️ BUG-11:加载重入守卫。loadLibrary 是重操作(全量 scan+解析,秒级),视图层虽有 loading 节流,
     // 但 reconcileLibraryInBackground 与 loadLibrary 是两个独立入口,可并发触发(缓存先行秒开时
     // reconcile 仍在跑,用户点刷新 → 双 scan 并发,后完成的覆盖先完成的,期间列表抖动/卡片闪变)。
@@ -387,8 +503,23 @@ export async function loadLibrary(refresh = false) {
     }
     // 已加载完成且库非空时跳过重复扫描（返回页面/组件重复挂载不重扫；下拉刷新等传 true 强制重扫）
     if (!refresh && mobileLibrary.ready && mobileLibrary.library.length > 0) return;
-    // 🚀 二次启动秒开:轻量缓存先行直接上屏(零 scan 零读文件),scan 后台增量校验
+    // 🚀 二次启动秒开(两万卡):SQLite 元数据库优先(一次 SQL 拿全量轻量字段,免读/合并 16 分片),
+    // 失败自动回退 JSON 分片缓存先行;两者都只上屏,scan 后台增量校验。
     if (!refresh) {
+        // 🚀 P2 B2:SQLite 元数据库路径
+        const dbItems = await restoreFromMetaDb();
+        if (dbItems && dbItems.length) {
+            const cats = new Set();
+            for (const c of dbItems) if (c.category && c.category !== '未分类') cats.add(c.category);
+            mobileLibrary.categories = [...cats];
+            mobileLibrary.ready = true;
+            mobileLibrary.loading = false;
+            mobileLibrary.error = '';
+            progressivePublish(dbItems);
+            reconcileLibraryInBackground();
+            return;
+        }
+        // 回退:JSON 分片缓存先行
         const cache = await loadEmbeddedCache();
         if (await restoreLibraryFromCache(cache)) return;
     }
@@ -419,7 +550,7 @@ export async function loadLibrary(refresh = false) {
         mobileLibrary.progress = { done: 0, total: files.length };
 
         const cache = await loadEmbeddedCache();
-        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE);
+        const jsonFiles = files.filter((f) => (f.name || '').toLowerCase().endsWith('.json') && f.path !== CACHE_FILE_LEGACY);
         const imgFiles = files.filter((f) => !jsonFiles.includes(f));
 
         const append = (arr) => { for (const x of arr) if (x) staging.push(x); };
@@ -434,9 +565,8 @@ export async function loadLibrary(refresh = false) {
             publishedCursor = staging.length;
             if (added.length) {
                 mobileLibrary.library.push(...added);
-            } else {
-                mobileLibrary.library = staging.slice(); // 无增量时(如空批次)兜底全量
             }
+            // 🚀 E1:空批次不再全量兜底赋值(原 staging.slice() 是 O(N) 且无新增时多余)
             prefetchCoverThumbs(added);   // 阶段2:只预热新增卡缩略图(避免每批全量重算)
             reportFullyDrawnOnce();       // 冷启动 KPI 埋点
             perf.publish += pnow() - b0;
@@ -504,7 +634,9 @@ export async function loadLibrary(refresh = false) {
             await yieldFrame();
         }
 
-        mobileLibrary.library = staging;
+        // 🚀 E1:加载完成时 diff 对齐(渐进渲染已 push 过大部分,这里处理删除/替换/追加)
+        applyReconcileDiff(staging);
+        syncMetas(staging); // 🚀 BUG-17 fix-3:全量对齐 SQLite(清幽灵卡+变更一次落盘)
         mobileLibrary.ready = true;
         mobileLibrary.revision++;
         scheduleCacheFlush();
@@ -593,6 +725,8 @@ export async function appendImportedCards(copiedPaths) {
     if (added > 0) {
         mobileLibrary.revision++; // 触发搜索索引重建(CardLibraryView watch)
         scheduleCacheFlush();
+        // 🚀 BUG-17 fix-4:新增卡即时写入 SQLite(免等下次 reconcile 才更新元数据)
+        try { persistMetas(items.filter(Boolean)); } catch (e) { /* DB 写入失败下次 reconcile 覆盖 */ }
     }
     return { added, failed };
 }
@@ -639,7 +773,7 @@ async function parseLightCard(file, prefetchedText, cache) {
                     if (cache && fp) {
                         evictSamePathCache(cache, fp);
                         cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
-                        cacheDirty = true;
+                        markCacheDirty(fp);
                         scheduleCacheFlush();
                     }
                 }
@@ -680,7 +814,7 @@ async function parseLightCard(file, prefetchedText, cache) {
             if (cache && fp) {
                 evictSamePathCache(cache, fp);
                 cache.items[fp] = { ...NEG, m: file.mtime || 0, s: file.size || 0 };
-                cacheDirty = true;
+                markCacheDirty(fp);
                 scheduleCacheFlush();
             }
             return null;
@@ -696,7 +830,7 @@ async function parseLightCard(file, prefetchedText, cache) {
             try {
                 evictSamePathCache(cache, fp);
                 cache.items[fp] = lightFieldsToCache(fields);
-                cacheDirty = true;
+                markCacheDirty(fp);
                 scheduleCacheFlush();
             } catch (e) { /* 缓存写入失败不影响主流程 */ }
         }
@@ -722,13 +856,55 @@ async function drainParseRetries() {
         const it = await parseLightCard(file, undefined, cache); // 不带预取文本→重读重析
         if (it) {
             mobileLibrary.library.push(it);
-            n++; cacheDirty = true; scheduleCacheFlush();
+            n++; // 缓存写入已在 parseLightCard 内 markCacheDirty + scheduleCacheFlush
         } else {
             parseRetryPaths.delete(file.path); // 彻底失败:允许下轮 scan 再试
         }
     }
     if (n) { mobileLibrary.revision++; }
     if (n) console.info(`[Perf] retryParsed=${n}`);
+}
+
+// ---------- E2: 内容查重签名缓存(path→96 路 MinHash 签名) ----------
+// 持久化到库根 .jskzx_sigs.json(原生 scan 已按 .jskzx 前缀跳过该文件)。
+// 收益:二次查重不再全文水合 2GB chara——只对新卡算签名,其余直接复用内存/磁盘缓存。
+const SIGS_FILE = '/library/.jskzx_sigs.json';
+const contentSigs = new Map();
+let sigsLoaded = false;
+let sigFlushTimer = null;
+
+/** 加载签名缓存(首次调用时读盘),返回 Map<path, sig> */
+export async function loadContentSigs() {
+    if (sigsLoaded) return contentSigs;
+    sigsLoaded = true;
+    try {
+        const r = await window.electronAPI.readText(SIGS_FILE);
+        if (r && r.success && r.text) {
+            const parsed = JSON.parse(r.text);
+            if (parsed && parsed.version === 1 && parsed.sigs) {
+                for (const [k, v] of Object.entries(parsed.sigs)) {
+                    if (Array.isArray(v) && v.length === 96) contentSigs.set(k, v);
+                }
+            }
+        }
+    } catch (e) { /* 无签名缓存 */ }
+    return contentSigs;
+}
+
+/** 取卡签名(未计算返回 null) */
+export function getContentSig(path) { return contentSigs.get(path) || null; }
+
+/** 写入卡签名(节流 1.5s 持久化) */
+export function setContentSig(path, sig) {
+    if (!path || !Array.isArray(sig) || !sig.length) return;
+    contentSigs.set(path, sig);
+    if (sigFlushTimer) return;
+    sigFlushTimer = setTimeout(() => {
+        sigFlushTimer = null;
+        try {
+            window.electronAPI.writeText(SIGS_FILE, JSON.stringify({ version: 1, sigs: Object.fromEntries(contentSigs) })).catch?.((_) => {});
+        } catch (e) { /* 签名写失败不影响查重 */ }
+    }, 1500);
 }
 
 /**
@@ -917,7 +1093,7 @@ export function syncCardLightFields(cardLike) {
         light.name = fields.name || light.name;
         light.creator = fields.creator || light.creator;
         light._desc = fields.desc;
-        light._searchText = fields.searchText;
+        light._searchText = toMemorySearchText(fields.searchText);
         light._tags = fields.tags;
         light._tokens = fields.tokens;
         light._lb = fields.hasLorebook;
@@ -932,10 +1108,14 @@ export function syncCardLightFields(cardLike) {
                 const fp = `${light.path}|${light._mtime || 0}|${light._size || 0}`;
                 evictSamePathCache(embeddedCache, fp);
                 embeddedCache.items[fp] = lightFieldsToCache(fields);
-                cacheDirty = true;
+                markCacheDirty(fp);
                 scheduleCacheFlush();
             } catch (e) { /* 忽略 */ }
         }
+        // 🚀 BUG-17 fix-1:编辑保存后即时同步 SQLite 元数据库
+        // 防止重启 DB restore 路径显示旧标签/旧名称(直到 reconcile 才修正)。
+        // persistMetas 是 fire-and-forget(内部 .catch 静默)，无性能影响。
+        try { persistMetas([light]); } catch (e) { /* 失败走下次 reconcile 自愈 */ }
         return true;
     } catch (e) {
         return false;
@@ -967,6 +1147,8 @@ export async function moveCardToGroup(card, targetGroup) {
             light.id = card.path;
             mobileLibrary.revision++;
         }
+        // 🚀 BUG-17 fix-3:移动后清理旧 path 的 SQLite 行(旧 DB 行不删→幽灵卡永久残留)
+        try { removeMetaCards([oldPath]); } catch (e) { /* DB 清理失败下次 reconcile 覆盖 */ }
         return { success: true };
     }
     return { success: false, error: (res && res.error) || '移动失败' };
@@ -995,6 +1177,17 @@ export async function removeCard(card) {
         const idx = mobileLibrary.library.findIndex((c) => c.path === card.path);
         if (idx >= 0) mobileLibrary.library.splice(idx, 1);
         mobileLibrary.revision++;
+        // 🚀 BUG-17 fix-2:删除后同步清理 JSON 分片缓存条目 + SQLite 行,防重启幽灵卡
+        // (旧实现只 splice 内存数组——分片缓存与 DB 里该卡的行永久残留,INSERT OR REPLACE 不删行)
+        if (embeddedCache) {
+            try {
+                const fp = `${card.path}|0|0`; // evictSamePathCache 只取 path 前缀,key 数值任意
+                evictSamePathCache(embeddedCache, fp);
+                markCacheDirty(fp);
+                scheduleCacheFlush();
+            } catch (e) { /* 缓存清理失败不改主流程 */ }
+        }
+        try { removeMetaCards([card.path]); } catch (e) { /* DB 清理失败下次 reconcile 覆盖 */ }
         return { success: true };
     }
     return { success: false, error: (res && res.error) || '删除失败' };

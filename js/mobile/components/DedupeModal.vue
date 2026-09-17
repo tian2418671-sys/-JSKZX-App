@@ -79,7 +79,7 @@
 <script>
 import { ref, watch } from 'vue';
 import { showToast } from 'vant';
-import { mobileLibrary, loadCardFullData, loadCardsFullDataBatch } from '../useMobileLibrary';
+import { mobileLibrary, loadCardFullData, loadCardsFullDataBatch, loadContentSigs, getContentSig, setContentSig } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import DiffModal from './DiffModal.vue';
 
@@ -180,19 +180,31 @@ export default {
             const items = [...mobileLibrary.library];
             if (!items.length) { emptyText.value = '卡片库为空，无法进行版本查重'; return; }
 
-            // 🚀 批量水合:分批桥接 + 有界并发,全程进度可见(逐卡单次 IPC 在千卡库上要数分钟)
-            const dataMap = await loadCardsFullDataBatch(items, (done, total) => {
-                pending.value = `读取卡片 ${done}/${total}…`;
-            });
+            // 🚀 E2:先载入持久化签名缓存;已算过签名的卡零水合零解析直接复用,
+            // 只对新增/未算卡发起 loadCardsFullDataBatch(二次查重从 2GB chara 过桥降到 0)
+            await loadContentSigs();
+            const needCompute = items.filter((item) => !getContentSig(item.path));
+            const dataMap = needCompute.length
+                ? await loadCardsFullDataBatch(needCompute, (done, total) => {
+                    pending.value = `读取卡片 ${done}/${total}…`;
+                })
+                : new Map();
 
             // 规范化文本，内容过短（<20 字符）无法可靠判定，跳过
             const valid = [];
             items.forEach((item, idx) => {
+                const cachedSig = getContentSig(item.path);
+                if (cachedSig) {
+                    valid.push({ item, idx, sig: cachedSig, text: '' });
+                    return;
+                }
                 const full = dataMap.get(item.path);
                 if (!full) return;
                 const text = normalizeText(extractContentText({ data: full }));
                 if (text.length < 20) return;
-                valid.push({ item, idx, text });
+                const sig = computeMinHash(getShingles(text));
+                setContentSig(item.path, sig); // E2:增量持久化,二次查重免水合
+                valid.push({ item, idx, sig, text });
             });
             pending.value = '';
             if (valid.length < 2) {
@@ -201,15 +213,12 @@ export default {
             }
 
             // MinHash 签名 + LSH 候选 + 精确相似度确认（阈值 85%）
-            const sigs = valid.map((v) => computeMinHash(getShingles(v.text)));
-            // 🐛 BUG-15 修复:签名回填到条目自身(v.sig),供分组展示按 master 复算相似度;
-            // 此前只存并行数组 sigs[i],而下方 _simPct 读 v.sig → undefined →
-            // estimateSimilarity 取 undefined.length 抛 TypeError,整轮内容查重「查重失败」,从未成功过。
-            valid.forEach((v, i) => { v.sig = sigs[i]; });
+            // v.sig 已直接回填(含缓存复用),供分组展示按 master 复算相似度;
+            // BUG-15 教训:签名必须挂到条目自身,不能只存并行数组。
             const buckets = new Map();
             valid.forEach((_, i) => {
                 for (let b = 0; b < LSH_BANDS; b++) {
-                    const k = bandKey(sigs[i], b);
+                    const k = bandKey(valid[i].sig, b);
                     if (!buckets.has(k)) buckets.set(k, []);
                     buckets.get(k).push(i);
                 }
@@ -225,7 +234,7 @@ export default {
                         const pk = a < b ? a + ':' + b : b + ':' + a;
                         if (seenPairs.has(pk)) continue;
                         seenPairs.add(pk);
-                        if (estimateSimilarity(sigs[a], sigs[b]) >= THRESHOLD) uf.union(a, b);
+                        if (estimateSimilarity(valid[a].sig, valid[b].sig) >= THRESHOLD) uf.union(a, b);
                     }
                 }
             });

@@ -15,6 +15,7 @@ const Update = registerPlugin('UpdatePlugin');
 const Keystore = registerPlugin('KeystorePlugin');
 const Memory = registerPlugin('MemoryPlugin');
 const KeepAlive = registerPlugin('KeepAlivePlugin');
+const SqliteMeta = registerPlugin('SqliteMetaPlugin');
 
 /** 后台保活(原生前台服务 + WakeLock;必须在应用前台时调用,Android 12+ 禁止后台起 FGS) */
 export const keepAlive = {
@@ -363,6 +364,36 @@ export const androidImpl = {
     async rescanLibrary(folderPath) {
         const rel = toRelativePath(folderPath);
         if (rel === null) return { folderPath: null, files: [], error: '未指定库目录' };
+        // 🚀 A2:分块拉取 scan 结果(单块 ≤500 条,两万卡 ~4MB 改为 ~8 块 evaluateJavascript,
+        // 主线程无大字符串解析长阻塞);scanStart/scanNext 为 v1.10.25+ 新增协议。
+        if (typeof LibraryFs.scanStart === 'function' && typeof LibraryFs.scanNext === 'function') {
+            try {
+                const start = await LibraryFs.scanStart({ path: rel });
+                if (start && start.error) return { folderPath: LIBRARY_ROOT, files: [], categories: [], error: start.error };
+                const files = [];
+                const total = (start && start.total) || 0;
+                const categories = (start && start.categories) || [];
+                let done = false;
+                let guard = 0;
+                while (!done && guard < 100000) {
+                    guard++;
+                    const chunk = await LibraryFs.scanNext({ batchSize: 500 });
+                    if (chunk && chunk.error) return { folderPath: LIBRARY_ROOT, files, categories, error: chunk.error };
+                    files.push(...((chunk && chunk.files) || []));
+                    done = !!(chunk && chunk.done);
+                }
+                return { folderPath: LIBRARY_ROOT, files, categories, total };
+            } catch (e) {
+                // 分块协议异常:回退旧版一次性 scan
+                const res = await LibraryFs.scan({ path: rel });
+                return {
+                    folderPath: LIBRARY_ROOT,
+                    files: (res && res.files) || [],
+                    categories: (res && res.categories) || [],
+                    error: (res && res.error) || undefined
+                };
+            }
+        }
         const res = await LibraryFs.scan({ path: rel });
         return {
             folderPath: LIBRARY_ROOT,
@@ -372,6 +403,17 @@ export const androidImpl = {
         };
     },
     // ---------- 分组(SAF 目录树操作) ----------
+    /** 🚀 B1:创建库内目录(分片缓存目录 .jskzx_cache 等);path 支持 /library/ 前缀或相对路径 */
+    async mkdir(path) {
+        const rel = toRelativePath(path);
+        if (rel === null) return { success: false, error: '路径无效' };
+        try {
+            const res = await LibraryFs.mkdir({ path: rel });
+            return { success: !!(res && res.success), error: (res && res.error) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '创建失败' };
+        }
+    },
     async createGroupFolder({ libraryPath, groupName } = {}) {
         const rel = toRelativePath(libraryPath);
         if (rel === null) return { success: false, error: '库目录无效' };
@@ -1921,5 +1963,42 @@ export const androidImpl = {
         } catch (e) {
             return { success: false, error: (e && e.message) || '批量导出失败' };
         }
+    },
+
+    // ---------- 🚀 P2 B2:SQLite 元数据库接口 ----------
+    /** 初始化元数据库(WAL/schema 迁移);异常返回 {success:false} (JS 可回退分片缓存) */
+    async metaInit() {
+        try { const r = await SqliteMeta.init(); return !!(r && r.success); } catch { return false; }
+    },
+    /** 写入 meta 表键值对(k/v 字符串) */
+    async metaSetMeta(k, v) {
+        try { const r = await SqliteMeta.setMeta({ k, v }); return !!(r && r.success); } catch { return false; }
+    },
+    async metaGetMeta(k) {
+        try { const r = await SqliteMeta.getMeta({ k }); return (r && r.value) || null; } catch { return null; }
+    },
+    /** 批量 upsert 卡片轻量字段(path 主键覆盖);cards=[{path,name,creator,...}] */
+    async metaUpsertCards(cards) {
+        try { const r = await SqliteMeta.upsertCards({ cards }); return (r && r.count) || 0; } catch { return 0; }
+    },
+    /** 查询全部卡片轻量字段(返回 [{path,name,...}]数组;空表返回[]) */
+    async metaQueryCards() {
+        try { const r = await SqliteMeta.queryCards(); return (r && r.cards) || []; } catch { return []; }
+    },
+    async metaCount() {
+        try { const r = await SqliteMeta.countCards(); return (r && r.count) || 0; } catch { return 0; }
+    },
+    async metaClear() {
+        try { await SqliteMeta.clearCards(); return true; } catch { return false; }
+    },
+    async metaDeleteCards(paths) {
+        try {
+            const r = await SqliteMeta.deleteCards({ paths: Array.isArray(paths) ? paths : [] });
+            return (r && r.count) || 0;
+        } catch { return 0; }
+    },
+    /** 🚀 BUG-17:全量替换 SQLite 元数据库(DELETE all + INSERT all),用于 reconcile 后同步 */
+    async metaSyncCards(cards) {
+        try { const r = await SqliteMeta.syncCards({ cards: cards || [] }); return !!(r && r.success); } catch { return false; }
     }
 };

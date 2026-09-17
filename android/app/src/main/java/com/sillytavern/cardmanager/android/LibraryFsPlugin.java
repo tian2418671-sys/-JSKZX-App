@@ -128,57 +128,137 @@ public class LibraryFsPlugin extends Plugin {
     private volatile java.util.List<Object[]> scanFilesList = new java.util.ArrayList<>();
     private volatile java.util.List<Object[]> scanDirsList = new java.util.ArrayList<>();
 
+    // 🚀 A1（两万卡专项）:queryChildren 行缓存——每目录单次批量 query 拿全部子项(含 mtime/size),
+    // 写入此缓存后 buildScanOutputFromIndex 直接读取,fillMtimesParallel 的 2 万次 query 归零。
+    // 参照开源项目 zhanghai/MaterialFiles DocumentResolver.queryChildren/directoryCursorCache 同款设计。
+    private static class CachedDocInfo {
+        final String documentId, name, mimeType;
+        final long size, lastModified;
+        CachedDocInfo(String documentId, String name, long size, long lastModified, String mimeType) {
+            this.documentId = documentId; this.name = name;
+            this.size = size; this.lastModified = lastModified; this.mimeType = mimeType;
+        }
+    }
+    private final java.util.Map<String, CachedDocInfo> docInfoCache = new java.util.HashMap<>();
+
+    /**
+     * 🚀 A1（两万卡专项）:每目录单次批量 query 建索引 + 行缓存（参照 MaterialFiles queryChildren）。
+     * 旧版用 dir.listFiles()(内部逐目录一次 query) + fillMtimesParallel(逐文件再一次 query)——
+     * 两万卡 = 2 万次 mtime query,实测 1994 卡 scan=57s(8-10 分钟)。
+     * 新版:每进一个目录,ContentResolver.query(buildChildDocumentsUriUsingTree,null)单次 Cursor
+     * 拿全子项(_ID/_DISPLAY_NAME/_SIZE/_LAST_MODIFIED/_MIME_TYPE),逐行填充 docInfoCache
+     * (relPath→属性);buildScanOutputFromIndex 直接从缓存读 mtime/size,
+     * fillMtimesParallel 对根扫描路径不再被调用,2 万 query → 0。
+     */
     private void buildRelIndex() {
         java.util.Map<String, DocumentFile> m = new java.util.HashMap<>();
-        java.util.List<Object[]> fileList = new java.util.ArrayList<>(); // {rel, DocumentFile}
+        java.util.Map<String, CachedDocInfo> infoMap = new java.util.HashMap<>();
+        java.util.List<Object[]> fileList = new java.util.ArrayList<>();
         java.util.List<Object[]> dirList = new java.util.ArrayList<>();
         DocumentFile root = rootFile();
         if (root == null) { relIndexReady = false; return; }
-        java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
+        Uri treeUri = root.getUri(); // fromTreeUri 创建的 DocumentFile 其 getUri() 即 tree URI
+        String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+        java.util.ArrayDeque<String> docIds = new java.util.ArrayDeque<>();
         java.util.ArrayDeque<String> rels = new java.util.ArrayDeque<>();
-        stack.push(root); rels.push("");
-        while (!stack.isEmpty()) {
-            DocumentFile dir = stack.pop();
+        docIds.push(rootDocId);
+        rels.push("");
+        while (!docIds.isEmpty()) {
+            String docId = docIds.pop();
             String dirRel = rels.pop();
-            for (DocumentFile f : dir.listFiles()) {
-                String name = f.getName();
-                if (name == null) continue;
-                if (f.isDirectory()) {
-                    if (name.startsWith(".")) continue; // 对齐 SCAN skipHidden:跳过隐藏目录
-                    String lower = name.toLowerCase(Locale.ROOT);
-                    if (SKIP_FOLDERS.contains(lower)) continue; // 对齐 walkDir 黑名单
-                    stack.push(f);
-                    String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
-                    rels.push(rel);
-                    dirList.add(new Object[]{ rel, f });
-                } else {
-                    // 🐛 过滤 tmp 替换残留(.jszkx-tmp / .tmp_<时间戳>),避免残留被当卡片扫描入库
-                    if (isTransientFile(name)) continue;
-                    String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
-                    m.put(rel, f);
-                    fileList.add(new Object[]{ rel, f });
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId);
+            android.database.Cursor cursor = null;
+            try {
+                // null projection = all columns (与 MaterialFiles/DocumentsUI 同款,
+                // 含 _ID/_DISPLAY_NAME/_SIZE/_LAST_MODIFIED/_MIME_TYPE/_FLAGS,性能无碍)
+                cursor = getContext().getContentResolver().query(childrenUri, null, null, null, null);
+                if (cursor == null) continue;
+                int idxId   = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                int idxName = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                int idxMime = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+                int idxSize = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+                int idxMtime= cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+                while (cursor.moveToNext()) {
+                    String childDocId = (idxId   >= 0 && !cursor.isNull(idxId))   ? cursor.getString(idxId)   : null;
+                    String name       = (idxName >= 0 && !cursor.isNull(idxName)) ? cursor.getString(idxName) : null;
+                    if (childDocId == null || name == null || name.isEmpty()) continue;
+                    String childRel = dirRel.isEmpty() ? name : dirRel + "/" + name;
+                    String mimeType = (idxMime >= 0 && !cursor.isNull(idxMime)) ? cursor.getString(idxMime) : "";
+                    long   size     = (idxSize >= 0 && !cursor.isNull(idxSize)) ? cursor.getLong(idxSize)   : 0L;
+                    long   mtime    = (idxMtime>= 0 && !cursor.isNull(idxMtime))? cursor.getLong(idxMtime)  : 0L;
+                    infoMap.put(childRel, new CachedDocInfo(childDocId, name, size, mtime, mimeType));
+                    boolean isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType);
+                    if (isDir) {
+                        if (name.startsWith(".")) continue;  // 对齐 scan:跳过隐藏目录
+                        String lower = name.toLowerCase(Locale.ROOT);
+                        if (SKIP_FOLDERS.contains(lower)) continue;
+                        Uri dirUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId);
+                        DocumentFile dirDf = DocumentFile.fromSingleUri(getContext(), dirUri);
+                        m.put(childRel, dirDf);
+                        dirList.add(new Object[]{ childRel, dirDf });
+                        docIds.push(childDocId);
+                        rels.push(childRel);
+                    } else {
+                        if (name.startsWith(".jskzx")) continue;  // 对齐 walkDir:跳过应用自身缓存/签名文件
+                        if (isTransientFile(name)) continue;  // 对齐 scan:跳过 tmp 残留
+                        Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId);
+                        DocumentFile df = DocumentFile.fromSingleUri(getContext(), fileUri);
+                        m.put(childRel, df);
+                        fileList.add(new Object[]{ childRel, df });
+                    }
                 }
+            } catch (Exception e) {
+                android.util.Log.w("Perf", "queryChildren failed for " + dirRel + ": " + e.getMessage());
+                // 降级:对该目录回退旧版 DocumentFile.listFiles()路径(少量目录可接受)
+                DocumentFile dirDf = m.get(dirRel);
+                if (dirDf == null) dirDf = root;
+                for (DocumentFile f : dirDf.listFiles()) {
+                    String n = f.getName();
+                    if (n == null) continue;
+                    String rel = dirRel.isEmpty() ? n : dirRel + "/" + n;
+                    if (f.isDirectory()) {
+                        if (n.startsWith(".")) continue;
+                        String lower = n.toLowerCase(Locale.ROOT);
+                        if (SKIP_FOLDERS.contains(lower)) continue;
+                        m.put(rel, f);
+                        dirList.add(new Object[]{ rel, f });
+                        docIds.push(DocumentsContract.getDocumentId(f.getUri()));
+                        rels.push(rel);
+                    } else if (!isTransientFile(n)) {
+                        m.put(rel, f);
+                        fileList.add(new Object[]{ rel, f });
+                    }
+                }
+            } finally {
+                if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
             }
         }
         synchronized (relIndex) { relIndex.clear(); relIndex.putAll(m); }
+        docInfoCache.clear();
+        docInfoCache.putAll(infoMap);
         relIndexReady = true;
         scanFilesList = fileList;
         scanDirsList = dirList;
-        android.util.Log.i("Perf", "relIndex built: " + m.size() + " files, " + dirList.size() + " dirs");
+        android.util.Log.i("Perf", "relIndex built: " + m.size() + " files, " + dirList.size() + " dirs (A1 batch cursor)");
     }
 
-    /** 根扫描快速路径:用 buildRelIndex 已收集的内存列表生成 scan 输出(不再二次 SAF 遍历) */
+    /**
+     * 根扫描快速路径:用 buildRelIndex 已收集的内存列表生成 scan 输出(不再二次 SAF 遍历)。
+     * 🚀 A1:文件 mtime/size 直接从 docInfoCache 读取(批量 query 已在 buildRelIndex 拿全),
+     * 不再加入 pendingMtime → fillMtimesParallel 对根扫描路径不会被调用,2 万 query → 0。
+     */
     private void buildScanOutputFromIndex(List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime) {
         for (Object[] dr : scanDirsList) {
             String drel = (String) dr[0];
             DocumentFile df = (DocumentFile) dr[1];
             String name = drel.contains("/") ? drel.substring(drel.lastIndexOf('/') + 1) : drel;
             if (!drel.contains("/")) categories.add(name); // 一级目录=分组
+            CachedDocInfo info = docInfoCache.get(drel);
             JSObject d = new JSObject();
             d.put("name", name);
             d.put("path", "/library/" + drel);
             d.put("isDirectory", true);
-            d.put("mtime", queryLastModified(df)); // 目录数量少,即时查询
+            d.put("mtime", info != null ? info.lastModified : queryLastModified(df)); // fallback 兜底
             files.add(d);
         }
         for (Object[] fr : scanFilesList) {
@@ -186,19 +266,20 @@ public class LibraryFsPlugin extends Plugin {
             DocumentFile cf = (DocumentFile) fr[1];
             String name = rel.contains("/") ? rel.substring(rel.lastIndexOf('/') + 1) : rel;
             String subFolder = rel.contains("/") ? rel.substring(0, rel.lastIndexOf('/')) : "";
+            CachedDocInfo info = docInfoCache.get(rel);
             JSObject o = new JSObject();
             o.put("name", name);
             o.put("path", "/library/" + rel);
             o.put("isDirectory", false);
             o.put("url", JSObject.NULL);
-            o.put("mtime", 0); // 延后 fillMtimesParallel 并行补齐
+            o.put("mtime", info != null ? info.lastModified : 0);        // A1:行缓存直接读取(0 → 由后续 reconcile 修正)
             o.put("birthtime", 0);
-            o.put("size", cf.length());
+            o.put("size", info != null ? info.size : cf.length());       // A1:行缓存直接读取
             o.put("subFolder", subFolder);
             o.put("category", subFolder.isEmpty() ? "未分类" : subFolder.split("/")[0]);
             o.put("embeddedData", JSObject.NULL);
             files.add(o);
-            pendingMtime.add(new Object[]{ o, cf });
+            // 🚀 A1:不再加入 pendingMtime（批量 query 已拿到 mtime），2 万文件零额外 query
         }
     }
 
@@ -467,34 +548,19 @@ public class LibraryFsPlugin extends Plugin {
     private static final java.util.concurrent.ExecutorService FAST_EXEC =
             java.util.concurrent.Executors.newFixedThreadPool(2, r -> new Thread(r, "jsx-fast"));
 
-    /**
-     * 递归扫描库目录树,返回与桌面 scanAndSaveFolder 结构一致的 files/categories
-     */
-    @PluginMethod()
-    public void scan(final PluginCall call) {
-        // 参数在桥线程读取后转入扫描线程(PluginCall 数据取出即用,跨线程只传不可变值)
-        final String rel = call.getString("path", "");
-        SCAN_EXEC.execute(() -> {
-            try {
-                scanOnWorker(call, rel);
-            } catch (Exception e) {
-                call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
-            }
-        });
-    }
+    // ── A2: scanResult 缓存(分块回传) ──────────────────────────────────────────────
+    private volatile List<JSObject> scanResultCache = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile List<String> scanResultCategories = new java.util.ArrayList<>();
+    private final java.util.concurrent.atomic.AtomicInteger scanCursor = new java.util.concurrent.atomic.AtomicInteger(0);
 
-    /** scan 的实际实现,运行于 SCAN_EXEC 线程(relIndex 为 ConcurrentHashMap,relIndexReady/列表为 volatile) */
-    private void scanOnWorker(final PluginCall call, final String rel) {
+    /**
+     * 🚀 A2:扫描结果构建(从 scanOnWorker 提取),供 scan/scanStart 共用。
+     * 构建结果存入实例缓存,供 scanNext 按块消费。成功返回 null,失败返回错误文案。
+     */
+    private String buildScanResult(String rel, List<JSObject> outFiles, Set<String> outCategories) {
         DocumentFile root = rootFile();
-        if (root == null || !root.exists()) {
-            JSObject err = new JSObject();
-            err.put("error", "尚未选择库目录,请先授权角色卡库文件夹");
-            call.resolve(err);
-            return;
-        }
-        // M4 支持子目录扫描(如 .bak_history 快照目录)
-        // F1:先全树建索引供 readCharaBatch/readTextBatch O(1);walkDir 顺带填充用于子目录 miss 回填
-        buildRelIndex(); // 内部已 clear + putAll + relIndexReady=true
+        if (root == null || !root.exists()) return "尚未选择库目录,请先授权角色卡库文件夹";
+        buildRelIndex();
         DocumentFile startDir = root;
         String prefix = "";
         if (rel != null && !rel.isEmpty()) {
@@ -502,43 +568,106 @@ public class LibraryFsPlugin extends Plugin {
             String[] segs = norm.split("/");
             DocumentFile cur = root;
             for (String seg : segs) {
-                if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) {
-                    JSObject err = new JSObject();
-                    err.put("error", "无效路径");
-                    call.resolve(err);
-                    return;
-                }
+                if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) return "无效路径";
                 cur = cur.findFile(seg);
-                if (cur == null || !cur.isDirectory()) {
-                    JSObject err = new JSObject();
-                    err.put("error", "目录不存在");
-                    call.resolve(err);
-                    return;
-                }
+                if (cur == null || !cur.isDirectory()) return "目录不存在";
             }
             startDir = cur;
             prefix = norm + "/";
         }
-        List<JSObject> files = new ArrayList<>();
-        Set<String> categories = new LinkedHashSet<>();
-        // 🚀 v1.10.4 加载提速:文件 mtime 延后并行查询(SAF 逐文件 query 是万卡库扫描最大耗时点)
-        final List<Object[]> pendingMtime = new ArrayList<>(); // {JSObject, DocumentFile}
-        // F1:索引已由 buildRelIndex() 一次全树遍历建立;根扫描用内存列表生成输出,免二次 SAF 遍历。
-        // 子目录扫描(快照等)保留 walkDir 子树遍历(目录少,成本可忽略)。
-        if (rel == null || rel.isEmpty()) {
-            buildScanOutputFromIndex(files, categories, pendingMtime);
-        } else {
-            walkDir(startDir, prefix, false, files, categories, pendingMtime, relIndex);
-        }
+        List<Object[]> pendingMtime = new ArrayList<>();
+        if (rel == null || rel.isEmpty()) buildScanOutputFromIndex(outFiles, outCategories, pendingMtime);
+        else walkDir(startDir, prefix, false, outFiles, outCategories, pendingMtime, relIndex);
         relIndexReady = true;
         fillMtimesParallel(pendingMtime);
-        // 分组 = 库根下所有一级文件夹(含空分组)。不做“幽灵分组过滤”:
-        // 空分组(新建后尚未放卡片)也必须显示,否则新建分组在列表/分组管理里不可见,分组功能看似失效。
+        return null; // null = 成功
+    }
+
+    /**
+     * 递归扫描库目录树,返回与桌面 scanAndSaveFolder 结构一致的 files/categories
+     * (向后兼容:一次性返回全部结果)
+     */
+    @PluginMethod()
+    public void scan(final PluginCall call) {
+        final String rel = call.getString("path", "");
+        SCAN_EXEC.execute(() -> {
+            try {
+                List<JSObject> files = new ArrayList<>();
+                Set<String> categories = new LinkedHashSet<>();
+                String err = buildScanResult(rel, files, categories);
+                if (err != null) { JSObject e = new JSObject(); e.put("error", err); call.resolve(e); return; }
+                JSObject ret = new JSObject();
+                ret.put("files", new JSArray(files));
+                ret.put("categories", new JSArray(new ArrayList<>(categories)));
+                ret.put("folderPath", "/library");
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
+    }
+
+    /**
+     * 🚀 A2:scanStart 启动后台扫描,生成完整结果并缓存,resolve {success,total,categories}。
+     * JS 侧用循环 scanNext 拉取分块,每块 evaluateJavascript 体积 < 500KB(两万卡 ~4MB 改为 ~8 块),
+     * 主线程解析无长阻塞。
+     */
+    @PluginMethod()
+    public void scanStart(final PluginCall call) {
+        final String rel = call.getString("path", "");
+        SCAN_EXEC.execute(() -> {
+            try {
+                List<JSObject> files = new ArrayList<>();
+                Set<String> categories = new LinkedHashSet<>();
+                String err = buildScanResult(rel, files, categories);
+                if (err != null) {
+                    JSObject e = new JSObject();
+                    e.put("error", err);
+                    call.resolve(e);
+                    return;
+                }
+                scanResultCache = new java.util.concurrent.CopyOnWriteArrayList<>(files);
+                scanResultCategories = new ArrayList<>(categories);
+                scanCursor.set(0);
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("total", files.size());
+                ret.put("categories", new JSArray(scanResultCategories));
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
+    }
+
+    /**
+     * 🚀 A2:scanNext 从 scanResultCache 切块返回;游标原子自增,天然支持单消费者(RESCAN 模式),
+     * done=true 表示全部拉完。
+     */
+    @PluginMethod()
+    public void scanNext(final PluginCall call) {
+        final int batchSize = Math.max(1, call.getInt("batchSize", 500));
+        final List<JSObject> all = scanResultCache;
         JSObject ret = new JSObject();
-        JSArray arr = new JSArray(files);
-        ret.put("files", arr);
-        ret.put("categories", new JSArray(new ArrayList<>(categories)));
-        ret.put("folderPath", "/library");
+        if (all == null || all.isEmpty()) {
+            ret.put("files", new JSArray());
+            ret.put("done", true);
+            ret.put("total", 0);
+            call.resolve(ret);
+            return;
+        }
+        int start = scanCursor.getAndAdd(batchSize);
+        if (start >= all.size()) {
+            ret.put("files", new JSArray());
+            ret.put("done", true);
+            ret.put("total", all.size());
+            call.resolve(ret);
+            return;
+        }
+        int end = Math.min(start + batchSize, all.size());
+        ret.put("files", new JSArray(new ArrayList<>(all.subList(start, end))));
+        ret.put("done", end >= all.size());
+        ret.put("total", all.size());
         call.resolve(ret);
     }
 
@@ -2159,9 +2288,11 @@ public class LibraryFsPlugin extends Plugin {
 
     private static final String THUMB_DIR = "thumbs";
     private static final int THUMB_MAX_DIM = 300;
-    /** 缓存上限(单文件 ~12KB;1500 张 ≈ 18MB,超过按最旧淘汰一半) */
-    private static final int THUMB_MAX_CACHE = 1500;
-    private static volatile boolean thumbGcDone = false;
+    /** 🚀 F:容量制替代条数制——两万卡缩略图 ~240MB，原条数 1500 会频繁淘汰；改为 200MB 上限，
+     *  按 mtime 从旧到新删到一半(100MB)留重建余量；60s 节流避免每张缩略图触发 listFiles。 */
+    private static final long THUMB_MAX_BYTES = 200L * 1024 * 1024; // 200MB ≈ 1.6 万张 × 12KB
+    private volatile long lastGcTime = 0;
+    private static volatile boolean thumbGcDone = false; // 保留向后兼容读写
 
     /** path|mtime|size → MD5 hex(卡片图变更 → 指纹变化 → 旧缓存自动失效,无需副作用) */
     private String thumbCacheKey(String path, long mtime, long size) {
@@ -2193,16 +2324,26 @@ public class LibraryFsPlugin extends Plugin {
         return def;
     }
 
-    /** 进程内首次调用:缩略图数超限 → 按最后修改时间淘汰旧的一半 */
+    /** 🚀 F:缩略图缓存总字节超限 → 按最后修改时间从旧到新删,直到 ≤ 上限一半。
+     *  60s 节流:滚动两万卡时持续生成也不频繁 listFiles+sort。 */
     private void gcThumbsIfNeeded() {
-        if (thumbGcDone) return;
-        thumbGcDone = true;
+        long now = System.currentTimeMillis();
+        if (now - lastGcTime < 60_000) return;
+        lastGcTime = now;
         try {
             File[] files = thumbDir().listFiles();
-            if (files == null || files.length <= THUMB_MAX_CACHE) return;
+            if (files == null || files.length == 0) return;
+            long total = 0;
+            for (File f : files) total += f.length();
+            if (total <= THUMB_MAX_BYTES) return;
             java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
-            int toDelete = files.length - THUMB_MAX_CACHE / 2;
-            for (int i = 0; i < toDelete && i < files.length; i++) files[i].delete();
+            long target = THUMB_MAX_BYTES / 2;
+            long cur = total;
+            for (File f : files) {
+                if (cur <= target) break;
+                cur -= f.length();
+                f.delete();
+            }
         } catch (Exception e) { /* 清理失败不影响主流程 */ }
     }
 

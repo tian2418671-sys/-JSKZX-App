@@ -15,6 +15,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(KeystorePlugin.class);
         registerPlugin(MemoryPlugin.class);
         registerPlugin(KeepAlivePlugin.class);
+        registerPlugin(SqliteMetaPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

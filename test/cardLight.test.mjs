@@ -11,7 +11,9 @@ import {
     cardHasRegex,
     extractCardLightFields,
     lightFieldsToCache,
-    lightFieldsFromCache
+    lightFieldsFromCache,
+    toMemorySearchText,
+    MEMORY_SEARCH_TEXT
 } from '../js/utils/cardLight.js';
 
 const META = {
@@ -128,4 +130,23 @@ test('长描述卡 Token 估算 >0 且字段截断后仍可重建条目', () => 
     const back = lightFieldsFromCache(cached, '兜底名');
     assert.ok(back.tokens > 0);
     assert.ok(back.searchText.length > 0);
+});
+
+// 🚀 两万卡专项（I13）：内存条目与缓存条目的搜索文本同源同长截断
+test('toMemorySearchText 截断到 MEMORY_SEARCH_TEXT（两万卡内存封顶）', () => {
+    const long = '世'.repeat(3000);
+    assert.equal(toMemorySearchText(long).length, MEMORY_SEARCH_TEXT);
+    const short = '短文本';
+    assert.equal(toMemorySearchText(short), short);
+    assert.equal(toMemorySearchText(''), '');
+    assert.equal(toMemorySearchText(undefined), '');
+    assert.equal(toMemorySearchText(null), '');
+});
+
+test('I13: 缓存 s 字段与内存截断同长（同源同长）', () => {
+    const long = '长'.repeat(8000);
+    const f = { ...extractCardLightFields(makeCard(), META), searchText: long };
+    const cached = lightFieldsToCache(f);
+    assert.equal(cached.s.length, MEMORY_SEARCH_TEXT, '缓存 searchText 必须与内存一致截断');
+    assert.equal(cached.s, toMemorySearchText(long));
 });

@@ -10,6 +10,19 @@ import { estimateTokens } from './tokenEstimate.js';
 // 搜索全文截断上限（单卡 60K 字符）：防个别超大卡（巨型世界书）撑爆轻量缓存与搜索索引
 const MAX_SEARCH_TEXT = 60000;
 
+// 🚀 两万卡专项（I13 不变量）：内存条目与缓存条目的搜索文本同源同长。
+// 冷扫描路径曾保留 60K 全文在内存（2 万卡最坏 >1GB）；统一截断到 1.5K 后
+// 与缓存先行路径（缓存本就只存 1.5K）一致，两万卡内存 ~60MB 封顶。
+// 取舍：超长 description / 深层世界书内容的尾部无法命中全文搜索（详情页全文不受影响）。
+export const MEMORY_SEARCH_TEXT = 1500;
+
+/** 统一的内存/缓存搜索文本截断（与 lightFieldsToCache 的 s 字段同长） */
+export function toMemorySearchText(s) {
+    return (typeof s === 'string' && s.length > MEMORY_SEARCH_TEXT)
+        ? s.slice(0, MEMORY_SEARCH_TEXT)
+        : (typeof s === 'string' ? s : '');
+}
+
 function push(list, v) {
     if (v !== undefined && v !== null && v !== '') list.push(String(v));
 }
@@ -127,7 +140,7 @@ export function lightFieldsToCache(f) {
         // searchText 截断到 1.5K:4K/卡 × 千卡级 = 11MB+ 缓存,二次启动读+parse 秒级阻塞。
         // 前 1.5K 已覆盖 name/creator/tags/description/personality 等核心搜索字段,
         // 深层世界书内容搜索召回略降,换千卡库冷启动提速数倍。
-        s: f.searchText ? f.searchText.slice(0, 1500) : '',
+        s: toMemorySearchText(f.searchText),
         k: f.tokens || 0,
         b: f.hasLorebook ? 1 : 0,
         x: f.hasRegex ? 1 : 0

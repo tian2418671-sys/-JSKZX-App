@@ -120,6 +120,23 @@ export function extractCardTags(item, opts = {}) {
     return Array.from(tags);
 }
 
+/**
+ * 🚀 两万卡专项（C2）：搜索索引的「短字段」提取器。
+ * 只取 名称/作者/物理文件名/分组/分类/标签 建倒排（字段短，posting 可控），
+ * description 等长文本不进倒排，由 searchIndex 全文线性降级兜底。
+ * 桌面端轻量字段缺失时返回空串 → 索引为空 → 搜索自动走全文线性匹配（行为兜底正确）。
+ */
+export function extractCardShortFields(item) {
+    const parts = [];
+    if (item && typeof item.name === 'string') parts.push(item.name);
+    if (item && typeof item.creator === 'string') parts.push(item.creator);
+    if (item && typeof item.fileName === 'string') parts.push(item.fileName);
+    if (item && typeof item.subFolder === 'string') parts.push(item.subFolder);
+    if (item && typeof item.category === 'string') parts.push(item.category);
+    if (item && Array.isArray(item._tags)) parts.push(item._tags.join(' '));
+    return parts.join(' ').toLowerCase();
+}
+
 export function useSearch({
     library,
     currentCategoryKey,
