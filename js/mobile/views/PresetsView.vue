@@ -191,6 +191,7 @@ export default {
             try {
                 const res = await api.scanExternalPresets(treeUri.value);
                 presets.value = res.presets || [];
+                if (res.skipped) showToast(`已跳过 ${res.skipped} 个无法解析或超限的文件`);
                 if (res.title) {
                     treeTitle.value = res.title;
                     title.value = '⚙️ 预设管理 · ' + res.title;

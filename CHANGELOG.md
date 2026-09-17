@@ -6,6 +6,23 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.27] - 2026-09-18
+
+### 🛠 预设/世界书外部目录扫描「读取不全」修复（BOM + 上限 + 静默跳过）
+
+用户反馈：预设和世界书读取不全——外部目录扫描“只有个别文件被读取”（回归）。夹具矩阵模拟器实测复现确认三类静默丢弃，全部修复：
+
+- **UTF-8 BOM 文件被丢弃（主因）**：记事本等编辑器保存的 JSON 带 BOM（`\uFEFF` 头），`JSON.parse` 直接抛错且被扫描 `catch` 静默跳过。修复三处：
+  - 外部目录扫描 `scanExternalPresets`/`scanExternalWorldbooks`（android.js）：解析前统一 `stripBom`；
+  - 原生 `readWbText`（LibraryFsPlugin.java）：读取后剥离 BOM（所有消费方一次性受益）；
+  - 库内解析链路：`cardParseWorker`（Worker）/ `parseRawSync`（主线程兜底）/ TestSidebar「从文件导入」（预设/正则/插件）。
+- **>10MB 文件整体消失**：`scanWbTree` 跳过阈值与 `readWbText` 读取上限均 10MB→50MB（大世界书可被扫描/读取）。
+- **单次扫描上限** 3000→10000 文件。
+- **静默跳过改为如实上报**：原生返回 `skippedLarge`；JS 扫描汇总 `skipped`（读取失败 + 解析失败 + 超限）；预设页/世界书页/测卡预设面板新增「已跳过 N 个无法解析或超限的文件」提示。
+- **验证**：夹具矩阵 31 文件（BOM / 1.2MB / 11MB / 嵌套子目录 / CRLF / 无效件）模拟器实测全绿；`npm test` 全绿。
+
+---
+
 ## [1.10.26] - 2026-09-17
 
 ### 🧠 测卡记忆重构 v4.1（P0 落地：换卡=换记忆 + 注入治理）

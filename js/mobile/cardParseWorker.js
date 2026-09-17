@@ -14,7 +14,8 @@ self.onmessage = (e) => {
     let parsed = null;
     try {
         if (kind === 'json') {
-            parsed = JSON.parse(raw);
+            // 剥离 UTF-8 BOM(记事本等保存的 JSON 常带 BOM,JSON.parse 会直接抛错)
+            parsed = JSON.parse(typeof raw === 'string' && raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         } else {
             // PNG:先走标准 chunk 提取,失败再深度扫描(WebP/损坏 PNG)
             parsed = parsePNGChunk(raw) || deepScanForJSON(raw);

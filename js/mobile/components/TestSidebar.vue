@@ -726,7 +726,7 @@ export default {
             try {
                 const res = await api.pickJsonFile();
                 if (res && res.success && res.text) {
-                    const data = JSON.parse(res.text);
+                    const data = JSON.parse(String(res.text).replace(/^\uFEFF/, ''));
                     emit('apply-preset', data);
                     showSuccessToast('已从文件导入预设：' + (data.name || res.name || ''));
                 } else if (res && res.error && !res.error.includes('取消')) {
@@ -741,7 +741,7 @@ export default {
             try {
                 const res = await api.pickJsonFile();
                 if (res && res.success && res.text) {
-                    emit('import-regex', JSON.parse(res.text));
+                    emit('import-regex', JSON.parse(String(res.text).replace(/^\uFEFF/, '')));
                     showSuccessToast('已从文件导入正则');
                 } else if (res && res.error && !res.error.includes('取消')) {
                     showToast(res.error);
@@ -755,7 +755,7 @@ export default {
             try {
                 const res = await api.pickJsonFile();
                 if (res && res.success && res.text) {
-                    emit('import-plugin', JSON.parse(res.text));
+                    emit('import-plugin', JSON.parse(String(res.text).replace(/^\uFEFF/, '')));
                     showSuccessToast('已从文件导入插件');
                 } else if (res && res.error && !res.error.includes('取消')) {
                     showToast(res.error);

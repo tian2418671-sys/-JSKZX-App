@@ -2094,8 +2094,8 @@ public class LibraryFsPlugin extends Plugin {
     }
 
     /**
-     * 递归扫描外部目录树的 .json 文件(世界书候选),返回相对路径列表。
-     * 跳过隐藏目录与 >10MB 大文件,单次上限 3000 个文件。
+     * 递归扫描外部目录树的 .json 文件(世界书/预设候选),返回相对路径列表。
+     * 跳过隐藏目录;>50MB 大文件跳过并计入 skippedLarge(不静默);单次上限 10000 个文件。
      */
     @PluginMethod()
     public void scanWbTree(PluginCall call) {
@@ -2117,6 +2117,7 @@ public class LibraryFsPlugin extends Plugin {
             java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
             stack.push(root);
             long collected = 0;
+            long skippedLarge = 0;
             while (!stack.isEmpty()) {
                 DocumentFile dir = stack.pop();
                 DocumentFile[] children = dir.listFiles();
@@ -2127,11 +2128,12 @@ public class LibraryFsPlugin extends Plugin {
                         if (nm != null && !nm.startsWith(".")) stack.push(c);
                         continue;
                     }
-                    if (collected >= 3000) break;
+                    if (collected >= 10000) break;
                     String n = c.getName();
                     if (n == null) continue;
                     if (!n.toLowerCase(Locale.ROOT).endsWith(".json")) continue;
-                    if (c.length() > 10L * 1024 * 1024) continue;
+                    // >50MB 的 JSON 基本不可能是预设/世界书,跳过但计数上报(不静默)
+                    if (c.length() > 50L * 1024 * 1024) { skippedLarge++; continue; }
                     String rel = relPathWithin(root, c);
                     if (rel == null) continue;
                     JSObject o = new JSObject();
@@ -2147,6 +2149,7 @@ public class LibraryFsPlugin extends Plugin {
             ret.put("success", true);
             ret.put("title", root.getName());
             ret.put("count", collected);
+            ret.put("skippedLarge", skippedLarge);
             ret.put("files", files);
             call.resolve(ret);
         } catch (Exception e) {
@@ -2170,11 +2173,13 @@ public class LibraryFsPlugin extends Plugin {
                 call.reject("文件不存在或不可读");
                 return;
             }
-            String text = readStream(f.getUri(), false, 10 * 1024 * 1024);
+            String text = readStream(f.getUri(), false, 50 * 1024 * 1024);
             if (text == null) {
                 call.reject("读取失败或文件过大");
                 return;
             }
+            // 剥离 UTF-8 BOM:记事本等编辑器保存的 JSON 常带 BOM,JS 侧 JSON.parse 会抛错
+            if (!text.isEmpty() && text.charAt(0) == '\uFEFF') text = text.substring(1);
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("value", text);

@@ -48,6 +48,11 @@ export const keepAlive = {
 // 虚拟库根:渲染层眼中的"绝对路径"前缀(与桌面 file:// 语义对齐)
 export const LIBRARY_ROOT = '/library';
 
+/** 剥离 UTF-8 BOM:记事本等编辑器保存的 JSON 常带 BOM,JSON.parse 会抛错(此前扫描静默跳过→读取不全) */
+function stripBom(s) {
+    return (typeof s === 'string' && s.charCodeAt(0) === 0xFEFF) ? s.slice(1) : s;
+}
+
 /**
  * 智能校验:是否为酒馆预设 JSON(OpenAI Settings / Presets 目录下的 .json)。
  * 对齐桌面 main.js isValidPreset:排除角色卡/世界书,要求含预设常见字段。
@@ -1536,11 +1541,12 @@ export const androidImpl = {
             if (!scan || !scan.success) return { worldbooks: [], error: (scan && scan.error) || '扫描失败' };
             const files = scan.files || [];
             const worldbooks = [];
+            let skipped = (scan && scan.skippedLarge) || 0; // 原生超限跳过数,如实上报不静默
             for (const f of files) {
                 try {
                     const r = await LibraryFs.readWbText({ treeUri, path: f.path });
-                    if (!r || !r.success || !r.value) continue;
-                    const parsed = JSON.parse(r.value);
+                    if (!r || !r.success || !r.value) { skipped++; continue; }
+                    const parsed = JSON.parse(stripBom(r.value));
                     // 排除角色卡(与桌面 scanWorldbooks 同口径)
                     if (parsed.spec === 'chara_card_v2' || parsed.spec === 'chara_card_v3') continue;
                     if (parsed.data && (parsed.data.description !== undefined || parsed.data.first_mes !== undefined)) continue;
@@ -1556,9 +1562,9 @@ export const androidImpl = {
                         wrapped: !!(parsed.extensions && parsed.extensions.world_book),
                         external: true
                     });
-                } catch (e) { /* 跳过损坏/非标准 JSON */ }
+                } catch (e) { skipped++; /* 损坏/非标准 JSON:计数上报 */ }
             }
-            return { worldbooks, title: scan.title || '', error: undefined };
+            return { worldbooks, title: scan.title || '', skipped, error: undefined };
         } catch (e) {
             return { worldbooks: [], error: (e && e.message) || '扫描失败' };
         }
@@ -1618,11 +1624,12 @@ export const androidImpl = {
             if (!scan || !scan.success) return { presets: [], error: (scan && scan.error) || '扫描失败' };
             const files = scan.files || [];
             const presets = [];
+            let skipped = (scan && scan.skippedLarge) || 0; // 原生超限跳过数,如实上报不静默
             for (const f of files) {
                 try {
                     const r = await LibraryFs.readWbText({ treeUri, path: f.path });
-                    if (!r || !r.success || !r.value) continue;
-                    const parsed = JSON.parse(r.value);
+                    if (!r || !r.success || !r.value) { skipped++; continue; }
+                    const parsed = JSON.parse(stripBom(r.value));
                     if (!isValidPreset(parsed)) continue;
                     presets.push({
                         path: 'expst://' + f.path,
@@ -1632,9 +1639,9 @@ export const androidImpl = {
                         data: parsed,
                         external: true
                     });
-                } catch (e) { /* 跳过损坏/非标准 JSON */ }
+                } catch (e) { skipped++; /* 损坏/非标准 JSON:计数上报 */ }
             }
-            return { presets, title: scan.title || '', error: undefined };
+            return { presets, title: scan.title || '', skipped, error: undefined };
         } catch (e) {
             return { presets: [], error: (e && e.message) || '扫描失败' };
         }

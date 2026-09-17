@@ -1926,6 +1926,7 @@ export default {
                 }
                 const res = await api.scanExternalPresets(dirRes.uri);
                 externalPresets.value = res.presets || [];
+                if (res.skipped) showToast(`已跳过 ${res.skipped} 个无法解析或超限的文件`);
                 if (externalPresets.value.length === 0) {
                     showToast('该目录未发现有效预设');
                 }

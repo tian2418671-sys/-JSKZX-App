@@ -221,7 +221,9 @@ function getParseWorker() {
 /** 主线程同步回退解析(Worker 不可用时) */
 function parseRawSync(kind, raw) {
     try {
-        return kind === 'json' ? JSON.parse(raw) : (parsePNGChunk(raw) || deepScanForJSON(raw));
+        // JSON 剥离 UTF-8 BOM(记事本等保存的 JSON 常带 BOM,JSON.parse 会直接抛错)
+        const jsonTxt = (typeof raw === 'string' && raw.charCodeAt(0) === 0xFEFF) ? raw.slice(1) : raw;
+        return kind === 'json' ? JSON.parse(jsonTxt) : (parsePNGChunk(raw) || deepScanForJSON(raw));
     } catch (e) {
         return null;
     }

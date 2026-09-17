@@ -336,6 +336,7 @@ export default {
                     extWorldbooks.value = [];
                 } else {
                     extWorldbooks.value = res.worldbooks || [];
+                    if (res.skipped) showToast(`已跳过 ${res.skipped} 个无法解析或超限的文件`);
                     if (res.title) {
                         extWbDirTitle.value = res.title;
                         saveExtWbDirMemory();
