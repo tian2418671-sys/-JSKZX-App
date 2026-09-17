@@ -94,14 +94,17 @@ export function toRelativePath(p) {
 
 /** 统一记忆条目字段名(原生 snake_case → JS camelCase) */
 function normalizeMemoryItem(it) {
-    if (!it) return { id: 0, type: '', content: '', key: '', cardName: '', createdAt: 0 };
+    if (!it) return { id: 0, type: '', content: '', key: '', cardName: '', cardPath: '', createdAt: 0, updatedAt: 0, confirmed: 1 };
     return {
         id: it.id || 0,
         type: it.type || '',
         content: it.content || '',
         key: it.key || '',
         cardName: it.cardName || it.card_name || '',
-        createdAt: it.createdAt || it.created_at || 0
+        cardPath: it.cardPath || it.card_path || '',
+        createdAt: it.createdAt || it.created_at || 0,
+        updatedAt: it.updatedAt || it.updated_at || 0,
+        confirmed: (it.confirmed !== undefined && it.confirmed !== null) ? it.confirmed : 1
     };
 }
 
@@ -829,38 +832,42 @@ export const androidImpl = {
         }
     },
     // ---------- 长期记忆(MemoryChat 方案 B,移动端专属,与桌面无关) ----------
-    /** 新增记忆:{ type: fact|summary|message, content, key?, cardName? } */
-    async memoryAdd({ type, content, key, cardName } = {}) {
+    /** 新增记忆:{ type: fact|summary|message, content, key?, cardName?, cardPath? } */
+    async memoryAdd({ type, content, key, cardName, cardPath } = {}) {
         try {
-            const res = await Memory.add({ type: type || 'message', content: content || '', key: key || '', cardName: cardName || '' });
-            return { success: !!(res && res.success), id: (res && res.id) || 0, skipped: !!(res && res.skipped), error: (res && res.message) || undefined };
+            const res = await Memory.add({ type: type || 'message', content: content || '', key: key || '', cardName: cardName || '', cardPath: cardPath || '' });
+            return { success: !!(res && res.success), id: (res && res.id) || 0, skipped: !!(res && res.skipped), updated: !!(res && res.updated), error: (res && res.message) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '记忆写入失败' };
         }
     },
-    /** 更新单条记忆(记忆表格行编辑):{ id, key?, content? } */
+    /** 更新单条记忆(记忆表格行编辑):{ id, key?, content?, confirmed? } */
     async memoryUpdate(id, patch) {
         try {
-            const res = await Memory.update({ id: Number(id) || 0, key: (patch && patch.key) || '', content: (patch && patch.content) || '' });
+            const params = { id: Number(id) || 0 };
+            if (patch && patch.key !== undefined) params.key = patch.key;
+            if (patch && patch.content !== undefined) params.content = patch.content;
+            if (patch && patch.confirmed !== undefined) params.confirmed = patch.confirmed;
+            const res = await Memory.update(params);
             return { success: !!(res && res.success), updated: (res && res.updated) || 0, error: (res && res.message) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '记忆更新失败' };
         }
     },
-    /** 关键词检索:{ query, limit? } → { success, items } */
-    async memorySearch({ query, limit } = {}) {
+    /** 关键词检索:{ query, limit?, cardName? } → { success, items }；cardName = card_path 强制隔离 */
+    async memorySearch({ query, limit, cardName } = {}) {
         try {
-            const res = await Memory.search({ query: query || '', limit: limit || 20 });
+            const res = await Memory.search({ query: query || '', limit: limit || 20, cardName: cardName || '' });
             if (!res || !res.success) return { success: false, items: [], error: (res && res.message) || '检索失败' };
             return { success: true, items: (res.items || []).map(normalizeMemoryItem), error: null };
         } catch (e) {
             return { success: false, items: [], error: (e && e.message) || '检索失败' };
         }
     },
-    /** 列出记忆:{ type?, limit? } → { success, items } */
-    async memoryList({ type, limit } = {}) {
+    /** 列出记忆:{ type?, limit?, cardName? } → { success, items }；cardName = card_path 按卡过滤 */
+    async memoryList({ type, limit, cardName } = {}) {
         try {
-            const res = await Memory.list({ type: type || '', limit: limit || 100 });
+            const res = await Memory.list({ type: type || '', limit: limit || 100, cardName: cardName || '' });
             if (!res || !res.success) return { success: false, items: [], error: (res && res.message) || '读取失败' };
             return { success: true, items: (res.items || []).map(normalizeMemoryItem), error: null };
         } catch (e) {
@@ -883,6 +890,42 @@ export const androidImpl = {
             return { success: !!(res && res.success), cleared: (res && res.cleared) || 0, error: (res && res.message) || undefined };
         } catch (e) {
             return { success: false, error: (e && e.message) || '清空失败' };
+        }
+    },
+    /** 按卡清空记忆:{ cardPath }（v3） */
+    async memoryClearByCard(cardPath) {
+        try {
+            const res = await Memory.clearByCard({ cardPath: cardPath || '' });
+            return { success: !!(res && res.success), cleared: (res && res.cleared) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '清空失败' };
+        }
+    },
+    /** 卡路径迁移:{ from, to }（D1a：rename/move 后记忆跟随） */
+    async memoryMigrateCard({ from, to } = {}) {
+        try {
+            const res = await Memory.migrateCard({ from: from || '', to: to || '' });
+            return { success: !!(res && res.success), migrated: (res && res.migrated) || 0, skipped: (res && res.skipped) || 0, deleted: (res && res.deleted) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '迁移失败' };
+        }
+    },
+    /** 确认/拒绝:{ id, confirmed }（1 确认 / -1 软删可恢复） */
+    async memoryConfirm(id, confirmed) {
+        try {
+            const res = await Memory.confirm({ id: Number(id) || 0, confirmed: Number(confirmed) || 1 });
+            return { success: !!(res && res.success), updated: (res && res.updated) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '确认失败' };
+        }
+    },
+    /** 批量迁移（JS 层 migrateMemoryToV2）：{ mappings: [[cardName, cardPath], ...] } */
+    async memoryMigrateData(mappings) {
+        try {
+            const res = await Memory.migrateData({ mappings: mappings || [] });
+            return { success: !!(res && res.success), updated: (res && res.updated) || 0, bucketed: (res && res.bucketed) || 0, error: (res && res.message) || undefined };
+        } catch (e) {
+            return { success: false, error: (e && e.message) || '迁移失败' };
         }
     },
     /** 从网络拉取世界书 JSON:经 HttpPlugin GET 转发(绕 WebView CORS) */

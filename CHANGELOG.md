@@ -6,6 +6,49 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.26] - 2026-09-17
+
+### 🧠 测卡记忆重构 v4.1（P0 落地：换卡=换记忆 + 注入治理）
+
+“记忆表格总记不必要数据 / 记全量数据 / 什么都不记”三类问题的系统性重构。小型模型延期，P0 先落地规则收紧 + 分桶 + 注入治理（方案：`docs/规格与计划/测卡记忆重构方案_v4.1_评审修订版.md`）。
+
+- **D1 schema v3**（`MemoryPlugin.java`）：`memory_items` 新增 `card_path`（卡唯一标识分桶）/ `updated_at` / `confirmed` 列 + 两个复合索引；`DB_VERSION 2→3` 幂等迁移（PRAGMA 查列存在），存量行 `updated_at = created_at` 回填。
+- **D1a 路径变更钩子**（`useMobileLibrary.js`）：卡片移动 → `migrateCard`（目标优先合并去重）；删除 → `clearByCard`；改名（同路径）无需迁移。
+- **D2 检索治理**：停用词表 + 有效词 <2 降级“本卡最近 N 条”（`updated_at DESC`）+ 空 query 无卡名原生层直接 reject（绝不返回全库）。
+- **D3 事实规则收紧**（`useChatMemory.js`）：值上限 30/80 字、排除疑问句/否定假设/引用/空泛思维（“我在思考/我的想法是”）；位置规则排除认知活动误吞。
+- **D4 同 key 覆盖更新**：fact 同 `key + card_path` 冲突 → UPDATE（保留首次 created_at 刷新 updated_at）；单卡 fact 上限 50（超出删最旧）、message 每卡 40 条修剪（按 card_path 分桶）。
+- **I2 注入上限**：默认注入条数 20→8；新增 token 预算 200（硬上限 400）双约束截断。
+- **I4 注入格式 C**：`<memory><user_profile>键：值</user_profile><recent_events>- 内容</recent_events></memory>`（默认；markdown 表格备选）。
+- **I5 debug**：`buildMemoryContext` 返回 `{ text, meta }`（注入条数/来源卡/降级与否/估算 token）。
+- **B1 批量抑制**：批量模式进入时抑制记忆写入（记住原状态），退出恢复；新增崩溃恢复标记（批量中退出 App → 下次启动自动恢复）。
+- **迁移灰度（7.5）**：`migrateMemoryToV2` 库就绪后一次性执行（显示名→card_path 唯一匹配回填；同名/无匹配 → 遗留桶 `card_path=NULL`，不丢数据）；`jsmobile-memory-v2` 灰度开关（默认开）。
+- **查看器**（`TestSidebar.vue`）：按卡过滤（`currentCardPath`）+「只看本卡 / 含遗留桶」切换 + 遗留桶计数。
+
+### 🔴 P0 审计修复（编译级 + 逻辑级 + 实测级 10 项）
+
+落地后静态审计 + 编译 + 单测三线验证发现并修复：
+
+- **编译级（此前从未真正编译过）**：`PluginCall.contains()` / `JSArray.getJSArray()` 均为不存在的 API → 修复为 `getData().has()` + `JSONArray` 基类解析（`null` 正确归入遗留桶）。
+- **`search` 参数绑定错位**：`args` 顺序与 SQL 占位符相反 → 带卡关键词检索恒为空（注入实际失效，只剩降级路径）。
+- **`migrateMemoryToV2` 无调用点**（迁移从未执行）→ 挂接库加载后 + 完成打标；并处理渐进上屏时序（库长度稳定采样，防止漏配卡名）。
+- **`migrateData` 性能**：两万卡全量 mappings 逐条全表扫描 → 预筛“真正存在遗留行”的名字集合。
+- **位置规则误吞**：“我在思考/我在想”被记成位置 → 认知动词负向断言。
+- **批量抑制崩溃恢复**：批量模式中退出 App 会永久关闭记忆 → 标记 + 启动恢复。
+- **实测级（模拟器运行时暴露，2 项）**：① 测卡面板整体白屏（模板 ref 误用 `card.value.path` → 渲染抛错致第 5 个面板不挂载）；② 长按动作菜单从未可触发（`@longpress` 无派发方、`v-longpress` 指令未接线 → 多选/移动分组/重命名/删除等全部不可达）—— 均已修复并复测。
+- 测试断言修正（“我想去南方”属有效目标记忆）；`test-p0-validation.mjs` 真机脚本改名 `p0-validation-e2e.mjs`（消除 `npm test` 误扫）。
+
+### 🔧 验证与回归
+
+- `npm test` **142/142 全绿**（含 11 项 D3 规则/误吞回归）
+- `build:web` 通过；`gradlew compileDebugJavaWithJavac` 通过（修复前 2 编译错误）
+- **模拟器实测（813 卡库 + 播种迁移数据 + Mock API 捕获注入）**：迁移双链路 / 检索隔离 / 注入格式 C / 事实提取 / 同键覆盖 / 批量抑制与崩溃恢复 / 查看器过滤与遗留桶 / 换卡隔离 **全部通过**（详见 `docs/实测记录/测卡记忆v4.1_模拟器实测记录-2026-09-17.md`；截图 `docs/screenshots/2026-09-17-测卡记忆/`）
+
+### 📄 文档
+
+- 按桌面版规范重组 `docs/`（`bugs/` / `规格与计划/` / `实测记录/` / `技术支持/`）+ 新增索引 `docs/README.md`
+
+---
+
 ## [1.10.25] - 2026-09-17
 
 ### 🚀 两万卡库性能专项（P0 + P1 + P2 落地）
@@ -31,18 +74,18 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 - **根因 B（删除不清库）**：`INSERT OR REPLACE` 只覆盖不删除 → 删除的卡永久残留 DB，每次重启幽灵卡复现。
 - **根因 C（移动残留旧 path）**：移动分组后旧 path DB 行残留。
 - **修复**：① `syncCardLightFields` 补单卡 `persistMetas`（保存即时同步）；② `removeCard` 清理分片缓存条目 + 新增 `removeMetaCards` 删 DB 行；③ `moveCardToGroup` 清理旧 path；④ reconcile/loadLibrary 改 `syncMetas`（原生 `syncCards`：事务内 DELETE all + 批量 INSERT 全量对齐，兜底外部删文件的幽灵行）；⑤ 原生新增 `deleteCards`/`syncCards` 接口 + JS 桥/数据层 `metaDeleteCards`/`metaSyncCards`/`removeMetaCards`/`syncMetas`。
-- 检查记录：`docs/BUG-17_保存持久化缺陷检查修复日志.md`
+- 检查记录：`docs/bugs/BUG-17_保存持久化缺陷检查修复日志.md`
 
 ### 🔧 验证与回归
 
 - `npm test` → 135/135 pass（+2 新增 `toMemorySearchText`/I13 测试；唯一失败为仓库既有真机 adb 脚本）
 - `build:android` BUILD SUCCESSFUL（versionCode 30）；模拟器冒烟：启动无崩溃，A2 `scanStart` 与 B1 分片路径正常
-- 模拟器实测记录：`docs/两万卡_模拟器实测记录-2026-09-17.md`；测试清单：`docs/v1.10.25_测试清单.md`
+- 模拟器实测记录：`docs/实测记录/两万卡_模拟器实测记录-2026-09-17.md`；测试清单：`docs/实测记录/v1.10.25_测试清单.md`
 
 ### 📄 文档
 
-- `docs/两万卡卡库性能方案.md`（方案 + 执行状态 PL0/P1/P2）
-- `docs/测卡记忆功能重构方案.md`（v3 定稿，待评审，未实现）
+- `docs/规格与计划/两万卡卡库性能方案.md`（方案 + 执行状态 PL0/P1/P2）
+- `docs/规格与计划/测卡记忆功能重构方案.md`（v3 初稿，后被 v4.1 取代）
 
 ---
 
@@ -281,7 +324,7 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 - 温度参数显示精度（预设 0.85 被步进器显示成 0.8）
 - 侧边栏标签栏溢出（「设置」被裁切）
 
-**验证**（模拟器 Android 15 实测，详见 `docs/测试日志-2026-09-12.md`）
+**验证**（模拟器 Android 15 实测，详见 `docs/实测记录/测试日志-2026-09-12.md`）
 - 单元测试 **127 项全绿**（新增 `test/presetPrompts.test.mjs` 12 项）
 - 本地导入：自造 PNG 卡（`chara` 元数据解析正确、头像正常渲染）/ JSON 卡同名跳过 / 预设文件导入
 - 预设条目克隆、变量树 7 项操作（编辑值 · 重命名 · 复制路径 · 删除 · 撤销 · 重置 · 新增子项）全通过

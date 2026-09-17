@@ -100,7 +100,7 @@
                         :style="{ '--card-idx': i % 12 }"
                         :class="{ 'is-list': viewMode === 'list', 'is-poster': viewMode === 'poster', 'batch-on': batchMode }"
                         @click="batchMode ? toggleBatch(card.path) : openCard(card)"
-                        @longpress="batchMode ? toggleBatch(card.path) : showActions(card)"
+                        v-longpress="() => (batchMode ? toggleBatch(card.path) : showActions(card))"
                     >
                         <div
                             v-if="batchMode"
@@ -130,7 +130,7 @@
                         v-if="pageCard"
                         class="page-card"
                         @click="batchMode ? toggleBatch(pageCard.path) : openCard(pageCard)"
-                        @longpress="batchMode ? toggleBatch(pageCard.path) : showActions(pageCard)"
+                        v-longpress="() => (batchMode ? toggleBatch(pageCard.path) : showActions(pageCard))"
                     >
                         <div
                             v-if="batchMode"
@@ -352,6 +352,9 @@ import {
     appendImportedCards
 } from '../useMobileLibrary';
 import { resetMetaDb } from '../sqliteMeta.js'; // 🚀 P2 B2:授权切换时清空元数据库
+// v4.1 B1：批量操作时抑制记忆写入（避免批量导入/删除触发跨卡记忆污染）
+// v4.1 迁移：类型标记崩溃恢复 + 历史记忆 card_path 一次性回填（migrateMemoryToV2）
+import { isMemoryEnabled, setMemoryEnabled, markMemoryBatchSuppress, clearMemoryBatchSuppress, migrateMemoryToV2 } from '../useChatMemory';
 
 export default {
     name: 'CardLibraryView',
@@ -708,6 +711,26 @@ onBeforeUnmount(() => {
             }
         }
 
+        /** v4.1 迁移（7.5 定案）：库就绪后一次性把历史记忆回填 card_path（幂等；成功打标防重复） */
+        async function maybeMigrateMemoryOnce() {
+            try {
+                if (localStorage.getItem('jsmobile-memory-migrated-v2') === '1') return;
+                if (!mobileLibrary.ready) return; // 主扫描路径 ready 后才继续；否则下次库就绪重试
+                // ⚠️ 首次秒开走「渐进上屏」（60 张/批异步 push）：等待库长度连续两次采样一致，
+                // 确保 mappings 覆盖全量卡名（否则漏配的卡名会被永久跳过）
+                let last = -1;
+                for (let i = 0; i < 40; i++) {
+                    const len = mobileLibrary.library.length;
+                    if (len > 0 && len === last) break;
+                    last = len;
+                    await new Promise((r) => setTimeout(r, 400));
+                }
+                if (!mobileLibrary.library.length) return;
+                const mr = await migrateMemoryToV2(mobileLibrary.library);
+                if (mr && mr.success) localStorage.setItem('jsmobile-memory-migrated-v2', '1');
+            } catch (e) { /* 迁移失败下次启动重试 */ }
+        }
+
         async function load(refresh = false) {
             loading.value = true;
             needsAuth.value = false;
@@ -716,6 +739,8 @@ onBeforeUnmount(() => {
             loading.value = false;
             needsAuth.value = !mobileLibrary.ready && !!mobileLibrary.error;
             libraryReady.value = mobileLibrary.ready;
+            // v4.1 迁移（异步，不阻塞首屏）：历史记忆回填 card_path
+            if (libraryReady.value && mobileLibrary.library.length > 0) maybeMigrateMemoryOnce();
             // 库加载成功后异步构建搜索倒排索引（分块构建不阻塞 UI，万卡库搜索加速）
             // 🚀 C2:短字段倒排(C2 降量) + 长文本线性降级兜底
             if (libraryReady.value && mobileLibrary.library.length > 0) {
@@ -817,15 +842,26 @@ onBeforeUnmount(() => {
         const showBatchAiTag = ref(false);
         const aiTagRunning = ref(false);
         const aiTagProgress = reactive({ current: 0, total: 0, status: '' });
+        // v4.1 B1：批量进入前的记忆开关原状态（退出时恢复）
+        let batchPrevMemoryEnabled = true;
 
         function enterBatch() {
             batchMode.value = true;
             batchSet.clear();
+            // v4.1 B1：记录进入前记忆开关状态并抑制（批量操作期间不写记忆）；打标供崩溃恢复
+            batchPrevMemoryEnabled = isMemoryEnabled();
+            if (batchPrevMemoryEnabled) { setMemoryEnabled(false); markMemoryBatchSuppress(); }
         }
         function exitBatch() {
             batchMode.value = false;
             batchSet.clear();
+            // v4.1 B1：退出时恢复原开关状态
+            if (batchPrevMemoryEnabled) { setMemoryEnabled(true); clearMemoryBatchSuppress(); }
         }
+        // v4.1 B1：组件真正销毁时若仍在批量抑制中，恢复记忆开关（keep-alive 缓存下由 exitBatch 负责）
+        onBeforeUnmount(() => {
+            if (batchMode.value && batchPrevMemoryEnabled) { setMemoryEnabled(true); clearMemoryBatchSuppress(); }
+        });
         function toggleBatch(path) {
             if (batchSet.has(path)) batchSet.delete(path);
             else batchSet.add(path);

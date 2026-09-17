@@ -338,12 +338,24 @@
         </div>
     </transition>
 
-    <!-- 🚀 记忆表格查看器:黑箱变透明(类型筛选/行编辑/删除/清空) -->
+    <!-- 🚀 记忆表格查看器:黑箱变透明(类型筛选/行编辑/删除/清空/按卡过滤) -->
     <van-popup v-model:show="memoryViewerShow" position="bottom" round closeable
         :style="{ height: '72vh' }" class="mem-viewer">
         <div class="mem-v-head">
             <span class="mem-v-title">🧠 记忆表格（{{ memoryItems.length }} 条）</span>
             <van-button size="mini" plain type="danger" :disabled="!memoryItems.length" @click="clearMemoryAll">{{ memFilter === 'fact' ? '清空事实' : (memFilter === 'summary' ? '清空摘要' : (memFilter === 'message' ? '清空消息' : '清空全部')) }}</van-button>
+        </div>
+        <!-- 当前卡 chip + 范围切换（v4.1：换卡=换记忆；7.6 全部 = 当前卡 + 遗留桶） -->
+        <div class="mem-v-cardbar">
+            <van-tag type="primary" size="small">当前卡</van-tag>
+            <span class="mem-v-cardpath">{{ currentCardPath || '（未加载卡片）' }}</span>
+            <div class="mem-v-scope">
+                <span :class="{ on: memScope === 'card' }" @click="setMemScope('card')">只看本卡</span>
+                <span :class="{ on: memScope === 'all' }" @click="setMemScope('all')">含遗留桶</span>
+            </div>
+        </div>
+        <div v-if="legacyBucketCount > 0" class="mem-v-legacy">
+            ⚠ 遗留桶 {{ legacyBucketCount }} 条（卡已删除/同名卡的旧记忆，切「含遗留桶」查看）
         </div>
         <!-- 类型筛选 -->
         <div class="mem-v-tabs">
@@ -356,7 +368,9 @@
                 <div class="mem-v-meta">
                     <van-tag :type="it.type === 'fact' ? 'warning' : (it.type === 'summary' ? 'success' : 'primary')" size="mini">{{ typeLabel(it.type) }}</van-tag>
                     <span v-if="it.type === 'fact'" class="mem-v-key">{{ it.key || '备忘' }}</span>
-                    <span class="mem-v-card">{{ it.cardName || '' }}</span>
+                    <!-- v4.1：遗留桶行标记 / 非本卡归属标记 -->
+                    <span v-if="!it.cardPath" class="mem-v-othercard">遗留</span>
+                    <span v-else-if="it.cardPath !== currentCardPath" class="mem-v-othercard" :title="it.cardPath">{{ it.cardName || it.cardPath }}⚠</span>
                     <span class="mem-v-time">{{ fmtMemTime(it.createdAt) }}</span>
                 </div>
                 <div class="mem-v-content">{{ it.content }}</div>
@@ -424,6 +438,8 @@ export default {
         userPersona: { type: String, default: '' },
         memoryEnabled: { type: Boolean, default: true },
         memoryLimit: { type: Number, default: 20 },
+        /** v4.1：当前卡 path（card.value.path），查看器按卡过滤 */
+        currentCardPath: { type: String, default: '' },
         maxFloors: { type: Number, default: 0 },
         // MVU 变量 + EJS + 分段渲染（变量 Tab）
         mvuEnabled: { type: Boolean, default: true },
@@ -490,10 +506,12 @@ export default {
         const localMemoryLimit = ref(props.memoryLimit);
         const localMaxFloors = ref(props.maxFloors);
 
-        // ---------- 🚀 记忆表格查看器(黑箱变透明:类型筛选/行编辑/删除/清空) ----------
+        // ---------- 🚀 记忆表格查看器(黑箱变透明:类型筛选/行编辑/删除/清空/按卡过滤) ----------
         const memoryViewerShow = ref(false);
         const memoryLoading = ref(false);
         const memoryItems = ref([]);
+        /** v4.1：遗留桶计数（card_path IS NULL 的未归属记忆） */
+        const legacyBucketCount = ref(0);
         const memFilters = [
             { key: '', label: '全部' },
             { key: 'fact', label: '事实' },
@@ -501,11 +519,17 @@ export default {
             { key: 'message', label: '消息' }
         ];
         const memFilter = ref('');
+        /** v4.1：查看范围（card=只看本卡 / all=本卡+遗留桶；7.6 定案） */
+        const memScope = ref('card');
         function typeLabel(t) {
             return t === 'fact' ? '事实' : (t === 'summary' ? '摘要' : (t === 'message' ? '消息' : (t || '未知')));
         }
         function setMemFilter(k) {
             memFilter.value = k;
+            refreshMemoryList();
+        }
+        function setMemScope(k) {
+            memScope.value = k === 'all' ? 'all' : 'card';
             refreshMemoryList();
         }
         async function openMemoryViewer() {
@@ -515,10 +539,24 @@ export default {
         async function refreshMemoryList() {
             memoryLoading.value = true;
             try {
-                const res = await api.memoryList({ type: memFilter.value, limit: 300 });
-                memoryItems.value = (res && res.success && Array.isArray(res.items)) ? res.items : [];
+                // v4.1：按卡过滤（card_path = currentCardPath）
+                const res = await api.memoryList({ type: memFilter.value, limit: 300, cardName: props.currentCardPath });
+                let items = (res && res.success && Array.isArray(res.items)) ? res.items : [];
+                // 遗留桶：card_path 为空的未归属记忆（7.6：全部 = 当前卡 + 遗留桶）
+                const resLegacy = await api.memoryList({ limit: 500, cardName: '__legacy__' });
+                const legacyAll = (resLegacy && resLegacy.success && Array.isArray(resLegacy.items)) ? resLegacy.items : [];
+                legacyBucketCount.value = legacyAll.length;
+                if (memScope.value === 'all' && legacyAll.length) {
+                    const legacyShown = memFilter.value ? legacyAll.filter((it) => it.type === memFilter.value) : legacyAll;
+                    const seen = new Set(items.map((it) => it.id));
+                    items = items.concat(legacyShown.filter((it) => !seen.has(it.id)));
+                    items.sort((a, b) => (Number(b.updatedAt || b.createdAt || 0)) - (Number(a.updatedAt || a.createdAt || 0)));
+                    items = items.slice(0, 300);
+                }
+                memoryItems.value = items;
             } catch (e) {
                 memoryItems.value = [];
+                legacyBucketCount.value = 0;
             } finally {
                 memoryLoading.value = false;
             }
@@ -560,14 +598,19 @@ export default {
             if (!memoryItems.value.length) return;
             const typeStr = memFilter.value === 'fact' ? '事实' : (memFilter.value === 'summary' ? '摘要' : (memFilter.value === 'message' ? '消息' : '全部'));
             try {
-                await showConfirmDialog({ title: '清空记忆', message: `确定清空当前筛选「${typeStr}」下的 ${memoryItems.value.length} 条记忆？此操作不可恢复。` });
+                await showConfirmDialog({ title: '清空记忆', message: `确定清空当前列表显示的 ${memoryItems.value.length} 条记忆（${typeStr}）？此操作不可恢复。` });
             } catch (e) { return; }
             try {
-                const res = await api.memoryClear(memFilter.value);
-                if (res && res.success) { showSuccessToast('已清空'); memoryItems.value = []; }
-                else showToast((res && res.error) || '清空失败');
+                // v4.1：仅删除本页可见行（按卡过滤后的结果），避免清空全库
+                const ids = memoryItems.value.map(it => it.id).filter(Boolean);
+                let ok = 0;
+                for (const id of ids) {
+                    try { const r = await api.memoryRemove(id); if (r && r.success) ok++; } catch (_) { /* ignore */ }
+                }
+                if (ok > 0) { showSuccessToast(`已删除 ${ok} 条`); await refreshMemoryList(); }
+                else showToast('删除失败');
             } catch (e) {
-                showToast('清空失败');
+                showToast('删除失败');
             }
         }
         function fmtMemTime(t) {
@@ -1097,8 +1140,8 @@ export default {
             paramOverrides, paramKeys, regexCount, wbCount, wbExpanded,
             localApiEndpoint, localApiKey, localApiModel, localApiType,
             localReplyCount, localUserName, localUserPersona, localMemoryEnabled, localMemoryLimit, localMaxFloors,
-            memoryViewerShow, memoryLoading, memoryItems, openMemoryViewer, deleteMemoryOne, clearMemoryAll, fmtMemTime,
-            memFilters, memFilter, setMemFilter, editMemoryRow, typeLabel,
+            memoryViewerShow, memoryLoading, memoryItems, legacyBucketCount, openMemoryViewer, deleteMemoryOne, clearMemoryAll, fmtMemTime,
+            memFilters, memFilter, setMemFilter, memScope, setMemScope, editMemoryRow, typeLabel,
             emitParams, resetParams, applyPastedPreset, importPastedRegex, importPastedPlugin,
             importPresetFromFile, importRegexFromFile, importPluginFromFile,
             ppExpanded, ppKey, ppEnabled, ppRole, togglePpExpand, setPpEnabled,
@@ -1294,6 +1337,24 @@ export default {
     padding: 14px 16px 10px; border-bottom: 1px solid var(--van-gray-3, #ebedf0);
 }
 .mem-v-title { font-size: 15px; font-weight: 600; }
+/* v4.1：当前卡归属 bar + 范围切换 */
+.mem-v-cardbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 16px 4px; font-size: 11px; color: var(--van-gray-6, #646566);
+    flex-shrink: 0;
+}
+.mem-v-cardpath {
+    font-family: monospace; font-size: 10px; color: var(--van-gray-5, #969799);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+}
+.mem-v-scope { margin-left: auto; display: flex; background: var(--van-background-2, #f7f8fa); border-radius: 10px; padding: 2px; }
+.mem-v-scope span {
+    padding: 2px 8px; font-size: 10.5px; border-radius: 8px; color: var(--van-gray-6, #646566); cursor: pointer;
+}
+.mem-v-scope span.on { background: #06b6d4; color: #fff; font-weight: 600; }
+.mem-v-legacy {
+    padding: 0 16px 4px; font-size: 11px; color: #ff976a; font-weight: 500;
+}
 /* 记忆表格类型筛选 Tab */
 .mem-v-tabs { display: flex; gap: 6px; padding: 8px 16px 0; flex-shrink: 0; }
 .mem-v-tab {
@@ -1311,7 +1372,7 @@ export default {
 }
 .mem-v-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .mem-v-key { font-size: 11px; color: #b8860b; background: #fdf6e3; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
-.mem-v-card { font-size: 11px; color: var(--van-gray-5, #969799); }
+.mem-v-othercard { font-size: 10px; color: #e67e22; background: #fff3e6; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
 .mem-v-time { margin-left: auto; font-size: 11px; color: var(--van-gray-5, #969799); }
 .mem-v-content { font-size: 13px; line-height: 1.5; word-break: break-all; white-space: pre-wrap; }
 .mem-v-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 10px; }

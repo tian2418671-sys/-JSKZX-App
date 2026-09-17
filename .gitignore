@@ -52,3 +52,7 @@ _备份_签名密钥/
 # 插件样例工程（大体积 zip + 解压目录，勿提交；真实插件样例见 资料库/*.json 与 资料库/脚本/）
 资料库/_git_samples/
 shots/p0-test-validation/
+
+# 测卡记忆 v4.1 模拟器测试：中间截图/数据库不入库（正式截图在 docs/screenshots/2026-09-17-测卡记忆/；日志已由 *.log 全局忽略）
+shots/memory-v41/*.png
+shots/memory-v41/*.db

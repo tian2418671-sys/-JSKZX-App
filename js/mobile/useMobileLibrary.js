@@ -19,6 +19,8 @@ import cardParseWorker from './cardParseWorker.js?worker&inline';
 import { restoreItemsFromCacheText, restoreItemsFromShardTexts, buildLightItem, NEG, cacheFingerprint as coreCacheFingerprint, shardOfKey, shardFileName, CACHE_SHARDS } from './libraryCacheCore.js';
 import cacheRestoreWorker from './cacheRestoreWorker.js?worker&inline';
 import { restoreFromMetaDb, persistMetas, removeMetaCards, syncMetas } from './sqliteMeta.js'; // 🚀 P2 B2:SQLite 元数据库数据层
+// v4.1 D1a：换卡=换记忆（路径变更/删除时记忆跟随）
+import { migrateMemoryCard, clearMemoryByCard } from './useChatMemory.js';
 
 // ---------- 阶段打点（缺陷 #001 排查基建，永久保留） ----------
 // plog 输出各阶段累计耗时:scan=SAF枚举 read=文件读取 parse=解析 publish=发布 cache=缓存落盘 total=总耗时
@@ -1149,6 +1151,10 @@ export async function moveCardToGroup(card, targetGroup) {
         }
         // 🚀 BUG-17 fix-3:移动后清理旧 path 的 SQLite 行(旧 DB 行不删→幽灵卡永久残留)
         try { removeMetaCards([oldPath]); } catch (e) { /* DB 清理失败下次 reconcile 覆盖 */ }
+        // v4.1 D1a：路径变更→记忆跟随（fire-and-forget，失败不影响主流程）
+        if (oldPath && card.path && oldPath !== card.path) {
+            migrateMemoryCard(oldPath, card.path).catch(() => { /* 记忆迁移失败静默 */ });
+        }
         return { success: true };
     }
     return { success: false, error: (res && res.error) || '移动失败' };
@@ -1188,6 +1194,8 @@ export async function removeCard(card) {
             } catch (e) { /* 缓存清理失败不改主流程 */ }
         }
         try { removeMetaCards([card.path]); } catch (e) { /* DB 清理失败下次 reconcile 覆盖 */ }
+        // v4.1 D1a：卡删除→记忆清除（fire-and-forget，避免残留跨卡泄漏）
+        try { clearMemoryByCard(card.path); } catch (e) { /* 记忆清除失败静默 */ }
         return { success: true };
     }
     return { success: false, error: (res && res.error) || '删除失败' };

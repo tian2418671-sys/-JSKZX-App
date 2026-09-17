@@ -43,7 +43,8 @@ const FEATURE_MARKERS = [
     { key: '预设缝合', marker: '缝合' },
     { key: '内容指纹查重', marker: '内容指纹' },
     { key: '世界书', marker: '世界书' },
-    { key: 'MVU 变量', marker: 'MVU' }
+    { key: 'MVU 变量', marker: 'MVU' },
+    { key: '测卡记忆 v4.1', marker: '记忆表格' }
 ];
 
 /** 体积上限(MB):超过视为异常(通常是陈旧产物混入) */

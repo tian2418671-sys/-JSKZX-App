@@ -361,6 +361,7 @@
                             :user-persona="userPersona"
                             :memory-enabled="memoryEnabled"
                             :memory-limit="memoryLimit"
+                            :current-card-path="card ? card.path : ''"
                             :max-floors="maxFloors"
                             :mvu-enabled="mvuEnabled"
                             :ejs-enabled="ejsEnabled"
@@ -569,7 +570,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
 import { messageText as messageTextOf, replyToSwipe } from '../useChatSwipe';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona, getMaxFloors, setMaxFloors } from '../useChatSettings';
-import { buildMemoryContext, recordMessage, recordFact, extractFacts, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit } from '../useChatMemory';
+import { buildMemoryContext, recordMessage, recordFact, extractFacts, isMemoryEnabled, setMemoryEnabled, getMemoryLimit, setMemoryLimit, getMemoryInjectTokens, setMemoryInjectTokens } from '../useChatMemory';
 import { parseRegexPattern, classifyTemplate, sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 // 🚀 对齐酒馆正文 Markdown 引擎(Showdown,messageFormatting 第 6 步 converter.makeHtml)
 import Showdown from 'showdown';
@@ -2250,17 +2251,17 @@ export default {
                 // 插件额外 system 提示词
                 const pluginSys = collectPluginSystemPrompts(plugins.value);
                 // 长期记忆
-                let memCtx = '';
+                let memCtx = { text: '', meta: null };
                 if (isMemoryEnabled()) {
                     const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
-                    memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
+                    memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '', card.value.path);
                 }
                 // 合并 system 文本（预设 system 消息 + 世界书 + 插件 + 记忆 + 用户人设）
                 const sysTexts = presetMsgs.filter((m) => m.role === 'system').map((m) => m.content);
                 if (wbText) sysTexts.push(wbText);
                 if (userPersona.value) sysTexts.push(applyMacros('### 用户(你)的角色设定\n{{persona}}', macros));
                 sysTexts.push(...pluginSys);
-                if (memCtx) sysTexts.push(memCtx);
+                if (memCtx && memCtx.text) sysTexts.push(memCtx.text);
                 const systemText = sysTexts.filter(Boolean).join('\n\n');
                 const nonSysMsgs = presetMsgs.filter((m) => m.role !== 'system');
                 const allMsgs = [{ role: 'system', content: systemText }, ...nonSysMsgs];
@@ -2300,8 +2301,8 @@ export default {
             // 长期记忆:检索最后一条用户提问的关键词注入 system
             if (isMemoryEnabled()) {
                 const lastUser = [...chatMessages.value].reverse().find((m) => m.role === 'user');
-                const memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '');
-                if (memCtx) sysParts.push(memCtx);
+                const memCtx = await buildMemoryContext(lastUser ? messageText(lastUser) : '', card.value.path);
+                if (memCtx && memCtx.text) sysParts.push(memCtx.text);
             }
             const systemText = sysParts.filter(Boolean).join('\n\n');
             // 对历史消息应用宏替换
@@ -2374,10 +2375,12 @@ export default {
                 }
                 chatMessages.value.push({ role: 'assistant', swipes, index: 0 });
                 // 记录对话到长期记忆(不阻塞)；错误占位(⚠)/失败重试由 recordMessage 与原生层过滤去重
-                recordMessage('user', processedText, card.value.name);
-                if (swipes && swipes[0]) recordMessage('assistant', swipes[0], card.value.name);
+                // R1/R2：记原话 + { path, name } 双写（card_path 分桶隔离）
+                const cardRef = { path: card.value.path, name: card.value.name };
+                recordMessage('user', processedText, cardRef);
+                if (swipes && swipes[0]) recordMessage('assistant', swipes[0], cardRef);
                 // L3 事实提取：用户交代的关键信息 → 记忆表格行(键=值)
-                for (const f of extractFacts(processedText)) recordFact(f.key, f.value, card.value.name);
+                for (const f of extractFacts(processedText)) recordFact(f.key, f.value, cardRef);
             } catch (e) {
                 chatMessages.value.push({ role: 'assistant', swipes: ['⚠ 请求异常: ' + (e.message || e)], index: 0 });
             } finally {
