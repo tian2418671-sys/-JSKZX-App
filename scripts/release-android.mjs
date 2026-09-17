@@ -9,6 +9,9 @@
  *   前置:强制删除两个输出目录,杜绝陈旧产物混入
  *   后置:①入口一致性 ②分块集一致性 ③关键功能特征 ④签名 ⑤体积/哈希
  *
+ * 对外正文:上传时自动从仓库根 RELEASE_NOTES.md 抽取当前版本段作 GitHub Release 正文
+ *   (对齐桌面版规范:对外正文不手抄;内部技术明细留在 CHANGELOG.md,勿粘进正文)。
+ *
  * 用法:
  *   node scripts/release-android.mjs            # 构建 + 校验
  *   node scripts/release-android.mjs --upload   # 构建 + 校验 + 上传到 GitHub Release
@@ -17,8 +20,9 @@
  * 归属:package.json 的 release:android 命令。
  */
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -256,8 +260,40 @@ function findApksigner() {
 
 // ---------------------------------------------------------------- 上传
 
+/**
+ * 从仓库根 RELEASE_NOTES.md 抽取当前版本段作为对外正文。
+ * 对齐桌面版规范:用仅 ASCII 的正则(^## )定位版本段,写到 ASCII 临时路径;
+ * 找不到版本段返回 null(调用方应提示先补段落)。
+ */
+function extractReleaseNotesSection(tag) {
+    try {
+        const notesPath = join(root, 'RELEASE_NOTES.md');
+        if (!existsSync(notesPath)) return null;
+        const raw = readFileSync(notesPath, 'utf-8').replace(/^\uFEFF/, '');
+        const lines = raw.split(/\r?\n/);
+        const start = lines.findIndex((l) => /^##\s/.test(l) && l.includes(tag));
+        if (start < 0) return null;
+        let end = lines.length;
+        for (let i = start + 1; i < lines.length; i++) {
+            if (/^##\s/.test(lines[i]) || /^---\s*$/.test(lines[i])) { end = i; break; }
+        }
+        const text = lines.slice(start, end).join('\n').trim();
+        if (!text) return null;
+        const out = join(tmpdir(), `jskzx-release-notes-${tag.replace(/[^\w.-]/g, '')}.md`);
+        writeFileSync(out, text + '\n', 'utf-8');
+        return out;
+    } catch (e) {
+        return null;
+    }
+}
+
 function uploadToRelease(tag, hash) {
     log('⑥ 上传到 GitHub Release');
+
+    const notesFile = extractReleaseNotesSection(tag);
+    if (!notesFile) {
+        log(`   ⚠ RELEASE_NOTES.md 未找到 ${tag} 段——发布正文将为空/保持原样`);
+    }
 
     let remoteDigest = null;
     try {
@@ -270,6 +306,10 @@ function uploadToRelease(tag, hash) {
 
     if (remoteDigest === hash) {
         log(`   ✓ 远端附件哈希一致,无需重复上传`);
+        if (notesFile) {
+            run(`gh release edit ${tag} --notes-file "${notesFile}"`);
+            log(`   ✓ 已同步发布正文(RELEASE_NOTES.md 抽取)`);
+        }
         return;
     }
 
@@ -288,10 +328,12 @@ function uploadToRelease(tag, hash) {
 
     if (exists) {
         run(`gh release upload ${tag} "${APK_PATH}#JSKZX-${tag}.apk"`);
-        log(`   ✓ 已替换 ${tag} 的 release 附件`);
+        if (notesFile) run(`gh release edit ${tag} --notes-file "${notesFile}"`);
+        log(`   ✓ 已替换 ${tag} 的 release 附件${notesFile ? ' 并同步发布正文' : ''}`);
     } else {
-        run(`gh release create ${tag} "${APK_PATH}#JSKZX-${tag}.apk" --title "${tag}" --target main-v1.10`);
-        log(`   ✓ 已创建 ${tag} 并上传附件`);
+        const notesArg = notesFile ? ` --notes-file "${notesFile}"` : '';
+        run(`gh release create ${tag} "${APK_PATH}#JSKZX-${tag}.apk" --title "${tag}" --target main-v1.10${notesArg}`);
+        log(`   ✓ 已创建 ${tag} 并上传附件${notesFile ? '(含发布正文)' : '(正文为空,建议先补 RELEASE_NOTES.md 段落)'}`);
     }
 }
 
