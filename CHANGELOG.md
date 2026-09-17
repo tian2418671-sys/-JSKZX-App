@@ -6,6 +6,46 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.25] - 2026-09-17
+
+### 🚀 两万卡库性能专项（P0 + P1 + P2 落地）
+
+目标：把卡库规模目标从"千卡"推到"两万卡"。模拟器实测（5240 卡子集）：枚举扫描 57s/1994 卡 → **4.8s/5411 卡（单文件 28.6ms→0.88ms，约 32 倍）**；二次启动 Displayed **907ms** 秒开。
+
+- **A1 枚举批量 Cursor + 行缓存**（`LibraryFsPlugin.java`）：每目录单次 `query(buildChildDocumentsUriUsingTree)` 拿全部子项属性（含 mtime/size），替代逐文件 `queryLastModified`（两万次 query → 0）；参照 MaterialFiles `queryChildren`。
+- **A2 scan 分块回传**：原生新增 `scanStart/scanNext` 游标协议，两万卡 ~4MB 单次回传拆 ~8 块（≤500 条/块），旧 `scan` 保留兼容、异常自动回退。
+- **C1 内存 `_searchText` 截断 1.5K**（I13 不变量）：内存与缓存搜索文本同源同长，消除两万卡 >1GB OOM 风险。
+- **C2 搜索索引降量**：倒排只建短字段（名称/作者/文件名/分组/标签），长文本全文线性降级（`searchIndex.js` 新增 `extractShortText` + `_linearSearch`）。
+- **C3 加载期 filter/sort 直通**（`CardLibraryView.vue`）：加载期浏览态直接切增量库切片，消除两万卡加载期 ~834 次全库重排。
+- **B1 缓存分片**：`.jskzx_cache.json` 单文件 → `.jskzx_cache/` 16 分片增量写（单卡变更只重写所在分片）；旧单文件自动迁移；restore 分片原文传 Worker 免重复 stringify。
+- **E1 reconcile diff 更新**：`applyReconcileDiff` 按 path 增删改替代全量替换；`reconcileCancelled` 刷新取消标志；增量导入 `appendImportedCards` 后即时同步 SQLite。
+- **E2 查重签名持久化**：MinHash 签名缓存到 `.jskzx_sigs.json`，内容查重只对新增/变更卡水合，二次查重零 2GB chara 过桥。
+- **F 缩略图容量制**：磁盘缓存上限 1500 张 → 200MB，按 mtime 淘汰到一半，60s 节流。
+- **P2 SQLite 元数据库**（新 `SqliteMetaPlugin.java`）：应用私有库 `jskzx_meta.db`（WAL + schema v1 + 复合索引）；启动路径升级为 SQLite 一次查询 → JSON 分片 → 全量 scan 三级秒开；`META_DB_ENABLED` 特性开关。
+
+### 🔴 严重 Bug 修复：保存后元数据不固化（BUG-17，SQLite/缓存残留）
+
+"编辑保存后重启显示旧值 / 删除的卡重启后幽灵复现"——两万卡专项引入 SQLite 元数据库后暴露：
+
+- **根因 A（编辑不落库）**：`syncCardLightFields` 只更新内存 + JSON 分片，从不写 SQLite → 重启 DB restore 显示旧标签/旧名直至 reconcile。
+- **根因 B（删除不清库）**：`INSERT OR REPLACE` 只覆盖不删除 → 删除的卡永久残留 DB，每次重启幽灵卡复现。
+- **根因 C（移动残留旧 path）**：移动分组后旧 path DB 行残留。
+- **修复**：① `syncCardLightFields` 补单卡 `persistMetas`（保存即时同步）；② `removeCard` 清理分片缓存条目 + 新增 `removeMetaCards` 删 DB 行；③ `moveCardToGroup` 清理旧 path；④ reconcile/loadLibrary 改 `syncMetas`（原生 `syncCards`：事务内 DELETE all + 批量 INSERT 全量对齐，兜底外部删文件的幽灵行）；⑤ 原生新增 `deleteCards`/`syncCards` 接口 + JS 桥/数据层 `metaDeleteCards`/`metaSyncCards`/`removeMetaCards`/`syncMetas`。
+- 检查记录：`docs/BUG-17_保存持久化缺陷检查修复日志.md`
+
+### 🔧 验证与回归
+
+- `npm test` → 135/135 pass（+2 新增 `toMemorySearchText`/I13 测试；唯一失败为仓库既有真机 adb 脚本）
+- `build:android` BUILD SUCCESSFUL（versionCode 30）；模拟器冒烟：启动无崩溃，A2 `scanStart` 与 B1 分片路径正常
+- 模拟器实测记录：`docs/两万卡_模拟器实测记录-2026-09-17.md`；测试清单：`docs/v1.10.25_测试清单.md`
+
+### 📄 文档
+
+- `docs/两万卡卡库性能方案.md`（方案 + 执行状态 PL0/P1/P2）
+- `docs/测卡记忆功能重构方案.md`（v3 定稿，待评审，未实现）
+
+---
+
 ## [1.10.24] - 2026-09-16
 
 ### 🔴 严重 Bug 修复：秒开后点详情极慢（BUG-14，原生桥线程独占）
