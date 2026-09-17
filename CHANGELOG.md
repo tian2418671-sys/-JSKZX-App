@@ -6,6 +6,17 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.28] - 2026-09-18
+
+### 🩹 设置页版本显示 + 更新提示修正
+
+- **设置页「关于」版本写死 `v1.10.23`** → 构建期注入 `__APP_VERSION__`（`vite.config.mjs` 读 package.json），`SettingsView.vue` 动态显示；此后发版只需 bump package.json（与 build.gradle 同步）。
+- **已是最新仍提示「发现新版本」**：原生 `UpdatePlugin` 只判断“发布源存在版本”不做比较（`callBase` 恒 `update:true`）；在 `SettingsView.checkUpdate` 增加语义化版本比较（`cmpVersion(feed, 当前) <= 0` 视为已是最新）。
+- **发布硬校验**：`FEATURE_MARKERS` 新增 `{ key: '更新提示版本比较', marker: '当前已是最新版本' }`。
+- **验证**：模拟器实测——「关于」显示 v1.10.28；feed=v1.10.27（低于当前）时点检查更新 → 「当前已是最新版本」；`npm test` 全绿。
+
+---
+
 ## [1.10.27] - 2026-09-18
 
 ### 🛠 预设/世界书外部目录扫描「读取不全」修复（BOM + 上限 + 静默跳过）

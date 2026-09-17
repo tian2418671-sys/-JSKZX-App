@@ -1,10 +1,17 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import VueDevTools from 'vite-plugin-vue-devtools';
+import { readFileSync } from 'node:fs';
+
+// 应用版本注入:与 package.json 同步(发版 bump 时一并更新),设置页「关于」显示与更新比较用
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
 
 // SillyTavern 角色卡管理器 - Vite 构建配置
 // 使用函数形式按 command 区分：serve = 开发(可视化调试)，build = 生产(不带 devtools)
 export default defineConfig(({ command }) => ({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version)
+  },
   // 相对路径基准：兼容 Electron app:// 自定义协议加载构建产物（无需服务器）
   base: './',
   // 🖥️ 可视化开发：仅 dev server 启用 Vue DevTools（组件树/状态/事件面板），生产构建自动排除

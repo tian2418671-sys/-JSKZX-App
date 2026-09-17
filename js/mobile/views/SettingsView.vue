@@ -145,7 +145,7 @@
 
             <!-- 关于 -->
             <van-cell-group inset title="关于">
-                <van-cell title="版本" value="v1.10.23 (移动端)" />
+                <van-cell title="版本" :value="appVersionText" />
                 <van-cell title="数据存储" :label="rootUri || '使用系统文件夹(SAF 目录树授权)'" />
             </van-cell-group>
         </div>
@@ -249,6 +249,8 @@ const LS_TYPE = 'stc-api-type';
 const LS_FEED = 'jsmobile-update-feed';
 // 默认更新源:GitHub Releases API(移动端仓库),无需手动填写即可检查更新
 const DEFAULT_FEED = 'https://api.github.com/repos/tian2418671-sys/-JSKZX-App/releases/latest';
+// 应用版本(构建期由 vite define 注入,与安装包构建版本一致;兜底空串=开发环境)
+const APP_VERSION = typeof __APP_VERSION__ === 'undefined' ? '' : __APP_VERSION__;
 
 export default {
     name: 'SettingsView',
@@ -307,6 +309,19 @@ export default {
             }
         });
 
+        // 应用版本(构建期注入):「关于」显示 + 更新比较
+        const appVersionText = APP_VERSION ? `v${APP_VERSION} (移动端)` : '开发版 (移动端)';
+        /** 语义化版本比较:a>b→1, a<b→-1, 相等→0(仅数字段,忽略预发布标记) */
+        function cmpVersion(a, b) {
+            const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
+            const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
+            for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+                const d = (pa[i] || 0) - (pb[i] || 0);
+                if (d) return d > 0 ? 1 : -1;
+            }
+            return 0;
+        }
+
         async function checkUpdate() {
             const feed = (updateFeed.value || '').trim() || DEFAULT_FEED;
             updateFeed.value = feed;
@@ -319,6 +334,11 @@ export default {
                     return;
                 }
                 if (!res.update || !res.info) {
+                    showToast('当前已是最新版本');
+                    return;
+                }
+                // 与当前安装版本比较:相同/更低视为已是最新(只有确实更新才弹升级框)
+                if (APP_VERSION && cmpVersion(res.info.version, APP_VERSION) <= 0) {
                     showToast('当前已是最新版本');
                     return;
                 }
@@ -681,7 +701,7 @@ export default {
             fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
             replyCount, userName, userPersona, saveReplyCount, saveUserName, saveUserPersona,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
-            fmtSize, checkUpdate, doDownload,
+            fmtSize, checkUpdate, doDownload, appVersionText,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
             snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
             ignoreImportTags, onIgnoreTagsChange,

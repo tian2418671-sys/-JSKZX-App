@@ -2,7 +2,7 @@
 
 > 把 SillyTavern 的**卡片库 / 世界书 / 预设**搬进手机，直接用系统文件夹读写，不依赖桌面端、也不需要自建服务器。
 
-**版本** `v1.10.27` · **包名** `com.sillytavern.cardmanager.android` · **平台** Android 7.0+ (API 24) · **许可** MIT
+**版本** `v1.10.28` · **包名** `com.sillytavern.cardmanager.android` · **平台** Android 7.0+ (API 24) · **许可** MIT
 
 本仓库是**移动端**（Capacitor + Vue 3）；配套的桌面版（Electron）在独立仓库中维护。
 
