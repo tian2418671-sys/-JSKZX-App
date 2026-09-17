@@ -2,7 +2,7 @@
 
 > 把 SillyTavern 的**卡片库 / 世界书 / 预设**搬进手机，直接用系统文件夹读写，不依赖桌面端、也不需要自建服务器。
 
-**版本** `v1.10.26` · **包名** `com.sillytavern.cardmanager.android` · **平台** Android 7.0+ (API 24) · **许可** MIT
+**版本** `v1.10.27` · **包名** `com.sillytavern.cardmanager.android` · **平台** Android 7.0+ (API 24) · **许可** MIT
 
 本仓库是**移动端**（Capacitor + Vue 3）；配套的桌面版（Electron）在独立仓库中维护。
 
@@ -250,7 +250,7 @@ $env:ANDROID_SDK_ROOT = "E:\AndroidSDK"
 ```
 
 **Q：预设里的条目开关点了没效果？**
-本版本已修复：酒馆预设的 `prompt_order` 有「扁平」与「嵌套（character_id）」两种形态，现均兼容，且开关会同时写回条目自身与 `prompt_order`。
+已修复：酒馆预设的 `prompt_order` 有「扁平」与「嵌套（character_id）」两种形态，现均兼容，且开关会同时写回条目自身与 `prompt_order`。
 
 ---
 
