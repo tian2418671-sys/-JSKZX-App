@@ -6,11 +6,11 @@
         close-on-click-overlay
         closeable
         class="ddm-popup"
-        @update:show="(v) => emit('update:modelValue', v)"
+        @update:show="(v) => $emit('update:modelValue', v)"
     >
         <div class="ddm-head">
             <span class="ddm-title">{{ mode === 'card' ? '角色卡查重' : mode === 'worldbook' ? '世界书查重' : '内容指纹查重（跨名称）' }}</span>
-            <van-icon name="cross" size="18" @click="emit('update:modelValue', false)" />
+            <van-icon name="cross" size="18" @click="$emit('update:modelValue', false)" />
         </div>
 
         <!-- 模式切换 Tab -->

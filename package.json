@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-card-manager",
-  "version": "1.10.28",
+  "version": "1.10.29",
   "description": "SillyTavern 角色卡高级解析中心 - 移动版（Vue 3 + Vant + Capacitor）",
   "license": "MIT",
   "scripts": {

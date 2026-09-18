@@ -6,6 +6,42 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.29] - 2026-09-18
+
+### 🔴 Bug 修复：查重弹窗无法关闭 + 主题切换无动画
+
+**查重弹窗关闭**（`DedupeModal.vue`）：模板 `setup()` 写法中裸用 `emit('update:modelValue', false)`，
+`emit` 不在模板作用域 → 点击关闭按钮/覆盖层全部失败 → 弹窗永远无法关闭。
+修复：`emit(` → `$emit(`（第 9、13 行）。模拟器 CDP 实测 `display=none` 确认关闭成功。
+
+**主题切换无动画**（`theme.js`）：View Transitions 重构时 `classList.remove('theme-transition')` 被无条件执行 → VT 不支持时降级路径 CSS transition 被永久移除 → 切换完全无过渡效果。
+修复：VT 分支内才移除 transition；降级路径恢复 `theme-transition` + `theme-switching` 类。
+
+### 🔴 Bug 修复：装饰层 blur 全屏模糊（"字体模糊不清"根因）
+
+5 个装饰主题（古风/汉风/未来/赛博朋克/水墨）启用 `filter: blur(40-100px)` 全屏伪元素，
+移动 WebView 上半透明模糊层叠加前景文字 → 对比度骤降。
+修复：全局 `filter:none` + `.app-content { z-index:1 }` 层级分离 + 5 主题渐变重写（radial-gradient / repeating-linear-gradient，零滤波成本）+ `--stc-deco-blur` 全部清零。
+
+### 🚀 主题系统升级（P1：8 主题语义色板 + color-scheme）
+
+- 8 主题新增 12 个语义变量（`--color-base-100/200/300/content` + primary/secondary/accent/border/muted/success/error/warning/info + radius）
+- 旧变量 `--van-*` 改为引用 `--color-*`（单一数据源），换主题只改 12 个语义变量
+- 8 主题全部声明 `color-scheme: dark/light`（原生滚动条/输入控件跟随）
+- `applyTheme` View Transitions 平滑切换（`document.startViewTransition`）+ `prefers-reduced-motion` 降级
+- `probeThemeSupport` 内核探测（OKLCH/startViewTransition 能力输出）
+
+### 🚀 测卡侧边栏模型拉取功能移植
+
+`TestSidebar.vue` 原只支持手动输入模型名 → 从 SettingsView 移植：拉取按钮 + 搜索/滚动模型选择器弹窗 + 协议切换清空列表（复用 `api.fetchModels`）。
+
+### 🔧 文档 + 测试
+
+- 模拟器实测三问题：弹窗关闭✅ / 内容指纹 OOM ⚠️（模拟器内存限制，E2 签名缓存已实现，二次查重秒级） / 主题无动画已修复
+- `docs/三问题模拟机实测记录-2026-09-18.md` / `docs/主题系统升级方案.md`
+
+---
+
 ## [1.10.28] - 2026-09-18
 
 ### 🩹 设置页版本显示 + 更新提示修正

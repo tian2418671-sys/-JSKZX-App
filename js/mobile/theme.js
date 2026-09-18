@@ -62,18 +62,12 @@ export function currentFs() {
     return FS_MAP[v] ? v : 14;
 }
 
-export function applyTheme(theme) {
+let themeProbed = false;
+
+/** 核心主题切换（无动画包装，仅应用属性/类/变量） */
+function applyThemeCore(theme) {
     const t = THEMES.includes(theme) ? theme : 'light';
     const root = document.documentElement;
-    const oldTheme = root.getAttribute('data-theme');
-
-    // 主题切换动画
-    if (oldTheme && oldTheme !== t) {
-        root.classList.add('theme-switching');
-        setTimeout(() => { try { root.classList.remove('theme-switching'); } catch (e) {} }, 600);
-    }
-    root.classList.add('theme-transition');
-    setTimeout(() => { try { root.classList.remove('theme-transition'); } catch (e) {} }, 400);
 
     root.setAttribute('data-theme', t);
     const meta = THEME_META[t] || THEME_META.light;
@@ -107,7 +101,43 @@ export function applyTheme(theme) {
             } catch (e) { /* 插件调用失败不影响主题应用 */ }
         }
     });
+    // P0 前置：首次应用时探测内核能力并输出（供调试面板/日志确认 OKLCH/View Transitions 可用性）
+    if (!themeProbed) { themeProbed = true; probeThemeSupport(); }
     return t;
+}
+
+/**
+ * 🚀 P1：主题切换入口——View Transitions 平滑切换 + CSS transition 降级。
+ * - startViewTransition 存在且用户未开启减少动画 → 用 VT（期间禁用 CSS transition 防叠加）
+ * - 否则 → CSS transition 降级动画（原有主题切换过渡，保留视觉效果）
+ */
+export function applyTheme(theme) {
+    const root = document.documentElement;
+    const oldTheme = root.getAttribute('data-theme');
+    const reducedMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const canVT = !reducedMotion && typeof document.startViewTransition === 'function' && oldTheme && oldTheme !== theme;
+
+    if (canVT) {
+        // VT 分支：禁用 CSS transition 防双重动画
+        root.classList.remove('theme-transition', 'theme-switching');
+        try {
+            const vt = document.startViewTransition(() => { applyThemeCore(theme); });
+            if (vt && typeof vt.finished?.then === 'function') {
+                vt.finished.then(() => { try { root.classList.remove('theme-transition', 'theme-switching'); } catch (e) {} }).catch(() => {});
+            }
+            return theme;
+        } catch (e) {
+            // VT 内部异常 → 落到 CSS transition 降级
+        }
+    }
+    // 降级：CSS transition 动画（保留主题切换过渡效果，兼容旧内核 / reduce-motion / 无起始主题）
+    if (oldTheme && oldTheme !== theme) {
+        root.classList.add('theme-switching');
+        setTimeout(() => { try { root.classList.remove('theme-switching'); } catch (e) {} }, 600);
+    }
+    root.classList.add('theme-transition');
+    setTimeout(() => { try { root.classList.remove('theme-transition'); } catch (e) {} }, 400);
+    return applyThemeCore(theme);
 }
 
 export function applyFs(fs) {
@@ -118,7 +148,7 @@ export function applyFs(fs) {
     return v;
 }
 
-// 初始化主题字体和风格
+// ---------- 初始化主题字体和风格 ----------
 export function initThemeStyle() {
     const t = currentTheme();
     const meta = THEME_META[t] || THEME_META.light;
@@ -127,4 +157,15 @@ export function initThemeStyle() {
     root.style.setProperty('--theme-radius', meta.radius);
     root.style.setProperty('--theme-deco', meta.deco);
     if (meta.deco) root.classList.add(`deco-${meta.deco}`);
+}
+
+// ---------- 内核/特性探测（P0 前置：确认 OKLCH / View Transitions 可用性） ----------
+export function probeThemeSupport() {
+    const startVT = typeof document !== 'undefined' && typeof document.startViewTransition === 'function';
+    let oklch = false;
+    try { oklch = CSS.supports && CSS.supports('color', 'oklch(50% 0.1 200)'); } catch (e) { /* 旧浏览器不支持 CSS.supports */ }
+    const vtPrefersReducedMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const result = { startViewTransition: startVT, oklch, vtPrefersReducedMotion };
+    console.log('[ThemeProbe]', JSON.stringify(result));
+    return result;
 }

@@ -293,10 +293,13 @@
                     <div class="ts-sec-title"><span>🔗 API 配置</span></div>
                     <van-field v-model="localApiEndpoint" label="端点" placeholder="http://127.0.0.1:1234/v1/chat/completions" />
                     <van-field v-model="localApiKey" label="Key" type="password" placeholder="sk-... 或留空" />
-                    <van-field v-model="localApiModel" label="模型" placeholder="local-model" />
+                    <van-field v-model="localApiModel" label="模型" placeholder="local-model" is-link readonly clickable @click="openModelPicker" />
+                    <!-- 🚀 Bug2:移植 SettingsView 的「拉取模型」按钮——从服务端获取可用模型列表 -->
+                    <van-cell title="拉取模型" :value="modelFetchStatus || '点击获取服务端模型列表'"
+                        is-link :disabled="fetchingModels" @click="fetchAvailableModels" />
                     <van-cell title="协议">
                         <template #value>
-                            <van-radio-group v-model="localApiType" direction="horizontal">
+                            <van-radio-group v-model="localApiType" direction="horizontal" @change="onApiTypeChange">
                                 <van-radio name="openai">OpenAI</van-radio>
                                 <van-radio name="anthropic">Anthropic</van-radio>
                             </van-radio-group>
@@ -407,6 +410,26 @@
             </div>
         </div>
     </van-dialog>
+
+    <!-- 🚀 Bug2:模型选择器弹窗(从 SettingsView 移植) -->
+    <van-popup v-model:show="showModelPicker" position="bottom" round style="max-height: 65vh;">
+        <div class="ts-model-picker">
+            <div class="ts-model-picker-head">
+                <span style="font-weight: 600; font-size: 15px;">选择模型</span>
+                <van-icon name="cross" size="18" style="cursor: pointer;" @click="showModelPicker = false" />
+            </div>
+            <van-field v-model="modelFilter" placeholder="搜索模型..." clearable style="margin: 0 12px; padding: 4px 0;" />
+            <div class="ts-model-list" v-if="filteredModels.length">
+                <div class="ts-model-item" v-for="m in filteredModels" :key="m"
+                    :class="{ 'ts-model-active': localApiModel === m }"
+                    @click="pickModel(m)">
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ m }}</span>
+                    <van-icon v-if="localApiModel === m" name="success" size="14" color="#1989fa" />
+                </div>
+            </div>
+            <van-empty v-else image-size="40" description="无匹配模型" />
+        </div>
+    </van-popup>
 </template>
 
 <script>
@@ -1135,6 +1158,68 @@ export default {
             return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
         }
 
+        // 🚀 Bug2:移植 SettingsView 的模型拉取——从服务端获取可用模型列表
+        const availableModels = ref([]);
+        const fetchingModels = ref(false);
+        const modelFetchStatus = ref('');
+        const showModelPicker = ref(false);
+        const modelFilter = ref('');
+        const filteredModels = computed(() => {
+            const q = modelFilter.value.trim().toLowerCase();
+            if (!q) return availableModels.value;
+            return availableModels.value.filter((m) => m.toLowerCase().includes(q));
+        });
+        async function fetchAvailableModels() {
+            const ep = (localApiEndpoint.value || '').trim();
+            if (!ep) { showToast('请先填写 API 端点'); return; }
+            fetchingModels.value = true;
+            modelFetchStatus.value = '拉取中…';
+            availableModels.value = [];
+            try {
+                const res = await api.fetchModels(ep, localApiKey.value.trim(), localApiType.value);
+                if (!res || !res.success) {
+                    modelFetchStatus.value = '失败: ' + ((res && res.error) || '未知错误');
+                    showToast(modelFetchStatus.value);
+                    return;
+                }
+                const raw = res.data;
+                let list = [];
+                if (Array.isArray(raw && raw.data)) {
+                    list = raw.data.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                } else if (Array.isArray(raw)) {
+                    list = raw.map((m) => (typeof m === 'string' ? m : (m && (m.id || m.name)))).filter(Boolean);
+                }
+                if (list.length) {
+                    availableModels.value = list;
+                    modelFetchStatus.value = `已拉取 ${list.length} 个模型`;
+                    if (!list.includes(localApiModel.value.trim())) localApiModel.value = list[0];
+                    showModelPicker.value = true;
+                } else {
+                    modelFetchStatus.value = '接口已响应，但未抓取到模型';
+                }
+            } catch (e) {
+                modelFetchStatus.value = '失败: ' + (e.message || e);
+                showToast(modelFetchStatus.value);
+            } finally {
+                fetchingModels.value = false;
+            }
+        }
+        function pickModel(m) {
+            localApiModel.value = m;
+            showModelPicker.value = false;
+            modelFilter.value = '';
+        }
+        function openModelPicker() {
+            if (!availableModels.value.length) { showToast('请先点击「拉取模型」获取列表'); return; }
+            showModelPicker.value = true;
+        }
+        function onApiTypeChange(v) {
+            // 协议切换后旧模型列表失效,清空待重新拉取
+            availableModels.value = [];
+            modelFetchStatus.value = '';
+            showModelPicker.value = false;
+        }
+
         return {
             activeTab, bodyRef, onTabChange, switchTab, presetPasteText, regexPasteText, pluginPasteText, fileImporting,
             paramOverrides, paramKeys, regexCount, wbCount, wbExpanded,
@@ -1147,6 +1232,9 @@ export default {
             ppExpanded, ppKey, ppEnabled, ppRole, togglePpExpand, setPpEnabled,
             removePresetPrompt, addPresetPrompt, clonePresetPrompt, emitPresetChanged,
             emitApiConfig, toggleWbExpand, promptRename, confirmDelete,
+            // 🚀 Bug2:模型拉取/选择器(移植 SettingsView)
+            availableModels, fetchingModels, modelFetchStatus, showModelPicker, modelFilter, filteredModels,
+            fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
             varsJsonDraft, varsEditing, applyVarsJsonEdit, confirmResetVars, formatOps,
             showVarsJson, vtQuery, vtAllExpanded, vtRows, toggleVtAll, toggleVtNode,
             showVtOps, vtOpsRow, vtOpsActions, vtOpenOps, vtOpenValue, vtOnOpSelect,
