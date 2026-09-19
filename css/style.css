@@ -81,7 +81,10 @@ textarea, input {
 
 /* ============ 紧凑版 IDE 风格 ============ */
 html, body, #app { height: 100%; }
-body { overflow: hidden; }
+/* 🐛 滚动修复:body 的 overflow 会传播到视口——旧版 WebView(如 Chrome 101)严格执行,
+   overflow:hidden 会锁死整个应用的触摸滚动(程序化 scrollTo 仍生效,极难察觉)。
+   移动端页面依赖文档级滚动,这里恢复 visible。 */
+body { overflow: visible; }
 
 /* 全局字体渲染优化（清晰饱满的中英文显示） */
 body, textarea, input {

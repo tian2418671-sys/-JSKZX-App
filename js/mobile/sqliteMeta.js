@@ -12,6 +12,23 @@ import { toMemorySearchText } from '../utils/cardLight.js';
 
 export const META_DB_ENABLED = true; // 特性开关:出问题改 false 即完全回退分片 JSON
 
+/**
+ * 🐛 v1.10.30 OOM 修复:单条桥消息的元数据行数上限。
+ * 全库(万卡)一次性上桥会生成 ~45MB 桥消息——Capacitor Bridge 在 Java 侧处理
+ * (verbose 日志 toString + JSON 解析)会把 Android Java 堆打爆直接崩溃。
+ * 分批后单条消息 ≤ ~3MB,彻底规避。
+ */
+const META_CHUNK = 800;
+
+/** 分批发送(fire-and-forget 串行;单块失败静默,下次 reconcile 自愈) */
+function sendMetaChunks(rows, sender) {
+    (async () => {
+        for (let i = 0; i < rows.length; i += META_CHUNK) {
+            try { await sender(rows.slice(i, i + META_CHUNK), i === 0); } catch (e) { /* 单块失败静默 */ }
+        }
+    })();
+}
+
 /** flags 位:1=hasLorebook 2=hasRegex(与 lightFieldsToCache 的 b/x 语义一致) */
 function flagsOf(light) {
     return (light._lb ? 1 : 0) | (light._rx ? 2 : 0);
@@ -109,7 +126,8 @@ export function persistMetas(cards) {
             if (r) rows.push(r);
         }
         if (rows.length) {
-            window.electronAPI.metaUpsertCards(rows).catch(() => {});
+            // 🐛 v1.10.30:分批上桥(全库一次性发送曾导致 Android Java 堆 OOM 崩溃)
+            sendMetaChunks(rows, (chunk) => window.electronAPI.metaUpsertCards(chunk));
         }
     } catch (e) { /* 静默 */ }
 }
@@ -134,7 +152,11 @@ export function syncMetas(cards) {
             const r = lightToDbRow(c);
             if (r) rows.push(r);
         }
-        if (rows.length) api.metaSyncCards(rows).catch(() => {});
+        if (rows.length) {
+            // 🐛 v1.10.30:分批上桥(首块 replaceAll=true 清幽灵卡,后续仅 INSERT)。
+            // 全库单条 ~45MB 桥消息曾被 Capacitor Bridge 序列化时撑爆 Java 堆崩溃。
+            sendMetaChunks(rows, (chunk, first) => api.metaSyncCards(chunk, first));
+        }
     } catch (e) { /* 静默 */ }
 }
 
@@ -149,6 +171,9 @@ export function removeMetaCards(paths) {
         const api = window.electronAPI;
         if (typeof api.metaDeleteCards !== 'function') return;
         const arr = (Array.isArray(paths) ? paths : []).filter(Boolean);
-        if (arr.length) api.metaDeleteCards(arr).catch(() => {});
+        if (arr.length) {
+            // 🐛 v1.10.30:同口径分批(删库等大场景也防单条大消息)
+            sendMetaChunks(arr, (chunk) => api.metaDeleteCards(chunk));
+        }
     } catch (e) { /* 静默 */ }
 }

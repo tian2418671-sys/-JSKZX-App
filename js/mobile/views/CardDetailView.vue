@@ -211,17 +211,42 @@
 
                 <van-tab title="世界书" name="wb">
                     <div class="tab-pad">
-                        <van-button block icon="plus" type="primary" plain @click="addWbEntry">添加条目</van-button>
-                        <div v-for="(e, key) in wbEntries" :key="key" class="wb-item">
+                        <!-- 世界书工具条:添加 / 整体导入 / 整体导出 / 批量管理 -->
+                        <div class="wb-tools">
+                            <van-button size="small" icon="plus" type="primary" plain @click="addWbEntry">添加</van-button>
+                            <van-button size="small" icon="down" plain @click="showWbImportSheet = true">导入</van-button>
+                            <van-button size="small" icon="upgrade" plain @click="openWbExportSheet">导出</van-button>
+                            <van-button size="small" icon="records" :plain="!wbBatchMode" :type="wbBatchMode ? 'warning' : 'default'" @click="toggleWbBatch">{{ wbBatchMode ? '退出' : '批量' }}</van-button>
+                        </div>
+                        <!-- 批量操作栏 -->
+                        <div v-if="wbBatchMode" class="wb-batch-bar">
+                            <span class="wb-batch-count">已选 {{ wbCheckedSet.size }}</span>
+                            <van-button size="mini" plain @click="wbSelectAll">全选</van-button>
+                            <van-button size="mini" plain type="primary" :disabled="!wbCheckedSet.size" @click="wbBatchSetEnabled(true)">启用</van-button>
+                            <van-button size="mini" plain type="warning" :disabled="!wbCheckedSet.size" @click="wbBatchSetEnabled(false)">停用</van-button>
+                            <van-button size="mini" plain type="success" :disabled="!wbCheckedSet.size" @click="wbBatchExportSelected">导出所选</van-button>
+                            <van-button size="mini" plain type="danger" :disabled="!wbCheckedSet.size" @click="wbBatchDelete">删除</van-button>
+                        </div>
+                        <div
+                            v-for="(e, key) in wbEntries"
+                            :key="key"
+                            class="wb-item"
+                            :class="{ 'wb-item-batch': wbBatchMode, 'wb-item-checked': wbBatchMode && wbCheckedSet.has(key) }"
+                            @click="wbBatchMode ? wbToggleCheck(key) : undefined"
+                        >
                             <div class="wb-head">
-                                <van-switch v-model="e.enabled" size="20px" />
-                                <van-field v-model="e.comment" placeholder="条目名(comment)" class="wb-name" />
-                                <van-icon name="arrow-up" size="14" class="wb-op" @click="moveWbEntry(key, -1)" />
-                                <van-icon name="arrow-down" size="14" class="wb-op" @click="moveWbEntry(key, 1)" />
-                                <van-icon name="arrow" :class="['wb-arrow', { 'wb-arrow-open': wbExpanded[key] }]" size="14" @click="toggleWbExpand(key)" />
-                                <van-icon name="delete-o" color="#ee0a24" size="18" @click="removeWbEntry(key)" />
+                                <van-checkbox v-if="wbBatchMode" :model-value="wbCheckedSet.has(key)" class="wb-check" @click.stop="wbToggleCheck(key)" />
+                                <van-switch v-else v-model="e.enabled" size="20px" />
+                                <van-field v-if="!wbBatchMode" v-model="e.comment" placeholder="条目名(comment)" class="wb-name" />
+                                <div v-else class="wb-name wb-name-text">{{ e.comment || '未命名条目' }}</div>
+                                <template v-if="!wbBatchMode">
+                                    <van-icon name="arrow-up" size="14" class="wb-op" @click="moveWbEntry(key, -1)" />
+                                    <van-icon name="arrow-down" size="14" class="wb-op" @click="moveWbEntry(key, 1)" />
+                                    <van-icon name="arrow" :class="['wb-arrow', { 'wb-arrow-open': wbExpanded[key] }]" size="14" @click="toggleWbExpand(key)" />
+                                    <van-icon name="delete-o" color="#ee0a24" size="18" @click="removeWbEntry(key)" />
+                                </template>
                             </div>
-                            <div v-if="wbExpanded[key]" class="wb-detail">
+                            <div v-if="!wbBatchMode && wbExpanded[key]" class="wb-detail">
                                 <van-field v-model="e._keysText" label="触发词" placeholder="逗号分隔，多个用英文逗号" @blur="syncWbKeys(e)" />
                                 <van-field v-model="e._secKeysText" label="次级触发词" placeholder="逗号分隔，可选" @blur="syncWbSecKeys(e)" />
                                 <div class="wb-num-row">
@@ -550,21 +575,70 @@
             @add-custom="addCustomRule"
             @remove-custom="removeCustomRule"
         />
+
+        <!-- 世界书:导入方式选择 -->
+        <van-action-sheet
+            v-model:show="showWbImportSheet"
+            :actions="wbImportActions"
+            cancel-text="取消"
+            description="将外部世界书词条合并进本卡内嵌世界书（自动跳过重复词条）"
+            @select="onWbImportSelect"
+        />
+
+        <!-- 世界书:导出方式选择 -->
+        <van-action-sheet
+            v-model:show="showWbExportSheet"
+            :actions="wbExportActions"
+            cancel-text="取消"
+            description="把本卡内嵌世界书导出为独立世界书文件"
+            @select="onWbExportSelect"
+        />
+
+        <!-- 世界书:从库内世界书勾选词条导入 -->
+        <WbImportModal
+            :show="showWbImportModal"
+            :sources="wbImportSources"
+            :selected-key="wbImportSelected"
+            :entries="wbImportEntries"
+            :checked="wbImportChecked"
+            @close="showWbImportModal = false"
+            @pick-source="wbImportSelected = $event"
+            @toggle="toggleWbImportEntry"
+            @import="doWbImportLibrary"
+        />
+
+        <!-- 世界书:粘贴 JSON 导入 -->
+        <van-dialog
+            v-model:show="showWbPaste"
+            title="粘贴世界书 JSON"
+            show-cancel-button
+            :before-close="onWbPasteBeforeClose"
+        >
+            <van-field
+                v-model="wbPasteText"
+                type="textarea"
+                rows="8"
+                autosize
+                placeholder="粘贴世界书 JSON（标准 world_info / 角色卡内嵌 world_book / JSONL 逐行均可）"
+                style="margin: 12px 0"
+            />
+        </van-dialog>
     </div>
 </template>
 
 <script>
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue';
-import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules } from '../../utils/cardLoader.js';
+import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules, extractBookEntries } from '../../utils/cardLoader.js';
 import { useRoute, useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog, showImagePreview } from 'vant';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
 import AutoTagRulesModal from '../components/AutoTagRulesModal.vue';
+import WbImportModal from '../components/WbImportModal.vue';
 import TestSidebar from '../components/TestSidebar.vue';
 import ChatPanelSeg from '../components/ChatPanelSeg.vue';
-import { findCard, saveCardData, loadLibrary, hydrateCardForEdit, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath } from '../useMobileLibrary';
+import { findCard, saveCardData, loadLibrary, hydrateCardForEdit, getCardEmbeddedWb, serializeCardEmbeddedWb, mobileLibrary, getLastOpenedPath, LIBRARY_ROOT } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import { api } from '../../bridge/api';
 import { loadApiKey as loadChatApiKey, saveApiKey as saveChatApiKey } from '../useChatApiConfig';
@@ -591,7 +665,7 @@ const LS_TAVERN_KEY = 'jsmobile-tavern-key';
 
 export default {
     name: 'CardDetailView',
-    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal, TestSidebar, ChatPanelSeg },
+    components: { MobileCardCover, SnapshotModal, AiToolModal, AutoTagRulesModal, TestSidebar, ChatPanelSeg, WbImportModal },
     setup() {
         const route = useRoute();
         const router = useRouter();
@@ -868,6 +942,328 @@ export default {
         function removeWbEntry(key) {
             delete wbEntries.value[key];
             saved.value = false;
+        }
+
+        // ---------- 世界书:整体导入 / 整体导出 / 批量管理(v1.10.30) ----------
+        // 卡内条目指纹(触发词+正文),用于导入去重(对齐桌面 Worldbook Merger 口径)
+        function wbFingerprint(e) {
+            if (!e || typeof e !== 'object') return '';
+            const keysRaw = e.keys !== undefined ? e.keys : e.key;
+            const keys = Array.isArray(keysRaw) ? keysRaw.join(',') : String(keysRaw || '');
+            return (keys + ':::' + String(e.content || '')).trim().toLowerCase();
+        }
+        /** 外部世界书词条 → 卡内编辑器词条(字段对齐编辑器:keys/keysecondary/enabled) */
+        function toCardWbEntry(raw) {
+            if (!raw || typeof raw !== 'object') return null;
+            const e = JSON.parse(JSON.stringify(raw, (k, v) => (k.charAt(0) === '_' ? undefined : v)));
+            // key ↔ keys 归一(独立世界书标准 key,卡内编辑器用 keys)
+            const keysRaw = e.keys !== undefined ? e.keys : e.key;
+            e.keys = Array.isArray(keysRaw) ? keysRaw.map(String) : (keysRaw ? [String(keysRaw)] : []);
+            delete e.key;
+            const secRaw = e.keysecondary !== undefined ? e.keysecondary : e.secondary_keys;
+            e.keysecondary = Array.isArray(secRaw) ? secRaw.map(String) : (secRaw ? [String(secRaw)] : []);
+            delete e.secondary_keys;
+            // enabled/disable 归一(酒馆 world_info 用 disable:true 表示禁用)
+            if (e.disable !== undefined) { e.enabled = !e.disable; delete e.disable; }
+            if (e.enabled === undefined) e.enabled = true;
+            e.comment = String(e.comment || e.name || '');
+            e.content = String(e.content || '');
+            e.selective = !!e.selective;
+            e.constant = !!e.constant;
+            if (e.position === undefined) e.position = 1;
+            if (e.insertion_order === undefined) e.insertion_order = Number(e.order) || 50;
+            if (e.order === undefined) e.order = 100;
+            e.uid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+            e._keysText = e.keys.join(', ');
+            e._secKeysText = e.keysecondary.join(', ');
+            return e;
+        }
+        /** 批量合并进编辑器 entries(指纹去重;返回 { added, skipped }) */
+        function mergeWbEntries(rawList) {
+            if (!card.value) return { added: 0, skipped: 0 };
+            const { entries } = getCardEmbeddedWb(card.value);
+            const seen = new Set(Object.values(entries).map(wbFingerprint).filter((s) => s && s !== ':::'));
+            let added = 0;
+            let skipped = 0;
+            (rawList || []).forEach((raw, i) => {
+                const e = toCardWbEntry(raw);
+                if (!e) { skipped++; return; }
+                const fp = wbFingerprint(e);
+                if (fp && fp !== ':::' && seen.has(fp)) { skipped++; return; }
+                if (fp && fp !== ':::') seen.add(fp);
+                entries['wb_' + Date.now().toString(36) + '_' + i + Math.random().toString(36).slice(2, 5)] = e;
+                added++;
+            });
+            if (added) saved.value = false;
+            return { added, skipped };
+        }
+        /** 从文本解析世界书词条:标准 JSON / extensions.world_book / character_book / JSONL 逐行;解析失败返回 null */
+        function parseWbTextFlexible(text) {
+            const trim = String(text || '').replace(/^\uFEFF/, '').trim();
+            if (!trim) return null;
+            let entries;
+            try {
+                const obj = JSON.parse(trim);
+                if (Array.isArray(obj)) entries = obj;
+                else if (obj && typeof obj === 'object') {
+                    if (obj.extensions && obj.extensions.world_book) {
+                        entries = obj.extensions.world_book.entries !== undefined ? obj.extensions.world_book.entries : obj.extensions.world_book;
+                    } else if (obj.entries !== undefined) entries = obj.entries;
+                    else if (obj.character_book && obj.character_book.entries !== undefined) entries = obj.character_book.entries;
+                    else entries = null;
+                } else entries = null;
+            } catch (e) {
+                const lines = trim.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+                const arr = lines.map((l) => { try { return JSON.parse(l); } catch (e2) { return null; } }).filter(Boolean);
+                entries = arr.length ? arr : null;
+            }
+            if (entries === null || entries === undefined) return null;
+            if (Array.isArray(entries)) return entries.filter((x) => x && typeof x === 'object');
+            if (typeof entries === 'object') return Object.values(entries).filter((x) => x && typeof x === 'object');
+            return null;
+        }
+        function showWbImportResult(added, skipped) {
+            const msg = `已导入 ${added} 条词条` + (skipped ? `，跳过重复 ${skipped} 条` : '');
+            if (added) showSuccessToast(msg);
+            else showToast(skipped ? `全部与已有词条重复（${skipped} 条），未新增` : '没有可导入的词条');
+        }
+
+        // ---- 导入①:从世界书库勾选词条(复用 WbImportModal) ----
+        const showWbImportSheet = ref(false);
+        const wbImportActions = [
+            { name: '从世界书库导入', value: 'library' },
+            { name: '从本地文件导入', value: 'file' },
+            { name: '从网址导入', value: 'url' },
+            { name: '粘贴 JSON 导入', value: 'paste' }
+        ];
+        function onWbImportSelect(action) {
+            showWbImportSheet.value = false;
+            if (!action) return;
+            if (action.value === 'library') openWbImportLibrary();
+            else if (action.value === 'file') importWbFromFiles();
+            else if (action.value === 'url') importWbFromUrl();
+            else if (action.value === 'paste') { wbPasteText.value = ''; showWbPaste.value = true; }
+        }
+        const showWbImportModal = ref(false);
+        const wbImportSelected = ref('');
+        const wbImportChecked = ref([]);
+        const wbImportSources = computed(() => (mobileLibrary.worldbooks || []).map((w) => ({
+            key: 'lib:' + w.path,
+            label: (w.wb && w.wb.name) || String(w.name || '').replace(/\.json$/i, ''),
+            count: extractBookEntries(w.wb || {}).length
+        })));
+        const wbImportEntries = computed(() => {
+            const key = wbImportSelected.value;
+            if (!key) return [];
+            const w = (mobileLibrary.worldbooks || []).find((x) => ('lib:' + x.path) === key);
+            return w ? extractBookEntries(w.wb || {}) : [];
+        });
+        function openWbImportLibrary() {
+            if (!wbImportSources.value.length) { showToast('世界书库为空，请先在「世界书」页导入'); return; }
+            wbImportSelected.value = '';
+            wbImportChecked.value = [];
+            showWbImportModal.value = true;
+        }
+        function toggleWbImportEntry(i) {
+            const idx = wbImportChecked.value.indexOf(i);
+            if (idx >= 0) wbImportChecked.value.splice(idx, 1);
+            else wbImportChecked.value.push(i);
+        }
+        function doWbImportLibrary() {
+            const picked = wbImportChecked.value.map((i) => wbImportEntries.value[i]).filter(Boolean);
+            if (!picked.length) { showToast('未选择词条'); return; }
+            const { added, skipped } = mergeWbEntries(picked);
+            showWbImportModal.value = false;
+            showWbImportResult(added, skipped);
+        }
+
+        // ---- 导入②:本地文件(复制入库 + 读取内容合并进本卡) ----
+        async function importWbFromFiles() {
+            let res;
+            try {
+                res = await api.importExternalCards([], LIBRARY_ROOT);
+            } catch (e) {
+                showToast('导入失败'); return;
+            }
+            if (!res || !res.success) { showToast((res && res.error) || '导入失败'); return; }
+            const copied = res.copied || [];
+            if (!copied.length) { showToast('未选择文件'); return; }
+            let totalAdded = 0;
+            let totalSkipped = 0;
+            let bad = 0;
+            for (const p of copied) {
+                if (!/\.json$/i.test(p)) { bad++; continue; }
+                let list = null;
+                try {
+                    const r = await api.readText(p);
+                    if (r && r.success) list = parseWbTextFlexible(r.text);
+                } catch (e) { /* 读取失败计入 bad */ }
+                if (!list) { bad++; continue; }
+                const { added, skipped } = mergeWbEntries(list);
+                totalAdded += added;
+                totalSkipped += skipped;
+            }
+            try { await loadLibrary(true); } catch (e) { /* 刷新世界书库失败忽略 */ }
+            const parts = [];
+            if (totalAdded) parts.push(`合并 ${totalAdded} 条词条`);
+            if (totalSkipped) parts.push(`跳过重复 ${totalSkipped} 条`);
+            if (bad) parts.push(`${bad} 个文件不是世界书 JSON（已存入库）`);
+            if (parts.length) showSuccessToast(parts.join(' · '));
+            else showToast('没有可合并的内容');
+        }
+
+        // ---- 导入③:网址 ----
+        async function importWbFromUrl() {
+            const url = await promptInput('从网址导入世界书', '', 'https://... 世界书 JSON 直链');
+            if (!url) return;
+            if (!/^https?:\/\//i.test(url)) { showToast('仅支持 http/https 直链'); return; }
+            showToast('拉取中…');
+            let res;
+            try {
+                res = await api.fetchWbUrl(url);
+            } catch (e) {
+                showToast('拉取失败'); return;
+            }
+            if (!res || !res.success) { showToast((res && res.error) || '拉取失败'); return; }
+            const list = parseWbTextFlexible(res.data);
+            if (!list) { showToast('返回内容不是有效的世界书 JSON'); return; }
+            const { added, skipped } = mergeWbEntries(list);
+            showWbImportResult(added, skipped);
+        }
+
+        // ---- 导入④:粘贴 JSON/JSONL ----
+        const showWbPaste = ref(false);
+        const wbPasteText = ref('');
+        function onWbPasteBeforeClose(action) {
+            if (action !== 'confirm') return true;
+            const list = parseWbTextFlexible(wbPasteText.value);
+            if (!list) { showToast('解析失败：不是有效的世界书 JSON/JSONL'); return false; }
+            if (!list.length) { showToast('没有解析到词条'); return false; }
+            const { added, skipped } = mergeWbEntries(list);
+            showWbImportResult(added, skipped);
+            return true;
+        }
+
+        // ---- 整体导出:内嵌世界书 → 独立世界书(入库 / 导出文件) ----
+        const showWbExportSheet = ref(false);
+        const wbExportActions = [
+            { name: '保存到世界书库', value: 'library' },
+            { name: '导出到文件（系统另存为）', value: 'file' }
+        ];
+        function safeWbFileName(name) {
+            return String(name || '未命名').replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || '未命名';
+        }
+        /** 生成不冲突的世界书名(库内已有同名时追加序号) */
+        function uniqueWbName(base) {
+            const exists = new Set((mobileLibrary.worldbooks || []).map((w) => String(w.name || '').replace(/\.json$/i, '')));
+            if (!exists.has(base)) return base;
+            let i = 2;
+            while (exists.has(`${base} (${i})`)) i++;
+            return `${base} (${i})`;
+        }
+        /** 卡内条目 → 独立世界书干净条目(key/keysecondary 字段,剥离移动端临时字段) */
+        function buildWbExportEntries(entryObjs) {
+            const out = {};
+            (entryObjs || []).forEach((e, i) => {
+                if (!e || typeof e !== 'object') return;
+                const c = JSON.parse(JSON.stringify(e, (k, v) => (k.charAt(0) === '_' ? undefined : v)));
+                c.key = Array.isArray(e.keys) ? [...e.keys] : (e.keys ? [e.keys] : []);
+                c.keysecondary = Array.isArray(e.keysecondary) ? [...e.keysecondary] : (Array.isArray(e.secondary_keys) ? [...e.secondary_keys] : []);
+                delete c.keys;
+                delete c.secondary_keys;
+                c.comment = String(c.comment || c.name || '');
+                c.order = c.order ?? c.insertion_order ?? 100;
+                c.uid = Date.now().toString(36) + '_' + i + '_' + Math.random().toString(36).slice(2, 6);
+                out['ex_' + i] = c;
+            });
+            return out;
+        }
+        function openWbExportSheet() {
+            if (!Object.keys(wbEntries.value).length) { showToast('本卡没有世界书词条'); return; }
+            showWbExportSheet.value = true;
+        }
+        async function onWbExportSelect(action) {
+            showWbExportSheet.value = false;
+            if (!action) return;
+            const list = Object.values(wbEntries.value).filter((e) => e && typeof e === 'object');
+            if (!list.length) { showToast('本卡没有世界书词条'); return; }
+            const base = safeWbFileName(`${(card.value && card.value.name) || '未命名角色'} - 世界书`);
+            const name = uniqueWbName(base);
+            const wb = { name, entries: buildWbExportEntries(list) };
+            const path = LIBRARY_ROOT + '/' + safeWbFileName(name) + '.json';
+            if (action.value === 'library') {
+                const res = await api.createWorldbook({ path, name, wb });
+                if (res && res.success) {
+                    showSuccessToast(`已保存《${name}》（${list.length} 词条）`);
+                    try { await loadLibrary(true); } catch (e) { /* 忽略 */ }
+                } else showToast((res && res.error) || '保存失败');
+            } else {
+                const res = await api.createWorldbook({ path, name, wb });
+                if (!res || !res.success) { showToast((res && res.error) || '写入世界书库失败'); return; }
+                const ex = await api.exportPackage(path);
+                if (ex && ex.success) showSuccessToast('已导出到所选位置');
+                else showToast((ex && ex.error) || '导出失败');
+                try { await loadLibrary(true); } catch (e) { /* 忽略 */ }
+            }
+        }
+
+        // ---- 批量管理:多选 启用/停用/删除/导出所选 ----
+        const wbBatchMode = ref(false);
+        const wbCheckedSet = ref(new Set());
+        function toggleWbBatch() {
+            wbBatchMode.value = !wbBatchMode.value;
+            if (!wbBatchMode.value) wbCheckedSet.value = new Set();
+        }
+        function wbToggleCheck(key) {
+            const s = new Set(wbCheckedSet.value);
+            if (s.has(key)) s.delete(key);
+            else s.add(key);
+            wbCheckedSet.value = s;
+        }
+        function wbSelectAll() {
+            if (wbCheckedSet.value.size === Object.keys(wbEntries.value).length) wbCheckedSet.value = new Set();
+            else wbCheckedSet.value = new Set(Object.keys(wbEntries.value));
+        }
+        function wbBatchSetEnabled(on) {
+            let n = 0;
+            wbCheckedSet.value.forEach((k) => {
+                const e = wbEntries.value[k];
+                if (e) { e.enabled = !!on; n++; }
+            });
+            if (n) saved.value = false;
+            showSuccessToast(`已${on ? '启用' : '停用'} ${n} 条`);
+        }
+        async function wbBatchDelete() {
+            const n = wbCheckedSet.value.size;
+            if (!n) return;
+            try {
+                await showConfirmDialog({
+                    title: '批量删除词条',
+                    message: `确定删除选中的 ${n} 个词条吗？（保存卡片后生效，不可恢复）`,
+                    confirmButtonText: '删除',
+                    confirmButtonColor: '#ee0a24'
+                });
+            } catch (e) { return; }
+            wbCheckedSet.value.forEach((k) => { delete wbEntries.value[k]; });
+            wbCheckedSet.value = new Set();
+            wbBatchMode.value = false;
+            saved.value = false;
+            showSuccessToast(`已删除 ${n} 条`);
+        }
+        async function wbBatchExportSelected() {
+            const list = Object.keys(wbEntries.value)
+                .filter((k) => wbCheckedSet.value.has(k))
+                .map((k) => wbEntries.value[k])
+                .filter((e) => e && typeof e === 'object');
+            if (!list.length) { showToast('未选择词条'); return; }
+            const base = safeWbFileName(`${(card.value && card.value.name) || '未命名角色'} - 世界书（所选 ${list.length} 条）`);
+            const name = uniqueWbName(base);
+            const wb = { name, entries: buildWbExportEntries(list) };
+            const res = await api.createWorldbook({ path: LIBRARY_ROOT + '/' + safeWbFileName(name) + '.json', name, wb });
+            if (res && res.success) {
+                showSuccessToast(`已导出所选 ${list.length} 条 →《${name}》`);
+                try { await loadLibrary(true); } catch (e) { /* 忽略 */ }
+            } else showToast((res && res.error) || '导出失败');
         }
 
         // 深度提示 prompt(存于 extensions.depth_prompt)
@@ -2832,6 +3228,12 @@ export default {
             d, tags, greetingsText, wbEntries, regexList,
             tokenText, tokenRows, tokenTotal, wbTokenCount,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
+            // 世界书整体导入/导出/批量(v1.10.30)
+            showWbImportSheet, wbImportActions, onWbImportSelect,
+            showWbImportModal, wbImportSources, wbImportSelected, wbImportEntries, wbImportChecked, toggleWbImportEntry, doWbImportLibrary,
+            showWbPaste, wbPasteText, onWbPasteBeforeClose,
+            showWbExportSheet, wbExportActions, openWbExportSheet, onWbExportSelect,
+            wbBatchMode, wbCheckedSet, toggleWbBatch, wbToggleCheck, wbSelectAll, wbBatchSetEnabled, wbBatchDelete, wbBatchExportSelected,
             moveWbEntry, depthPromptText, rawJsonText, copyRawJson,
             addRegex, removeRegex, regexExpanded, toggleRegexExpand, toggleRegexPlacement, REGEX_PLACEMENTS, removeTag, addTag,
             selectTag, editSelectedTag, moveSelectedTag, duplicateSelectedTag, removeSelectedTag, sortTagsAlphabetically, clearAllTags, selectedTagIndex,
@@ -3005,6 +3407,21 @@ export default {
 .wb-arrow-open { transform: rotate(90deg); }
 .wb-op { color: var(--van-gray-6, #969799); cursor: pointer; flex-shrink: 0; }
 .wb-op:active { color: var(--van-primary-color, #1989fa); }
+/* 世界书工具条 / 批量模式(v1.10.30) */
+.wb-tools { display: flex; gap: 8px; margin-bottom: 4px; }
+.wb-tools .van-button { flex: 1; min-width: 0; }
+.wb-batch-bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    padding: 8px 10px; margin-top: 8px; border-radius: 8px;
+    background: var(--van-gray-1, #f7f8fa);
+}
+.wb-batch-count { font-size: 12px; color: var(--van-gray-6, #969799); margin-right: auto; }
+.wb-item-batch { cursor: pointer; }
+.wb-item-checked { border-color: var(--van-primary-color, #1989fa); background: rgba(25, 137, 250, .06); }
+.wb-name-text {
+    font-size: 14px; color: var(--van-text-color, #323233);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px;
+}
 .raw-bar {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;

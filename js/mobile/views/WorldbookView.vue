@@ -274,7 +274,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { showSuccessToast, showToast, showConfirmDialog } from 'vant';
-import { mobileLibrary, loadLibrary, loadCardFullData, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb, setLastOpenedPath } from '../useMobileLibrary';
+import { mobileLibrary, loadLibrary, loadCardFullData, LIBRARY_ROOT, getCardEmbeddedWb, serializeCardEmbeddedWb, setLastOpenedPath, normalizeCardEmbeddedWbPayload } from '../useMobileLibrary';
 import DedupeModal from '../components/DedupeModal.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import GlobalEntrySearchModal from '../components/GlobalEntrySearchModal.vue';
@@ -1177,7 +1177,9 @@ export default {
                 if (ed.card) {
                     // 卡内世界书:保存整卡(entries 字典→数组对齐桌面 character_book.entries 标准)
                     serializeCardEmbeddedWb(ed.card);
-                    const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(JSON.parse(JSON.stringify(ed.card.data)), null, 2));
+                    // 🐛 v1.10.30:与 saveCardData 同口径——写盘前对副本规范化(字典→数组+剔临时字段)
+                    const payload = normalizeCardEmbeddedWbPayload(JSON.parse(JSON.stringify(ed.card.data)));
+                    const res = await window.electronAPI.saveCard(ed.path, JSON.stringify(payload, null, 2));
                     res && res.success ? showSuccessToast('已保存') : showToast((res && res.error) || '保存失败');
                 } else if (ed.external) {
                     // 外部世界书目录:写回原 SAF 树

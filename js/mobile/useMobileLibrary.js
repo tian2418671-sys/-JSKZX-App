@@ -1259,7 +1259,9 @@ export async function renameCardTo(card, newName) {
     if (!data) return { success: false, error: '读取卡片失败' };
     if (data.data) data.data.name = newName;
     else data.name = newName;
-    const res = await window.electronAPI.saveCard(card.path, JSON.parse(JSON.stringify(data)));
+    // 🐛 v1.10.30:同 saveCardData,写盘前对副本规范化(字典→数组+剔临时字段)
+    const payload = normalizeCardEmbeddedWbPayload(JSON.parse(JSON.stringify(data)));
+    const res = await window.electronAPI.saveCard(card.path, payload);
     if (res && res.success) {
         if (card.data) card.name = newName; // 详情页编辑副本
         else { const light = findCard(card.path); if (light) light.name = newName; }
@@ -1295,9 +1297,37 @@ export async function removeCard(card) {
 
 /** 保存卡片数据到物理文件(整体覆盖)+ 轻量字段回写 */
 export async function saveCardData(card) {
-    const res = await window.electronAPI.saveCard(card.path, JSON.parse(JSON.stringify(card.data)));
+    // 🐛 v1.10.30 修复:写盘用「深拷贝副本 + 规范化」。
+    // doSave 在 serialize 与写盘之间存在 await(快照策略/自动备份),期间 Vue 微任务渲染会让
+    // wbEntries computed 把 entries 数组重新转回字典(wb_i 键)并回填 _keysText/_secKeysText——
+    // 直接 JSON.stringify(card.data) 会把脏形态写入磁盘(外部工具不可识别)。
+    const payload = normalizeCardEmbeddedWbPayload(JSON.parse(JSON.stringify(card.data)));
+    const res = await window.electronAPI.saveCard(card.path, payload);
     if (res && res.success) syncCardLightFields(card);
     return { success: res && res.success, error: res && res.error };
+}
+
+/**
+ * 写盘前规范化(作用于纯 JSON 副本,与响应式无关):
+ * 内嵌世界书 entries 字典 → 数组(对齐桌面 character_book 标准)+ 剂离移动端临时字段(_ 前缀)。
+ * 兼容 V2/V3(data.data.character_book)与 V1(顶层 character_book)。
+ */
+export function normalizeCardEmbeddedWbPayload(payload) {
+    try {
+        if (!payload || typeof payload !== 'object') return payload;
+        const dd = (payload.data && typeof payload.data === 'object') ? payload.data : payload;
+        const book = dd.character_book;
+        if (book && typeof book === 'object' && book.entries) {
+            const list = Array.isArray(book.entries) ? book.entries : Object.values(book.entries);
+            book.entries = list
+                .filter((e) => e && typeof e === 'object')
+                .map((e) => {
+                    Object.keys(e).forEach((k) => { if (k.charAt(0) === '_') delete e[k]; });
+                    return e;
+                });
+        }
+    } catch (err) { /* 规范化失败不阻断保存 */ }
+    return payload;
 }
 
 /**
@@ -1309,27 +1339,26 @@ export async function saveCardData(card) {
 export function getCardEmbeddedWb(card) {
     const data = card && card.data;
     const d = (data && data.data) || data || {};
-    let book = d.character_book;
-    if (!book || typeof book !== 'object') {
-        // V1 兼容:书位于归一化后的 card.data.character_book(无 data.data 层级)
-        book = (data && data.character_book) || {};
-        if (book && typeof book === 'object' && Object.keys(book).length) d.character_book = book;
+    // 确保 character_book 存在(V2/V3: data.data.character_book;V1 兼容: data.character_book)
+    if (!d.character_book || typeof d.character_book !== 'object') {
+        const legacy = (data && data.character_book) || {};
+        d.character_book = (legacy && typeof legacy === 'object' && Object.keys(legacy).length) ? legacy : {};
     }
-    if (!book || typeof book !== 'object') {
-        book = {};
-        d.character_book = book;
-    }
+    // 🐛 滚动/增删不刷新修复:必须从响应式源"读回"book/entries。
+    // 此前新建书场景返回本地裸对象 → 编辑器增删条目不触发 Vue 响应式(界面不更新,
+    // 直到某次无关重渲染才突然出现,表现为"卡顿/无响应")。
+    const book = d.character_book;
     let entries = book.entries;
     if (Array.isArray(entries)) {
         // 桌面标准数组 → 编辑器字典形态(键 wb_i,保持顺序)
         const dict = {};
         entries.forEach((e, i) => { if (e && typeof e === 'object') dict['wb_' + i] = e; });
-        entries = dict;
         book.entries = dict;
+        entries = book.entries; // 读回响应式代理
     }
     if (!entries || typeof entries !== 'object') {
-        entries = {};
-        book.entries = entries;
+        book.entries = {};
+        entries = book.entries; // 读回响应式代理
     }
     return { book, entries };
 }

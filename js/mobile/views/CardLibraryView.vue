@@ -1422,7 +1422,9 @@ onBeforeUnmount(() => {
     padding: 2px 14px 8px;
 }
 .view-bar .count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; }
-.view-bar .van-icon { margin-left: 12px; }
+/* 🐛 移除原 `.view-bar .van-icon { margin-left:12px }`——它泛匹配了视图切换按钮内的图标,
+   导致选中态背景块里的图标右偏(真机实测 leftPad 13px/rightPad 1px)。
+   排序区箭头为 ::after 伪元素,不受此规则影响。 */
 .view-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
 .view-bar .sort-menu { flex: 1; min-width: 0; margin-left: auto; max-width: 120px; }
 .view-bar .sort-menu :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 30px; justify-content: flex-end; }

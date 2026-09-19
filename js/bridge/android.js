@@ -2047,8 +2047,10 @@ export const androidImpl = {
             return (r && r.count) || 0;
         } catch { return 0; }
     },
-    /** 🚀 BUG-17:全量替换 SQLite 元数据库(DELETE all + INSERT all),用于 reconcile 后同步 */
-    async metaSyncCards(cards) {
-        try { const r = await SqliteMeta.syncCards({ cards: cards || [] }); return !!(r && r.success); } catch { return false; }
+    /** 🚀 BUG-17:全量替换 SQLite 元数据库(DELETE all + INSERT all),用于 reconcile 后同步。
+     *  🐛 v1.10.30:replaceAll 参数支持分批同步——JS 侧万卡分块上桥(规避单条 ~45MB 桥消息 OOM),
+     *  仅首块 replaceAll=true 清表,后续块仅 INSERT。 */
+    async metaSyncCards(cards, replaceAll = true) {
+        try { const r = await SqliteMeta.syncCards({ cards: cards || [], replaceAll: replaceAll !== false }); return !!(r && r.success); } catch { return false; }
     }
 };

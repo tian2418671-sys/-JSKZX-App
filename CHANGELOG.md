@@ -40,6 +40,16 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 - 模拟器实测三问题：弹窗关闭✅ / 内容指纹 OOM ⚠️（模拟器内存限制，E2 签名缓存已实现，二次查重秒级） / 主题无动画已修复
 - `docs/三问题模拟机实测记录-2026-09-18.md` / `docs/主题系统升级方案.md`
 
+### 🩹 真机测试修复批次（2026-09-19，并入本版发布）
+
+- **全应用滚动失效**（真机 WebView 101 专属）：`css/style.css` body `overflow:hidden` 传播到视口锁死触摸滚动 → 改 `visible`。
+- **世界书条目增删不刷新**：`getCardEmbeddedWb` 新建书分支返回裸对象（非响应式）→ 改为始终从 `d.character_book` 读回响应式代理。
+- **万卡库启动后崩溃（BUG-18，Java 堆 OOM）**：全库 12k 卡 `syncCards` 单条 ~45MB 桥消息 + Capacitor Bridge verbose `toString` 双份内存 → Java 堆爆 → JNI abort。修复：`sqliteMeta.js` 全部 meta 调用分批（META_CHUNK=800、sendMetaChunks；syncMetas 首块 replaceAll）+ `android.js`/`SqliteMetaPlugin` 加 replaceAll 参数 + Manifest `largeHeap`。真机验证：32 批 3.5s 完成、堆峰值 ~40MB、跨过原崩溃时间点无异常。
+- **保存后世界书格式脏（存量缺陷）**：doSave 在剥离/序列化与写盘间的 await 间隙，被微任务重渲染把 entries 数组转回字典（wb_0）+回填 `_keysText`。修复：新增 `normalizeCardEmbeddedWbPayload`（写盘前对深拷贝副本规范化），`saveCardData`/`renameCardTo`/`WorldbookView.saveAll` 三路接入。
+- **视图按钮图标偏移**：删除 `.view-bar .van-icon` 泛匹配 margin（原意排序区间距、实际把 4 个视图按钮图标推右 12px）。
+- **新功能**：卡内世界书**整体导入**（库内勾选/本地文件/网址/粘贴，指纹去重）+ **整体导出**（入世界书库/另存为）+ **批量管理**（全选/启停用/删除/导出所选）；含 `WbImportModal` 组件注册修复（Options API 缺 components 注册时模板静默不渲染）。
+- 文档归档：`docs/内部开发/BUG修复/2026-09-19_BUG-18_*.md`、`实测记录/2026-09-19_真机12k卡压测与修复验证.md`、`截图记录/2026-09-19-真机验证/`（4 张）。
+
 ---
 
 ## [1.10.28] - 2026-09-18

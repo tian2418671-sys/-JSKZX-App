@@ -140,10 +140,13 @@ public class SqliteMetaPlugin extends Plugin {
     public void syncCards(PluginCall call) {
         JSArray cards = call.getArray("cards");
         if (cards == null) cards = new JSArray();
+        // 分批同步支持:JS 侧万卡分块上桥(规避单条 ~45MB 桥消息 OOM),
+        // 仅首块 replaceAll=true 时清表,后续块仅 INSERT;默认 true 保持旧语义。
+        boolean replaceAll = call.getBoolean("replaceAll", Boolean.TRUE);
         SQLiteDatabase d = db();
         d.beginTransaction();
         try {
-            d.delete("cards", null, null);
+            if (replaceAll) d.delete("cards", null, null);
             String sql = "INSERT INTO cards(path,name,creator,`desc`,search_text,tags," +
                     "subfolder,category,tokens,flags,mtime,size,csum,usn,indexed_at) " +
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
