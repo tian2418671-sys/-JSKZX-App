@@ -148,17 +148,6 @@ export function applyFs(fs) {
     return v;
 }
 
-// ---------- 初始化主题字体和风格 ----------
-export function initThemeStyle() {
-    const t = currentTheme();
-    const meta = THEME_META[t] || THEME_META.light;
-    const root = document.documentElement;
-    root.style.setProperty('--theme-font', meta.font);
-    root.style.setProperty('--theme-radius', meta.radius);
-    root.style.setProperty('--theme-deco', meta.deco);
-    if (meta.deco) root.classList.add(`deco-${meta.deco}`);
-}
-
 // ---------- 内核/特性探测（P0 前置：确认 OKLCH / View Transitions 可用性） ----------
 export function probeThemeSupport() {
     const startVT = typeof document !== 'undefined' && typeof document.startViewTransition === 'function';
