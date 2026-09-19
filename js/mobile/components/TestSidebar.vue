@@ -1214,6 +1214,19 @@ export default {
             showModelPicker.value = true;
         }
         function onApiTypeChange(v) {
+            // 与 SettingsView 一致：切换协议时自动调整默认端点（仅本地副本，保存后生效）
+            const ep = localApiEndpoint.value || '';
+            if (v === 'anthropic') {
+                if (!ep || ep.includes('openai') || ep.includes('1234')) {
+                    localApiEndpoint.value = 'https://api.anthropic.com';
+                    localApiModel.value = ''; // 不预设模型名：避免默认模型不存在，由用户「拉取模型」后选择
+                }
+            } else {
+                if (!ep || ep.includes('anthropic')) {
+                    localApiEndpoint.value = 'http://127.0.0.1:1234/v1/chat/completions';
+                    localApiModel.value = 'local-model';
+                }
+            }
             // 协议切换后旧模型列表失效,清空待重新拉取
             availableModels.value = [];
             modelFetchStatus.value = '';
