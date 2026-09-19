@@ -237,7 +237,7 @@ import { api } from '../../bridge/api';
 import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
-import { applyTheme, currentTheme, currentFs, applyFs, THEME_LABELS } from '../theme';
+import { applyTheme, currentTheme, currentFs, applyFs, isDarkTheme, THEME_LABELS } from '../theme';
 import TrashModal from '../components/TrashModal.vue';
 
 // 与卡片详情页「测卡」Tab 共用的 API 配置存储键
@@ -260,7 +260,7 @@ export default {
         const authLost = ref(false);
         const rootUri = ref('');
         const scanInfo = ref('');
-        const darkTheme = ref(currentTheme() !== 'light');
+        const darkTheme = ref(isDarkTheme(currentTheme()));
         const theme = ref(currentTheme());
         const uiFs = ref(currentFs());
         const radioStyle = { marginRight: '12px' };
@@ -281,7 +281,7 @@ export default {
         }
         function onThemePick(v) {
             theme.value = v;
-            darkTheme.value = v !== 'light';
+            darkTheme.value = isDarkTheme(v);
             applyTheme(v);
             showThemePicker.value = false;
         }
