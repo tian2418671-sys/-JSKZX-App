@@ -24,7 +24,14 @@
             <!-- 扫描中 -->
             <div v-if="scanning || pending" class="ddm-status">
                 <van-loading size="24">{{ pending || '正在分析同名卡片…' }}</van-loading>
+                <!-- 🚀 大库内容指纹扫描可取消:中止水合,已算签名保留(下次续扫) -->
+                <div v-if="scanning && mode === 'content'" class="ddm-cancel-row">
+                    <van-button size="small" plain type="primary" @click="cancelScan()">取消扫描</van-button>
+                </div>
             </div>
+
+            <!-- 已取消 -->
+            <van-empty v-else-if="scanCancelled" description="已取消扫描（已计算的签名已保存，下次可续扫）" image-size="72" />
 
             <!-- 无重复 -->
             <van-empty v-else-if="groups.length === 0" :description="emptyText" image-size="72" />
@@ -79,7 +86,7 @@
 <script>
 import { ref, watch } from 'vue';
 import { showToast } from 'vant';
-import { mobileLibrary, loadCardFullData, loadCardsFullDataBatch, loadContentSigs, getContentSig, setContentSig } from '../useMobileLibrary';
+import { mobileLibrary, loadCardFullData, loadContentTextsStream, loadContentSigs, getContentSig, setContentSig } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
 import DiffModal from './DiffModal.vue';
 
@@ -97,6 +104,9 @@ export default {
         const emptyText = ref('未发现重复');
         const groups = ref([]);
         const busyKey = ref('');
+        // 🚀 内容指纹大库扫描:取消令牌(用户点取消 → 中止水合,已算签名保留)
+        const scanCancelFlag = ref(false);
+        const scanCancelled = ref(false);
 
         function entriesArray(wb) {
             const e = (wb && wb.entries) || {};
@@ -181,31 +191,48 @@ export default {
             if (!items.length) { emptyText.value = '卡片库为空，无法进行版本查重'; return; }
 
             // 🚀 E2:先载入持久化签名缓存;已算过签名的卡零水合零解析直接复用,
-            // 只对新增/未算卡发起 loadCardsFullDataBatch(二次查重从 2GB chara 过桥降到 0)
+            // 只对新增/未算卡发起流式水合(二次查重从 2GB chara 过桥降到 0)
             await loadContentSigs();
             const needCompute = items.filter((item) => !getContentSig(item.path));
-            const dataMap = needCompute.length
-                ? await loadCardsFullDataBatch(needCompute, (done, total) => {
-                    pending.value = `读取卡片 ${done}/${total}…`;
-                })
-                : new Map();
 
-            // 规范化文本，内容过短（<20 字符）无法可靠判定，跳过
+            // 🚀 内存优化:流式水合(loadContentTextsStream)——每批解析完立即算签名并丢弃对象,
+            // 全库内存峰值 ≈ 1 批(24 卡),而非 loadCardsFullDataBatch 的全量 Map(4989 卡 OOM 主源)。
+            // PNG 无内嵌角色卡数据的卡直接跳过(不回退 readBuffer 整图 base64,防 2GB 过桥)。
+            scanCancelFlag.value = false;
+            scanCancelled.value = false;
             const valid = [];
+            // path → 条目/索引预建 Map(5000 卡下避免每卡 O(n) find/indexOf)
+            const itemByPath = new Map();
+            const idxByPath = new Map();
+            items.forEach((it, i) => { itemByPath.set(it.path, it); idxByPath.set(it.path, i); });
+            // 已算签名卡直接复用(零水合零解析)
             items.forEach((item, idx) => {
                 const cachedSig = getContentSig(item.path);
-                if (cachedSig) {
-                    valid.push({ item, idx, sig: cachedSig, text: '' });
-                    return;
-                }
-                const full = dataMap.get(item.path);
-                if (!full) return;
-                const text = normalizeText(extractContentText({ data: full }));
-                if (text.length < 20) return;
-                const sig = computeMinHash(getShingles(text));
-                setContentSig(item.path, sig); // E2:增量持久化,二次查重免水合
-                valid.push({ item, idx, sig, text });
+                if (cachedSig) valid.push({ item, idx, sig: cachedSig, text: '' });
             });
+            let skippedNoData = 0;
+            await loadContentTextsStream(needCompute, (batch, done, total, skipped) => {
+                pending.value = `读取卡片 ${done}/${total}…（跳过 ${skippedNoData} 张无内嵌数据）`;
+                batch.forEach(({ path, parsed }) => {
+                    const item = itemByPath.get(path);
+                    if (!item) return;
+                    const text = normalizeText(extractContentText({ data: parsed }));
+                    if (text.length < 20) return; // 内容过短无法可靠判定
+                    const sig = computeMinHash(getShingles(text));
+                    setContentSig(path, sig); // E2:增量持久化,二次查重免水合
+                    valid.push({ item, idx: idxByPath.get(path), sig, text });
+                });
+                skippedNoData += skipped;
+            }, {
+                onProgress: (done, total) => { pending.value = `读取卡片 ${done}/${total}…（跳过 ${skippedNoData} 张无内嵌数据）`; },
+                shouldCancel: () => scanCancelFlag.value
+            });
+
+            if (scanCancelFlag.value) {
+                scanCancelled.value = true;
+                pending.value = ''; // 置空 → 显示"已取消"空状态而非 loading
+                return;
+            }
             pending.value = '';
             if (valid.length < 2) {
                 emptyText.value = '未发现可判定的内容重复项（内容过短的项已跳过）';
@@ -547,12 +574,19 @@ export default {
                 showDiff.value = false;
                 busyKey.value = '';
                 pending.value = '';
+                scanCancelFlag.value = false;
+                scanCancelled.value = false;
             }
         });
 
+        /** 取消大库内容指纹扫描(流式水合批间中止,已算签名持久化保留) */
+        function cancelScan() {
+            scanCancelFlag.value = true;
+        }
+
         return {
             scanning, pending, emptyText, groups, busyKey,
-            metaText, trashOne, trashRest,
+            metaText, trashOne, trashRest, cancelScan, scanCancelled,
             showDiff, diffMasterName, diffCompareName, diffFieldResults, openDiff
         };
     }

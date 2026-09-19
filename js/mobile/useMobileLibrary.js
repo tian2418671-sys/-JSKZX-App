@@ -988,6 +988,96 @@ export async function loadCardsFullDataBatch(cards, onProgress) {
     return out;
 }
 
+/**
+ * 🚀 内容指纹流式水合(查重专用,防 OOM):分批桥接 + 有界并发 + 每批回调后即弃。
+ * 与 loadCardsFullDataBatch 的关键差异(两万卡/内存受限设备实测 OOM 的针对性修复):
+ *  ① PNG 无 chara 文本块 → 直接跳过,**不回退 readBuffer 整图 base64**
+ *     (整图过桥是 2GB chara/图片 base64 峰值内存的主源;内容指纹只需文本,整图无意义)
+ *  ② 每批解析完立即 onBatch([{path, parsed}]),调用方提取签名后即可丢弃对象,
+ *     全库内存峰值 ≈ 1 批(24 卡),而非全量 Map(2 万卡 = 数百 MB 常驻)
+ *  ③ 支持取消令牌(shouldCancel),批间 + 批内粒度中止,适合大库半途放弃
+ * @param {Array} cards 轻量条目数组(只需 path/fileName)
+ * @param {(batch:Array<{path:string, parsed:object}>, done:number, total:number, skipped:number)=>void} onBatch
+ *       每批成功解析卡回调;skipped=本批跳过(无内嵌数据/解析失败)卡数
+ * @param {{onProgress?:(done:number,total:number)=>void, shouldCancel?:()=>boolean}} [opts]
+ * @returns {Promise<number>} 已处理卡数(取消时提前返回)
+ */
+export async function loadContentTextsStream(cards, onBatch, opts = {}) {
+    const list = Array.isArray(cards) ? cards : [];
+    if (!list.length) return 0;
+    const { onProgress, shouldCancel } = opts;
+    const BATCH = 24;
+    const CONCURRENCY = 8;
+    const jsonCards = list.filter((c) => (c.fileName || c.path || '').toLowerCase().endsWith('.json'));
+    const imgCards = list.filter((c) => !jsonCards.includes(c));
+    let done = 0;
+    const total = list.length;
+    const tick = () => { if (onProgress) { try { onProgress(done, total); } catch (e) { /* 忽略 */ } } };
+    const cancelled = () => !!(shouldCancel && shouldCancel());
+
+    // ① JSON 卡:批量读文本 → 并发解析(解析失败跳过,不阻塞)
+    for (let i = 0; i < jsonCards.length; i += BATCH) {
+        if (cancelled()) return done;
+        const batch = jsonCards.slice(i, i + BATCH);
+        const textMap = new Map();
+        try {
+            const br = await window.electronAPI.readTextBatch(batch.map((c) => c.path));
+            if (br && br.success && Array.isArray(br.results)) {
+                br.results.forEach((item) => { if (item && item.success) textMap.set(item.path, item.value); });
+            }
+        } catch (e) { /* 降级单卡读 */ }
+        const results = await mapLimit(batch, CONCURRENCY, async (c) => {
+            if (cancelled()) return null;
+            let text = textMap.get(c.path);
+            if (typeof text !== 'string') {
+                const r = await window.electronAPI.readText(c.path);
+                text = (r && r.success && typeof r.text === 'string') ? r.text : null;
+            }
+            if (text == null) return null;
+            const parsed = await parseViaWorker('json', text);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return { path: c.path, parsed };
+        });
+        const batchOut = results.filter(Boolean);
+        const skipped = batch.length - batchOut.length;
+        if (batchOut.length && onBatch) { try { onBatch(batchOut, done, total, skipped); } catch (e) { /* 忽略 */ } }
+        done += batch.length; tick();
+        await yieldFrame();
+    }
+
+    // ② PNG/WebP:批量提取 chara 文本块 → 并发解析。
+    //    🚫 无 chara 文本块直接跳过,绝不回退 readBuffer 整图(OOM 主源,内容指纹只需文本)
+    for (let i = 0; i < imgCards.length; i += BATCH) {
+        if (cancelled()) return done;
+        const batch = imgCards.slice(i, i + BATCH);
+        const textMap = new Map();
+        if (hasCharaBatch()) {
+            try {
+                const cr = await window.electronAPI.readCharaBatch(batch.map((c) => c.path));
+                if (cr && cr.success && Array.isArray(cr.results)) {
+                    cr.results.forEach((item) => {
+                        if (item && item.success && typeof item.value === 'string') textMap.set(item.path, item.value);
+                    });
+                }
+            } catch (e) { /* 降级:整批跳过 */ }
+        }
+        const results = await mapLimit(batch, CONCURRENCY, async (c) => {
+            if (cancelled()) return null;
+            const prefetched = textMap.get(c.path);
+            if (typeof prefetched !== 'string') return null; // 🚫 无内嵌角色卡数据 → 跳过
+            const parsed = await parseViaWorker('json', prefetched);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return { path: c.path, parsed };
+        });
+        const batchOut = results.filter(Boolean);
+        const skipped = batch.length - batchOut.length;
+        if (batchOut.length && onBatch) { try { onBatch(batchOut, done, total, skipped); } catch (e) { /* 忽略 */ } }
+        done += batch.length; tick();
+        await yieldFrame();
+    }
+    return done;
+}
+
 /** 按 path 取卡片 */
 export function findCard(path) {
     return mobileLibrary.library.find((c) => c.path === path);
