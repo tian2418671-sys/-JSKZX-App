@@ -69,20 +69,26 @@
                     </div>
                 </div>
 
-                <!-- 视图切换 + 排序 -->
+                <!-- 统计 + 排序 + 视图切换（合并单行，节省纵向空间） -->
                 <div class="view-bar">
                     <span class="count">{{ filtered.length }} 张</span>
+                    <div class="vm-group">
+                        <span class="vm-btn" :class="{ active: viewMode === 'list' }" title="平铺" @click="setViewMode('list')">
+                            <van-icon name="bars" size="15" />
+                        </span>
+                        <span class="vm-btn" :class="{ active: viewMode === 'grid' }" title="网格" @click="setViewMode('grid')">
+                            <van-icon name="apps-o" size="15" />
+                        </span>
+                        <span class="vm-btn" :class="{ active: viewMode === 'poster' }" title="海报" @click="setViewMode('poster')">
+                            <van-icon name="photo-o" size="15" />
+                        </span>
+                        <span class="vm-btn" :class="{ active: viewMode === 'page' }" title="翻页" @click="setViewMode('page')">
+                            <van-icon name="exchange" size="15" />
+                        </span>
+                    </div>
                     <van-dropdown-menu class="sort-menu">
                         <van-dropdown-item v-model="sortBy" :options="sortOptions" />
                     </van-dropdown-menu>
-                </div>
-
-                <!-- 视图切换：平铺 / 网格 / 海报 / 翻页 -->
-                <div class="view-mode-bar">
-                    <span class="vm-btn" :class="{ active: viewMode === 'list' }" @click="setViewMode('list')">平铺</span>
-                    <span class="vm-btn" :class="{ active: viewMode === 'grid' }" @click="setViewMode('grid')">网格</span>
-                    <span class="vm-btn" :class="{ active: viewMode === 'poster' }" @click="setViewMode('poster')">海报</span>
-                    <span class="vm-btn" :class="{ active: viewMode === 'page' }" @click="setViewMode('page')">翻页</span>
                 </div>
 
                 <!-- 卡片网格 / 列表(🚀 渐进渲染:解析一批显示一批,loading 时顶部给进度条而非全屏等待) -->
@@ -1364,13 +1370,13 @@ onBeforeUnmount(() => {
 .flex-1 { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 /* track 自身作为滚动容器:Vant PullRefresh 才能正确检测 scrollTop,避免上滑误触发刷新 */
 .flex-1 :deep(.van-pull-refresh__track) { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.view-body { min-height: 100%; padding-bottom: 8px; }
+.view-body { min-height: 100%; padding-bottom: 12px; }
 
 .cat-scroll {
     display: flex;
     gap: 8px;
     overflow-x: auto;
-    padding: 4px 12px 8px;
+    padding: 2px 12px 6px;
     -webkit-overflow-scrolling: touch;
 }
 .cat-chip {
@@ -1412,31 +1418,34 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 14px 8px;
+    gap: 8px;
+    padding: 2px 14px 8px;
 }
-.view-bar .count { font-size: 12px; color: var(--van-gray-6, #969799); }
+.view-bar .count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; }
 .view-bar .van-icon { margin-left: 12px; }
 .view-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
-.view-bar .sort-menu { flex: 1; min-width: 0; margin-left: 8px; }
-.view-bar .sort-menu :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 30px; }
+.view-bar .sort-menu { flex: 1; min-width: 0; margin-left: auto; max-width: 120px; }
+.view-bar .sort-menu :deep(.van-dropdown-menu__bar) { background: transparent; box-shadow: none; height: 30px; justify-content: flex-end; }
 .view-bar .sort-menu :deep(.van-dropdown-menu__title) { font-size: 12px; padding: 0 4px; justify-content: flex-end; }
 
-.view-mode-bar {
+/* 视图切换按钮组（并入统计行右侧，紧凑 icon 形式） */
+.vm-group {
     display: flex;
-    gap: 8px;
-    padding: 2px 14px 10px;
-    overflow-x: auto;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
 }
 .vm-btn {
-    flex-shrink: 0;
-    padding: 4px 14px;
-    border-radius: 999px;
-    font-size: 13px;
-    background: var(--van-gray-2, #f2f3f5);
-    color: var(--van-text-color, #323233);
-    transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: var(--van-text-color-2, #646566);
+    transition: background .2s ease, color .2s ease, box-shadow .2s ease;
 }
-.vm-btn:active { transform: scale(.94); }
+.vm-btn:active { transform: scale(.92); }
 .vm-btn.active {
     background: linear-gradient(135deg, #06b6d4, #0ea5e9);
     color: #fff;
@@ -1577,7 +1586,7 @@ onBeforeUnmount(() => {
     font-size: 12px;
     color: var(--van-gray-5, #c8c9cc);
 }
-.bottom-pad { height: 16px; }
+.bottom-pad { height: 28px; }
 
 /* 未授权引导 */
 .auth-guide {
