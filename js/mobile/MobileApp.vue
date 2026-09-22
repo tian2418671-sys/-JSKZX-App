@@ -27,6 +27,7 @@
 import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { applyTheme, currentTheme, currentFs, applyFs } from './theme';
+import { initBackground } from './useCustomBackground';
 import './theme-mobile-app.css';
 
 export default {
@@ -38,6 +39,8 @@ export default {
             // 启动即应用已保存主题(M2→F组三主题)与字号(F组)
             applyTheme(currentTheme());
             applyFs(currentFs());
+            // 自定义背景图恢复(IndexedDB 读取为异步,首帧后毫秒级补上)
+            initBackground().catch((e) => console.warn('[custom-bg] 初始化失败:', e));
         });
         return { showTabbar };
     }

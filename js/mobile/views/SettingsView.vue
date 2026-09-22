@@ -70,6 +70,30 @@
                 </van-cell>
             </van-cell-group>
 
+            <!-- 自定义背景图（IndexedDB 持久化，全局生效） -->
+            <van-cell-group inset title="自定义背景">
+                <van-cell
+                    title="背景图"
+                    :label="bgActive ? '已设置 · 点击更换' : '选一张图片作为全局背景（自动压缩后保存在本机）'"
+                    icon="photo-o"
+                    is-link
+                    @click="onPickBackground"
+                >
+                    <template #value>
+                        <img v-if="bgActive && bgPreviewUrl" :src="bgPreviewUrl" class="bg-preview" alt="背景预览" />
+                    </template>
+                </van-cell>
+                <van-cell v-if="bgActive" title="背景可见度" label="越高图片越清晰，越低越融入主题底色">
+                    <template #value>
+                        <div class="bg-vis-row">
+                            <van-slider v-model="bgVisibility" :min="20" :max="100" :step="5" class="bg-slider" @change="onBgVisibilityChange" />
+                            <span class="bg-vis-num">{{ bgVisibility }}%</span>
+                        </div>
+                    </template>
+                </van-cell>
+                <van-cell v-if="bgActive" title="移除背景图" label="恢复为纯主题背景色" icon="delete-o" is-link @click="onRemoveBackground" />
+            </van-cell-group>
+
             <!-- 功能 -->
             <van-cell-group inset title="功能">
                 <van-cell
@@ -238,6 +262,7 @@ import { loadApiKey, saveApiKey } from '../useChatApiConfig';
 import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona, setUserPersona } from '../useChatSettings';
 import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs, isDarkTheme, THEME_LABELS } from '../theme';
+import { ensureBackgroundLoaded, pickBackgroundImage, removeBackgroundImage, currentVisibility, setVisibility } from '../useCustomBackground';
 import TrashModal from '../components/TrashModal.vue';
 
 // 与卡片详情页「测卡」Tab 共用的 API 配置存储键
@@ -524,6 +549,7 @@ export default {
         onMounted(() => {
             refreshInfo();
             refreshStats();
+            refreshBgState();
         });
 
         // ---------- 回收站 ----------
@@ -652,6 +678,55 @@ export default {
             showSuccessToast(v ? '导入后将自动打标' : '导入自动打标已关闭');
         }
 
+        // ---------- 自定义背景图（useCustomBackground:IndexedDB 持久化 + 全局 CSS 变量应用） ----------
+        const bgActive = ref(false);
+        const bgBusy = ref(false);
+        const bgVisibility = ref(currentVisibility());
+        const bgPreviewUrl = ref('');
+
+        async function refreshBgState() {
+            const st = await ensureBackgroundLoaded();
+            bgActive.value = st.active;
+            bgPreviewUrl.value = st.url;
+        }
+
+        async function onPickBackground() {
+            if (bgBusy.value) return;
+            bgBusy.value = true;
+            try {
+                const res = await pickBackgroundImage();
+                if (res && res.success) {
+                    showSuccessToast('背景图已设置');
+                    await refreshBgState();
+                } else if (!(res && res.cancelled)) {
+                    showToast((res && res.error) || '设置背景图失败');
+                }
+            } catch (e) {
+                showToast('设置背景图失败: ' + ((e && e.message) || e));
+            } finally {
+                bgBusy.value = false;
+            }
+        }
+
+        async function onRemoveBackground() {
+            try {
+                await showConfirmDialog({
+                    title: '移除背景图',
+                    message: '将删除自定义背景，恢复为纯主题背景色。',
+                    confirmButtonText: '移除',
+                    confirmButtonColor: '#ee0a24'
+                });
+            } catch (e) { return; }
+            await removeBackgroundImage();
+            await refreshBgState();
+            showSuccessToast('已移除背景图');
+        }
+
+        function onBgVisibilityChange(v) {
+            setVisibility(v);
+            bgVisibility.value = currentVisibility();
+        }
+
         // ---------- 后台保活开关（Bug 反馈#2:切后台被杀;持久化到 AppConfig,启动时自动拉起） ----------
         const keepAliveOn = ref(true);
         const keepAliveBusy = ref(false);
@@ -706,7 +781,8 @@ export default {
             snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
             ignoreImportTags, onIgnoreTagsChange,
             importAutoTag, onImportAutoTagChange,
-            keepAliveOn, keepAliveBusy, onKeepAliveChange
+            keepAliveOn, keepAliveBusy, onKeepAliveChange,
+            bgActive, bgBusy, bgVisibility, bgPreviewUrl, onPickBackground, onRemoveBackground, onBgVisibilityChange
         };
     }
 };
@@ -772,7 +848,30 @@ export default {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px 0 24px;
+    /* 底部留白 = 固定 Tab 导航条(50px) + 安全区 + 视觉间距，防止最后一项被导航栏遮挡 */
+    padding: 12px 0 calc(50px + env(safe-area-inset-bottom, 0px) + 30px);
+}
+/* 自定义背景：预览缩略图 / 可见度滑条 */
+.bg-preview {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    object-fit: cover;
+    display: block;
+}
+.bg-vis-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.bg-slider {
+    width: 110px;
+}
+.bg-vis-num {
+    min-width: 38px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--van-text-color-2, #969799);
 }
 .save-row {
     padding: 10px 16px 4px;

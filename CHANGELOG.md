@@ -6,6 +6,30 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.30] - 2026-09-22
+
+### ✨ 设置页「自定义背景图」（新功能）
+
+- 新增 `js/mobile/useCustomBackground.js`：选图（复用原生 `pickImage` 系统照片选择器，浏览器预览回落 `<input type=file>`）→ canvas 压缩（最长边 ≤2560、WebP q0.85 优先，尺寸达标且 ≤3MB 原样存储）→ **IndexedDB**（`jskzx-bg-v1`）持久化 Blob；
+- 应用方式：`.mobile-shell` 多层背景 = 第 1 层主题色遮罩 `rgba(var(--stc-bg-mask-rgb), var(--stc-bg-mask-alpha))` + 第 2 层 `var(--stc-bg-image)` 图片（cover）；遮罩浓度 = `1 − 可见度`（20%~100%，默认 80）；刻意不用全屏 blur（移动端字体模糊/性能坑）；
+- `theme.js` 主题底色收敛为单一数据源 `THEME_BG_RGB`（body 背景 + 遮罩色共用），换主题时照片自动与底色融合；
+- 启动恢复：`MobileApp.onMounted → initBackground()`（IDB 读取 → blob URL → CSS 变量，异步补帧）；
+- 设置页新增「自定义背景」分组：背景图（含缩略图预览）/ 背景可见度 `van-slider` / 移除背景图。
+
+### 🔴 Bug 修复：多页底部内容被固定 Tab 导航遮挡（BUG-19）
+
+- 根因：`van-tabbar` 为 `position: fixed`（高 51px）浮盖内容之上，各页滚动容器底部留白不足（设置页仅 24px → 被遮 27px；卡片库 12px；预设页 20px）；
+- 修复：设置/卡片库/预设/世界书四页滚动容器统一 `padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px) + 30px)`；
+- 模拟器实测：滚动到底 `gap = tabbar.top − lastItem.bottom` 均 > 0（设置页 29px / 卡片库 57px / 预设与世界书几何测量通过）。
+
+### 🔧 测试与文档
+
+- 新增 `test/customBackground.test.mjs`（可见度归一化 / 遮罩换算 / 存储键契约，5 组用例）；`npm test` 147/147；
+- 文档：`docs/内部开发/技术文档/2026-09-22_自定义背景图功能.md`、`docs/内部开发/BUG修复/2026-09-22_BUG-19_设置页底部内容被Tab导航遮挡.md`；
+- 截图归档：`docs/内部开发/截图记录/2026-09-22-自定义背景/`、`2026-09-22-设置页遮挡修复/`。
+
+---
+
 ## [1.10.29] - 2026-09-18
 
 ### 🔴 Bug 修复：查重弹窗无法关闭 + 主题切换无动画

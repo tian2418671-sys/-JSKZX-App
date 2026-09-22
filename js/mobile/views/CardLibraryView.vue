@@ -1370,7 +1370,8 @@ onBeforeUnmount(() => {
 .flex-1 { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 /* track 自身作为滚动容器:Vant PullRefresh 才能正确检测 scrollTop,避免上滑误触发刷新 */
 .flex-1 :deep(.van-pull-refresh__track) { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.view-body { min-height: 100%; padding-bottom: 12px; }
+/* 底部留白 = 固定 Tab 导航条(50px) + 安全区 + 视觉间距，防止最后一行卡片被导航栏遮挡 */
+.view-body { min-height: 100%; padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px) + 30px); }
 
 .cat-scroll {
     display: flex;

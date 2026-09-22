@@ -387,7 +387,8 @@ export default {
 .pv-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; flex-wrap: wrap; }
 .pv-count { margin-left: auto; font-size: 12px; color: var(--van-gray-6, #969799); }
 .pv-loading { padding: 48px 0; text-align: center; }
-.pv-list { padding: 6px 12px 20px; display: flex; flex-direction: column; gap: 9px; }
+/* 底部留白 = 固定 Tab 导航条(50px) + 安全区 + 视觉间距，防止最后一项被导航栏遮挡 */
+.pv-list { padding: 6px 12px calc(50px + env(safe-area-inset-bottom, 0px) + 30px); display: flex; flex-direction: column; gap: 9px; }
 .pv-pager-bar {
     display: flex; align-items: center; justify-content: center; gap: 14px;
     padding: 8px 14px 12px;

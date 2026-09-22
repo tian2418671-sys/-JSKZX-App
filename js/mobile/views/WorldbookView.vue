@@ -1425,7 +1425,7 @@ export default {
 
 <style scoped>
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 80px; }
+.view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 calc(50px + env(safe-area-inset-bottom, 0px) + 30px); }
 .sub-nav { box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 4px; }
 .status-wrap { padding: 40px 0; text-align: center; }
 .wb-item {

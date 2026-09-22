@@ -9,6 +9,13 @@ const THEMES = ['light', 'dark', 'slate', 'ancient', 'han', 'future', 'cyberpunk
 const DARK_THEMES = new Set(['dark', 'slate', 'han', 'future', 'cyberpunk']);
 const FS_MAP = { 12: '12px', 14: '14px', 16: '16px' };
 
+/** 主题底色(RGB 三元组,单一数据源):body 纯色背景 + 自定义背景图遮罩色 --stc-bg-mask-rgb */
+const THEME_BG_RGB = {
+    light: [247, 248, 250], dark: [9, 9, 11], slate: [15, 23, 42],
+    ancient: [245, 239, 224], han: [26, 20, 16], future: [10, 18, 32],
+    cyberpunk: [15, 10, 26], ink: [247, 247, 242],
+};
+
 export const THEME_LABELS = {
     light: '白昼', dark: '暗夜', slate: '青灰',
     ancient: '古风', han: '汉风', future: '未来',
@@ -85,13 +92,10 @@ function applyThemeCore(theme) {
     root.classList.remove('deco-modern', 'deco-industrial', 'deco-scroll', 'deco-seal', 'deco-scanline', 'deco-glitch', 'deco-ink');
     if (meta.deco) root.classList.add(`deco-${meta.deco}`);
 
-    if (document.body) {
-        const bgMap = {
-            dark: '#09090b', slate: '#0f172a', ancient: '#f5efe0', han: '#1a1410',
-            future: '#0a1220', cyberpunk: '#0f0a1a', ink: '#f7f7f2', light: '#f7f8fa',
-        };
-        document.body.style.background = bgMap[t] || '#f7f8fa';
-    }
+    // 主题底色:body 纯色 + 遮罩色变量(供自定义背景图的 rgba(...) 多层背景拼装)
+    const bg = THEME_BG_RGB[t] || THEME_BG_RGB.light;
+    if (document.body) document.body.style.background = `rgb(${bg.join(',')})`;
+    root.style.setProperty('--stc-bg-mask-rgb', bg.join(', '));
     localStorage.setItem(THEME_KEY, t);
     withSystemBars((SB) => {
         if (SB && typeof SB.setStyle === 'function') {

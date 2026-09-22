@@ -711,3 +711,23 @@ html[data-theme="ink"] .mobile-shell::before {
         radial-gradient(480px 320px at 30% 25%, rgba(140,130,120,0.4) 0%, transparent 60%),
         radial-gradient(400px 280px at 70% 75%, rgba(130,120,110,0.3) 0%, transparent 55%);
 }
+
+/* =========================================================
+   自定义背景图（设置页「自定义背景」）
+   多层背景：第 1 层 = 主题色遮罩（rgba 由 --stc-bg-mask-rgb 与 --stc-bg-mask-alpha 拼装），
+   第 2 层 = 用户图片（--stc-bg-image，无图时为 none 仅显底色）。
+   遮罩浓度 = 100 - 背景可见度（见 useCustomBackground.js），可见度低更融入主题、保证可读性；
+   背景挂载在 .mobile-shell（内部滚动发生在 view-body），天然固定不随内容滚动。
+   ========================================================= */
+html .mobile-shell {
+    background-image:
+        linear-gradient(
+            rgba(var(--stc-bg-mask-rgb, 247, 248, 250), var(--stc-bg-mask-alpha, 0)),
+            rgba(var(--stc-bg-mask-rgb, 247, 248, 250), var(--stc-bg-mask-alpha, 0))
+        ),
+        var(--stc-bg-image, none);
+    background-size: 100% 100%, cover;
+    background-position: 0 0, center;
+    background-repeat: no-repeat;
+}
+
