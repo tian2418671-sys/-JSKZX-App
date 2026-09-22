@@ -22,6 +22,12 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 - 修复：设置/卡片库/预设/世界书四页滚动容器统一 `padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px) + 30px)`；
 - 模拟器实测：滚动到底 `gap = tabbar.top − lastItem.bottom` 均 > 0（设置页 29px / 卡片库 57px / 预设与世界书几何测量通过）。
 
+### 🔴 Bug 修复：OTA 更新提示 Markdown 符号漏出（BUG-20，补发同一版本）
+
+- 根因：OTA 弹窗对 `updateInfo.notes`（GitHub Release body = Markdown）纯文本插值（`{{ }}` + `white-space: pre-line`）→ `##`/`**` 等符号原样漏出；
+- 修复：新增 `js/utils/mdMini.js`（Showdown 配置对齐聊天渲染 + 降级）→ `sanitizeStatusHtml`（DOMPurify 白名单，与聊天渲染同策略）→ `v-html`；`.ota-notes` 排版适配（标题紧凑化 13px / 列表 / 分隔线 / 代码），异常时兜底转义纯文本；
+- 测试：`test/mdMini.test.mjs` 5 组（含真实 RELEASE_NOTES 结构）；`npm test` 152/152；模拟器注入真实发布正文实测渲染无符号漏出。
+
 ### 🔧 测试与文档
 
 - 新增 `test/customBackground.test.mjs`（可见度归一化 / 遮罩换算 / 存储键契约，5 组用例）；`npm test` 147/147；

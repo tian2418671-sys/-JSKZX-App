@@ -195,7 +195,7 @@
                 <div v-if="updateInfo && updateInfo.name && updateInfo.name !== updateInfo.version" class="ota-name">
                     {{ updateInfo.name }} · {{ fmtSize(updateInfo.size) }}
                 </div>
-                <div v-if="updateInfo && updateInfo.notes" class="ota-notes">{{ updateInfo.notes }}</div>
+                <div v-if="otaNotesHtml" class="ota-notes" v-html="otaNotesHtml"></div>
 
                 <div v-if="downloading" class="ota-progress">
                     <van-progress :percentage="downloadPercent" :show-pivot="false" stroke-width="6" />
@@ -263,6 +263,8 @@ import { getReplyCount, setReplyCount, getUserName, setUserName, getUserPersona,
 import { loadLibrary, mobileLibrary } from '../useMobileLibrary';
 import { applyTheme, currentTheme, currentFs, applyFs, isDarkTheme, THEME_LABELS } from '../theme';
 import { ensureBackgroundLoaded, pickBackgroundImage, removeBackgroundImage, currentVisibility, setVisibility } from '../useCustomBackground';
+import { markdownToHtml } from '../../utils/mdMini.js';
+import { sanitizeStatusHtml } from '../../composables/useStatusbarPreview.js';
 import TrashModal from '../components/TrashModal.vue';
 
 // 与卡片详情页「测卡」Tab 共用的 API 配置存储键
@@ -327,6 +329,20 @@ export default {
             if (!n) return '';
             return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.ceil(n / 1024) + ' KB';
         }
+
+        /** OTA 更新说明：Markdown 渲染 + DOMPurify 清洗（对齐聊天渲染策略；防 `##` `**` 等格式符号原样漏出） */
+        const otaNotesHtml = computed(() => {
+            const md = (updateInfo.value && updateInfo.value.notes) || '';
+            if (!md) return '';
+            try {
+                const html = sanitizeStatusHtml(markdownToHtml(md));
+                if (html) return html;
+            } catch (e) {
+                console.warn('[ota] 更新说明渲染失败,回退纯文本:', e);
+            }
+            // 兜底：转义纯文本（渲染异常时也不能丢内容/不能漏标签）
+            return String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+        });
 
         api.onUpdateProgress((d) => {
             if (d && d.phase === 'download') {
@@ -776,7 +792,7 @@ export default {
             fetchAvailableModels, pickModel, openModelPicker, onApiTypeChange,
             replyCount, userName, userPersona, saveReplyCount, saveUserName, saveUserPersona,
             updateFeed, updating, showUpdate, updateInfo, downloading, downloadPercent,
-            fmtSize, checkUpdate, doDownload, appVersionText,
+            fmtSize, checkUpdate, doDownload, appVersionText, otaNotesHtml,
             showTrash, trashItems, trashLoading, openTrash, restoreTrashItem, emptyTrash,
             snapAuto, snapCooldown, snapMaxKeep, saveSnapshotConfig, cleanOrphan, cleanAll,
             ignoreImportTags, onIgnoreTagsChange,
@@ -901,11 +917,57 @@ export default {
     margin-top: 10px;
     max-height: 30vh;
     overflow-y: auto;
-    white-space: pre-line;
     font-size: 12px;
     line-height: 1.7;
     color: var(--van-text-color, #323233);
+    overflow-wrap: anywhere;
 }
+/* 更新说明采用 Markdown 渲染：标题紧凑化（弹窗空间有限），列表/分隔线/引用/代码适配 */
+.ota-notes :deep(h1),
+.ota-notes :deep(h2),
+.ota-notes :deep(h3),
+.ota-notes :deep(h4),
+.ota-notes :deep(h5),
+.ota-notes :deep(h6) {
+    margin: 10px 0 4px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+.ota-notes :deep(h1:first-child),
+.ota-notes :deep(h2:first-child),
+.ota-notes :deep(h3:first-child) { margin-top: 0; }
+.ota-notes :deep(p) { margin: 6px 0; }
+.ota-notes :deep(ul),
+.ota-notes :deep(ol) { margin: 6px 0; padding-left: 18px; }
+.ota-notes :deep(li) { margin: 2px 0; }
+.ota-notes :deep(strong) { font-weight: 600; }
+.ota-notes :deep(hr) {
+    margin: 10px 0;
+    border: none;
+    border-top: 1px solid var(--van-gray-3, #ebedf0);
+}
+.ota-notes :deep(code) {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--van-gray-2, #f2f3f5);
+    font-size: 11px;
+}
+.ota-notes :deep(pre) {
+    margin: 6px 0;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--van-gray-2, #f2f3f5);
+    overflow-x: auto;
+}
+.ota-notes :deep(pre code) { padding: 0; background: transparent; }
+.ota-notes :deep(blockquote) {
+    margin: 6px 0;
+    padding: 2px 10px;
+    border-left: 3px solid var(--van-gray-4, #dcdee0);
+    color: var(--van-text-color-2, #646566);
+}
+.ota-notes :deep(a) { color: #06b6d4; text-decoration: none; }
 .ota-progress { margin-top: 14px; }
 .ota-progress-text { margin-top: 6px; font-size: 12px; color: var(--van-gray-6, #969799); text-align: center; }
 .ota-ops { padding: 6px 16px 16px; }
