@@ -313,34 +313,50 @@ function latestCallback(eventName) {
 // ---------- 回收站:库根 .trash 软删除(Android 无系统回收站语义;walk 会跳过点开头目录) ----------
 const TRASH_DIR = '.trash';
 
+/**
+ * 单条路径移入回收站(导出供单测;fs 为 { move, mkdir } 桥对象)。
+ * 返回 null=成功,否则为错误信息字符串。
+ *
+ * 🐛 2026-09-25 修复「首次清理必失败」:原生 move 对「目标父目录不存在」是 call.reject(抛异常),
+ *    而非 resolve({success:false});旧实现把重试写在 resolve 假值分支 → 异常直接进 catch,
+ *    降级建目录逻辑永远不执行(库根从未有 .trash 时,第一次清理必然报「目标目录不可写」)。
+ *    且旧代码用 dest 的下标去切 rel(两串长度不同)→ 即便走到也会建出错误目录。
+ * 现语义:直接移动失败(无论 reject 或 success=false) → 逐级确保 .trash 目录链存在 → 重试一次。
+ */
+export async function trashOneByMove(fs, rel) {
+    if (!rel) return '无效路径';
+    const dest = TRASH_DIR + '/' + rel;
+    const attemptMove = async () => {
+        try {
+            const res = await fs.move({ path: rel, newPath: dest });
+            return (res && res.success) ? null : ((res && res.error) || '移动失败');
+        } catch (e) {
+            return (e && e.message) || '移动失败';
+        }
+    };
+    let err = await attemptMove();
+    if (err === null) return null;
+    // 目标父目录不存在(首次清理典型场景):按 .trash → .trash/a → .trash/a/b 逐级创建后重试一次。
+    // 注意原生 mkdir 不递归(父不存在则 reject),必须逐级;已存在目录 mkdir 返回 success 幂等。
+    const relParentIdx = rel.lastIndexOf('/');
+    const chain = (TRASH_DIR + (relParentIdx > 0 ? '/' + rel.slice(0, relParentIdx) : '')).split('/');
+    let acc = '';
+    for (const seg of chain) {
+        acc = acc ? acc + '/' + seg : seg;
+        try { await fs.mkdir({ path: acc }); } catch (e) { /* 建失败留给重试结果判定 */ }
+    }
+    return await attemptMove();
+}
+
 /** 把一批库内相对路径移动到库根 .trash 目录(保持各自相对子路径),返回成功/失败明细 */
 async function trashByMove(paths) {
     const failed = [];
     const success = [];
     for (const rel of paths || []) {
         if (!rel) continue;
-        try {
-            // 目标保留目录结构:<.trash>/<原相对路径>,避免同名互相覆盖
-            const dest = TRASH_DIR + '/' + rel;
-            const res = await LibraryFs.move({ path: rel, newPath: dest });
-            if (res && res.success) {
-                success.push(rel);
-            } else {
-                // 移动失败(如目标目录需先创建) → 附加目录已存在场景特殊处理:先创建父目录再移动
-                const parentIdx = dest.lastIndexOf('/');
-                const parentDir = parentIdx > 0 ? TRASH_DIR + '/' + rel.slice(0, parentIdx) : TRASH_DIR;
-                const mk = await LibraryFs.mkdir({ path: parentDir });
-                if (mk && mk.success) {
-                    const retry = await LibraryFs.move({ path: rel, newPath: dest });
-                    if (retry && retry.success) success.push(rel);
-                    else failed.push({ path: rel, error: (retry && retry.error) || '移动失败' });
-                } else {
-                    failed.push({ path: rel, error: (res && res.error) || '移动失败' });
-                }
-            }
-        } catch (e) {
-            failed.push({ path: rel, error: (e && e.message) || '移动失败' });
-        }
+        const err = await trashOneByMove(LibraryFs, rel);
+        if (err === null) success.push(rel);
+        else failed.push({ path: rel, error: err });
     }
     return { success, failed, count: success.length };
 }
@@ -1778,9 +1794,23 @@ export const androidImpl = {
     /** M4 查重清理:移入库根 _trash 软回收站(Android 无系统回收站);返回 { success, count, failed:[{path}] } 对齐桌面语义 */
     async trashFiles(filePaths) {
         const rels = (filePaths || []).map(toRelativePath).filter(Boolean);
-        if (rels.length === 0) return { success: false, count: 0, failed: [], error: '无效路径' };
-        const { success, failed, count } = await trashByMove(rels);
-        return { success, count, failed, error: undefined };
+        if (rels.length === 0) return { success: false, count: 0, failed: [], okPaths: [], error: '无效路径' };
+        try {
+            const { success, failed, count } = await trashByMove(rels);
+            // 🐛 修复(2026-09-25):failed[].path 统一回 /library/ 形式(与入参一致),
+            //   否则消费方用完整路径匹配 failedSet 恒不命中 → 误报「已清理 N 个」并错误移除 UI 条目。
+            const failedFull = failed.map((f) => ({ ...f, path: LIBRARY_ROOT + '/' + f.path }));
+            const okFull = success.map((r) => LIBRARY_ROOT + '/' + r);
+            return {
+                success: count > 0, // 统一布尔语义(至少一个成功); 明细看 okPaths/failed
+                count,
+                okPaths: okFull,
+                failed: failedFull,
+                error: (count === 0 && failedFull.length) ? (failedFull[0].error || '清理失败') : undefined
+            };
+        } catch (e) {
+            return { success: false, count: 0, failed: [], okPaths: [], error: (e && e.message) || '清理失败' };
+        }
     },
     /** 回收站目录(.trash)管理:在系统文件管理器中打开库内 .trash 目录 */
     async openGlobalTrash() {

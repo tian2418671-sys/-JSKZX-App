@@ -6,6 +6,51 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.10.31] - 2026-09-26
+
+### ✨ 卡片详情「高级设定」折叠改造（开场白/子项）
+
+- **9 个子项 accordion**：备注/版本/首条开场白/场景/示例对话/备用开场白/系统提示/后期历史/深度提示各自折叠、**默认全收起**；`advSub` reactive 状态；子项头右侧显示字数/条数 meta；原 van-field label 标题统一上移至子项头（`.adv-sub*` 样式族）；
+- **首条开场白折叠**：子项展开后内容默认截断 132px + 渐隐遮罩 + 「显示全部 / 收起」（>160 字才渲染按钮）；`@focus="firstMsgOpen = true"` 点击编辑自动展开全文；
+- **备用开场白操作栏上移**：`.greet-toolbar` 移至列表**上方**（左「＋添加一条」右「显示全部 N 条/收起列表」）；删除旧 `.greet-ops/.greet-more-btn/.greet-head` 族；
+- 真卡实测（20 张）：道渊 18650 字（截断 132px → 展开 16054px）、孕妇Kaidou 56 条备用（工具行在上 ✓）、Kora5.3 短卡无按钮 ✓；截图 `shots/opening-collapse/`。
+
+### ✨ 世界书标签（批 A · 移动版 S1）
+
+- 新增 `js/utils/wbTags.js`（纯函数：normalizeWbTag/normalizeWbTags/toggleWbTag/countWbTags/matchWbFilter，对齐桌面 wbGroupsTags.js）+ `test/wbTags.test.mjs`（5 组）；
+- 新增 `WbTagEditModal.vue`（现标签 ✕ 移除 / 回车添加 / 逗号顿号多标签 / 全库已有标签建议点击）；
+- `WorldbookView.vue` 接线：`wbTagMap`（localStorage `jsmobile-wb-tags`，配置层存储不改文件）、列表 chips（点击即筛选）、顶部筛选行（前 12 标签 + 计数 + 清除）、列表 ⋯ 菜单「🏷️ 编辑标签」；
+- 实测（真实世界书 ×7）：打 3 标签（含逗号分隔）/✕ 移除 ✓；筛选「日常」4/7 ✓；**杀进程冷启动恢复 ✓**；截图 `shots/wbtag-s1/`。
+
+### ✨ 预设查重（批 B）
+
+- 新增 `js/utils/presetDedupe.js`（自包含移植桌面 v2.3.0：fnv1a32/exactTextKey/MinHash-96 硬编码种子/promptsOf/名称茎 extractNameStem+discoverTails/结构三维 setJaccard+sameSampler/五枚举 pickPresetSimType/`scanPresetDuplicates` 编排）+ `test/presetDedupe.test.mjs`（8 组，含世界书名称归一）；
+- 新增 `PresetDedupeModal.vue`（组卡/改名同源徽标/五枚举标签/三维/风险降级）+ `PresetsView.vue` 接线（工具栏「查重」按钮 / 确认清理 → deleteExternalPreset → 重扫 → 弹窗刷新）；
+- 实测（真实预设 ×7，扫描 26 本）：「双人成行 V5.2 春和景明」三本被**跨名结构指纹**正确聚为一组；清理 26→24 且弹窗刷新 ✓；截图 `shots/preset-dedupe/`。
+
+### 🔴 世界书查重修复与增强（用户实测三问）
+
+- **双关闭 ✕**：Vant popup 自带 `closeable` 与自绘头 ✕ 叠加 → 去 `closeable`（全库排查仅此一处）；
+- **查重「没反应」**（复制出的 `_副本` 永远匹配不上）：新增 `wbDedupeStem` 名称归一（剥 `_副本/_备份/复刻/重置/重制版/新版/旧版/改版`，`stripCnReplicaTails`）+ 内容指纹（条目 key+content 拼串 MinHash ≥ 0.85 跨名聚类，Union-Find 合并）；
+- **卡顿无反馈**：pending 提示先渲染 + 50ms 让出主线程 + 每 15 本分批 + 可取消（取消按钮仅 content/worldbook 模式）；
+- 版本差异展示：`完全一致 / 同源版本 · 重合 N% / 内容相似 N%`。
+
+### 🔴 查重清理链路修复（BUG-21，深层三连）
+
+- **`trashByMove` 重试链够不着**（首次清理必失败）：原生 `move` 对「目标父目录不存在」是 **reject（抛异常）**，旧代码重试降级写在 `resolve({success:false})` 分支；且旧代码用 `dest` 下标切 `rel`（两串长度不同）。修复：`trashOneByMove(fs, rel)` 导出注入式——失败（reject/假值）→ 逐级 mkdir `.trash→子目录` → 重试一次；新增 `test/trashRetry.test.mjs`（9 组）；
+- **relIndex 坏对象（根因最深）**：`buildRelIndex` 的 `DocumentFile.fromSingleUri` 对象 `getParentFile()` 为 null → `doMove` 内 `src.getParentFile().getUri()` 恒 NPE 被吞 → **索引已建后所有跨目录移动假失败**（读正常、`.trash`/新文件能移）。修复：**写操作全走 `fileByRelPathSlow`**（move src+targetDir / mkdir parent / rename src / openFileInFolder）+ 成功后 `invalidateRelIndex(path)`；读路径保持快查；
+- **`trashFiles` 返回形式混乱 + 假成功**：`success` 实际是数组（`[]` truthy → 删除失败显示成功）；`failed[].path` 是相对路径而消费方按 `/library/` 匹配 → 恒不命中。修复：统一 `{success:boolean(=count>0), count, okPaths[], failed[].path(/library/ 形式), error}`；`DedupeModal.doTrash` 返回 `okPaths|null`，`trashOne/trashRest` 成功哪些移除哪些、失败保留；
+- **主版本排序不稳定**：「完全一致」副本 mtime 更新会被选为主版本（组名带 `_副本`）。修复：本体优先（`stripCnReplicaTails(fn)===fn`）→ 词条数 → mtime；
+- 实测（模拟器全链路：复制副本 → 查重 → 清理 → 恢复）：组名干净 / 原版[推荐保留] / 副本[完全一致]；**干净环境首次清理「已清理 1 个版本」**、列表 8→7、副本落 `.trash/`；恢复 ✓ 重命名往返 ✓ mkdir 幂等 ✓。
+
+### 🔧 测试与文档
+
+- 新增单测 22 组（wbTags 5 + presetDedupe 8 + trashRetry 9），`npm test` **174/174**；
+- 文档：`docs/内部开发/BUG修复/2026-09-25_BUG-21_世界书查重与清理链路修复.md`；
+- 截图归档：`shots/wbtag-s1/`、`shots/preset-dedupe/`、`shots/opening-collapse/`。
+
+---
+
 ## [1.10.30] - 2026-09-22
 
 ### ✨ 设置页「自定义背景图」（新功能）

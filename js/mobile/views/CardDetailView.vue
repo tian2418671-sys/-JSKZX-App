@@ -131,25 +131,156 @@
                     <!-- 高级设定(折叠) -->
                     <van-collapse v-model="advancedOpen" class="adv-collapse">
                         <van-collapse-item title="高级设定" name="adv">
-                            <van-field v-model="d.creator_notes" type="textarea" rows="2" autosize label="创建者备注" placeholder="仅作者可见的备注(creator_notes)" />
-                            <van-field :model-value="d.character_version || ''" @update:model-value="d.character_version = $event" label="卡版本" placeholder="如 1.0.0" />
-                            <van-field v-model="d.first_mes" type="textarea" rows="3" autosize label="开场白" />
-                            <van-field v-model="d.scenario" type="textarea" rows="3" autosize label="场景" />
-                            <van-field v-model="d.mes_example" type="textarea" rows="5" autosize label="示例对话" />
-                            <van-field
-                                :model-value="greetingsText" label="备用开场白"
-                                type="textarea" rows="3" autosize
-                                @update:model-value="greetingsText = $event"
-                            />
-                            <van-field v-model="d.system_prompt" type="textarea" rows="2" autosize label="系统提示" placeholder="system_prompt(卡内覆写,酒馆兼容)" />
-                            <van-field v-model="d.post_history_instructions" type="textarea" rows="2" autosize label="对话后注入" placeholder="post_history_instructions(酒馆兼容)" />
-                            <van-field
-                                :model-value="depthPromptText"
-                                @update:model-value="depthPromptText = $event"
-                                type="textarea" rows="2" autosize
-                                label="深度提示"
-                                placeholder="extensions.depth_prompt.prompt"
-                            />
+                            <!-- 子项：创建者备注 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.notes = !advSub.notes">
+                                    <span class="adv-sub-title">创建者备注</span>
+                                    <span class="adv-sub-meta" v-if="(d.creator_notes || '').length">{{ (d.creator_notes || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.notes ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.notes" class="adv-sub-body">
+                                    <van-field v-model="d.creator_notes" type="textarea" rows="2" autosize placeholder="仅作者可见的备注(creator_notes)" />
+                                </div>
+                            </div>
+                            <!-- 子项：卡版本 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.version = !advSub.version">
+                                    <span class="adv-sub-title">卡版本</span>
+                                    <span class="adv-sub-meta" v-if="d.character_version">{{ d.character_version }}</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.version ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.version" class="adv-sub-body">
+                                    <van-field :model-value="d.character_version || ''" @update:model-value="d.character_version = $event" placeholder="如 1.0.0" />
+                                </div>
+                            </div>
+                            <!-- 子项：开场白（展开子项后仍默认截断约 6 行，点击编辑自动展开全文） -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.first = !advSub.first">
+                                    <span class="adv-sub-title">开场白</span>
+                                    <span class="adv-sub-meta" v-if="(d.first_mes || '').length">{{ (d.first_mes || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.first ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.first" class="adv-sub-body">
+                                    <div class="first-fold" :class="{ open: firstMsgOpen }">
+                                        <van-field v-model="d.first_mes" type="textarea" rows="3" autosize placeholder="开场白 first_mes" @focus="firstMsgOpen = true" />
+                                    </div>
+                                    <div v-if="firstMsgFoldable" class="greet-toolbar">
+                                        <span class="adv-sub-spacer" />
+                                        <button class="greet-mini-btn" :class="{ on: firstMsgOpen }" @click="firstMsgOpen = !firstMsgOpen">
+                                            {{ firstMsgOpen ? '收起' : '显示全部' }}
+                                            <van-icon :name="firstMsgOpen ? 'arrow-up' : 'arrow-down'" />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 子项：场景 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.scenario = !advSub.scenario">
+                                    <span class="adv-sub-title">场景</span>
+                                    <span class="adv-sub-meta" v-if="(d.scenario || '').length">{{ (d.scenario || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.scenario ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.scenario" class="adv-sub-body">
+                                    <van-field v-model="d.scenario" type="textarea" rows="3" autosize placeholder="场景 scenario" />
+                                </div>
+                            </div>
+                            <!-- 子项：示例对话 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.example = !advSub.example">
+                                    <span class="adv-sub-title">示例对话</span>
+                                    <span class="adv-sub-meta" v-if="(d.mes_example || '').length">{{ (d.mes_example || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.example ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.example" class="adv-sub-body">
+                                    <van-field v-model="d.mes_example" type="textarea" rows="5" autosize placeholder="示例对话 mes_example" />
+                                </div>
+                            </div>
+                            <!-- 子项：备用开场白（操作按钮在列表上方，长列表无需下拉找按钮） -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.greet = !advSub.greet">
+                                    <span class="adv-sub-title">备用开场白</span>
+                                    <span class="adv-sub-meta">共 {{ greetList.length }} 条</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.greet ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.greet" class="adv-sub-body">
+                                    <div class="greet-toolbar">
+                                        <button class="greet-mini-btn" @click="addGreeting">
+                                            <van-icon name="plus" /> 添加一条
+                                        </button>
+                                        <span class="adv-sub-spacer" />
+                                        <button
+                                            v-if="greetList.length > GREET_PREVIEW_COUNT"
+                                            class="greet-mini-btn" :class="{ on: greetShowAll }"
+                                            @click="greetShowAll = !greetShowAll"
+                                        >
+                                            {{ greetShowAll ? `收起列表（仅显示前 ${GREET_PREVIEW_COUNT} 条）` : `显示全部 ${greetList.length} 条` }}
+                                            <van-icon :name="greetShowAll ? 'arrow-up' : 'arrow-down'" />
+                                        </button>
+                                    </div>
+                                    <div v-if="greetList.length" class="greet-list">
+                                        <div v-for="(g, i) in visibleGreetList" :key="'greet-' + i" class="greet-item">
+                                            <div class="greet-item-head">
+                                                <span class="greet-idx">#{{ i + 1 }}</span>
+                                                <span class="greet-len">{{ g.length }}字</span>
+                                            </div>
+                                            <van-field
+                                                v-model="d.alternate_greetings[i]"
+                                                type="textarea" rows="2" autosize
+                                                placeholder="输入该条开场白…"
+                                                @blur="onGreetBlur(i)"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div v-else class="greet-empty">暂无备用开场白</div>
+                                </div>
+                            </div>
+                            <!-- 子项：系统提示 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.sys = !advSub.sys">
+                                    <span class="adv-sub-title">系统提示</span>
+                                    <span class="adv-sub-meta" v-if="(d.system_prompt || '').length">{{ (d.system_prompt || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.sys ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.sys" class="adv-sub-body">
+                                    <van-field v-model="d.system_prompt" type="textarea" rows="2" autosize placeholder="system_prompt(卡内覆写,酒馆兼容)" />
+                                </div>
+                            </div>
+                            <!-- 子项：对话后注入 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.post = !advSub.post">
+                                    <span class="adv-sub-title">对话后注入</span>
+                                    <span class="adv-sub-meta" v-if="(d.post_history_instructions || '').length">{{ (d.post_history_instructions || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.post ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.post" class="adv-sub-body">
+                                    <van-field v-model="d.post_history_instructions" type="textarea" rows="2" autosize placeholder="post_history_instructions(酒馆兼容)" />
+                                </div>
+                            </div>
+                            <!-- 子项：深度提示 -->
+                            <div class="adv-sub">
+                                <div class="adv-sub-head" @click="advSub.depth = !advSub.depth">
+                                    <span class="adv-sub-title">深度提示</span>
+                                    <span class="adv-sub-meta" v-if="(depthPromptText || '').length">{{ (depthPromptText || '').length }} 字</span>
+                                    <span class="adv-sub-spacer" />
+                                    <van-icon class="adv-sub-arrow" :name="advSub.depth ? 'arrow-up' : 'arrow-down'" />
+                                </div>
+                                <div v-if="advSub.depth" class="adv-sub-body">
+                                    <van-field
+                                        :model-value="depthPromptText"
+                                        @update:model-value="depthPromptText = $event"
+                                        type="textarea" rows="2" autosize
+                                        placeholder="extensions.depth_prompt.prompt"
+                                    />
+                                </div>
+                            </div>
                         </van-collapse-item>
                         <van-collapse-item title="状态栏预览" name="status">
                             <div class="stub-window">
@@ -893,6 +1024,50 @@ export default {
                 d.value.alternate_greetings = String(v || '').split(/### 分隔|\n/).map((s) => s.trim()).filter(Boolean);
             }
         });
+
+        // ---------- 备用开场白：条目列表（默认仅显示前 5 条 / 显示全部；条目直接编辑；v1.10.31） ----------
+        const GREET_PREVIEW_COUNT = 5;
+        const greetShowAll = ref(false);
+        const greetList = computed(() => {
+            const arr = d.value && d.value.alternate_greetings;
+            return Array.isArray(arr) ? arr : [];
+        });
+        const visibleGreetList = computed(() =>
+            greetShowAll.value ? greetList.value : greetList.value.slice(0, GREET_PREVIEW_COUNT)
+        );
+        /** 字符串形式的存量数据（非标准格式）一次性迁移为数组，保证列表/编辑可用 */
+        function ensureGreetArray() {
+            const cur = d.value && d.value.alternate_greetings;
+            if (Array.isArray(cur)) return cur;
+            if (typeof cur === 'string' && cur.trim()) {
+                const list = cur.split(/### 分隔|\n/).map((s) => s.trim()).filter(Boolean);
+                d.value.alternate_greetings = list;
+                return list;
+            }
+            return null;
+        }
+        watch(() => d.value && d.value.alternate_greetings, () => { ensureGreetArray(); }, { immediate: true });
+        function addGreeting() {
+            if (!Array.isArray(d.value.alternate_greetings)) d.value.alternate_greetings = [];
+            d.value.alternate_greetings.push('');
+            greetShowAll.value = true; // 新条目在末尾，展开列表保证可见
+        }
+        /** 编辑框失焦：该条为空则移除（与旧文本模式「空行过滤」语义一致） */
+        function onGreetBlur(i) {
+            const arr = d.value.alternate_greetings;
+            if (!Array.isArray(arr) || arr[i] === undefined) return;
+            const v = String(arr[i]).trim();
+            if (!v) arr.splice(i, 1);
+            else if (arr[i] !== v) arr[i] = v;
+        }
+
+        // ---------- 开场白（首条）：折叠控制（默认收起约 6 行；点击编辑自动展开；v1.10.31） ----------
+        const FIRST_MSG_FOLD_CHARS = 160;
+        const firstMsgOpen = ref(false);
+        const firstMsgFoldable = computed(() => String((d.value && d.value.first_mes) || '').length > FIRST_MSG_FOLD_CHARS);
+
+        // ---------- 高级设定子项折叠（accordion 一刀切；默认全部收起；v1.10.31） ----------
+        const advSub = reactive({ notes: false, version: false, first: false, scenario: false, example: false, greet: false, sys: false, post: false, depth: false });
 
         // 世界书(对齐桌面:内嵌世界书存于 data.character_book,V2/V3 标准;编辑器用字典形态,保存时转回数组)
         const wbEntries = computed(() => {
@@ -3226,6 +3401,8 @@ export default {
         return {
             card, cardLoading, id, activeTab, advancedOpen, descOpen, showTokenDetail, showTokenPanel, personalityOpen, saved,
             d, tags, greetingsText, wbEntries, regexList,
+            greetList, visibleGreetList, greetShowAll, addGreeting, onGreetBlur, GREET_PREVIEW_COUNT,
+            firstMsgOpen, firstMsgFoldable, advSub,
             tokenText, tokenRows, tokenTotal, wbTokenCount,
             addWbEntry, removeWbEntry, wbExpanded, toggleWbExpand, syncWbKeys, syncWbSecKeys, WB_POSITIONS,
             // 世界书整体导入/导出/批量(v1.10.30)
@@ -3608,4 +3785,47 @@ export default {
 .plugin-desc { font-size: 11px; color: var(--van-gray-5, #969799); margin-top: 2px; }
 /* 🚀 打开水合 loading */
 .detail-loading { padding: 80px 0; text-align: center; color: var(--van-gray-5, #969799); }
+
+/* ===== 高级设定子项折叠 accordion（一刀切；默认收起；v1.10.31） ===== */
+.adv-sub { border-bottom: 1px solid var(--van-gray-2, #ebedf0); }
+.adv-sub:last-child { border-bottom: none; }
+.adv-sub-head { display: flex; align-items: center; padding: 11px 0; cursor: pointer; user-select: none; }
+.adv-sub-title { font-size: 14px; font-weight: 500; color: var(--van-text-color, #323233); }
+.adv-sub-meta { margin-left: 8px; font-size: 11px; color: var(--van-text-color-3, #969799); }
+.adv-sub-spacer { flex: 1; }
+.adv-sub-arrow { margin-left: 6px; font-size: 12px; color: var(--van-text-color-3, #969799); }
+.adv-sub-body { padding: 0 0 12px; }
+
+/* ===== 操作工具行（列表/字段上方，避免长内容下拉找按钮） ===== */
+.greet-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.greet-mini-btn {
+    display: inline-flex; align-items: center; gap: 3px;
+    border: none; background: transparent; color: var(--van-primary-color, #06b6d4);
+    font-size: 12px; font-weight: 600; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+}
+.greet-mini-btn:active { background: rgba(6,182,212,.08); }
+
+/* ===== 开场白（首条）内容折叠（默认截断约 6 行；点击编辑自动展开，v1.10.31） ===== */
+.first-fold { position: relative; border-radius: 10px; overflow: hidden; }
+.first-fold:not(.open) { max-height: 132px; }
+.first-fold:not(.open)::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 44px;
+    background: linear-gradient(transparent, var(--van-cell-background, #fff));
+    pointer-events: none;
+}
+
+/* ===== 备用开场白条目列表（默认前 5 条 / 显示全部；条目直接编辑，v1.10.31） ===== */
+.greet-list { background: var(--van-cell-background, #fff); border-radius: 10px; overflow: hidden; }
+.greet-item { padding: 10px 12px; border-bottom: 1px solid var(--van-gray-2, #ebedf0); }
+.greet-item:last-child { border-bottom: none; }
+.greet-item-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.greet-idx {
+    width: 30px; height: 20px; line-height: 20px; text-align: center;
+    font-size: 11px; font-weight: 700; color: var(--van-primary-color, #06b6d4);
+    background: rgba(6,182,212,.12); border-radius: 6px;
+}
+.greet-len { font-size: 11px; color: var(--van-text-color-3, #969799); }
+/* 条目内输入框嵌入卡片：去掉 van-field 默认内边距 */
+.greet-item :deep(.van-field) { padding: 0; }
+.greet-empty { padding: 12px 4px; font-size: 12px; color: var(--van-text-color-3, #969799); }
 </style>

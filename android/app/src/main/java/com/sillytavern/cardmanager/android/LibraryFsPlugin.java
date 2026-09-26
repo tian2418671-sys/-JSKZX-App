@@ -875,9 +875,10 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void mkdir(PluginCall call) {
         String path = call.getString("path");
+        // 🐛 修复(2026-09-25):parent.findFile/createDirectory 需 Tree 文档对象,relIndex 的 fromSingleUri 不支持 → 慢查
         DocumentFile parent = (path == null || !path.contains("/"))
                 ? rootFile()
-                : fileByRelPath(path.substring(0, path.lastIndexOf('/')));
+                : fileByRelPathSlow(path.substring(0, path.lastIndexOf('/')));
         String name = (path == null || !path.contains("/")) ? path : path.substring(path.lastIndexOf('/') + 1);
         if (parent == null || name == null || name.isEmpty() || !parent.canWrite()) {
             call.reject("创建失败:目录不可写");
@@ -894,7 +895,8 @@ public class LibraryFsPlugin extends Plugin {
     public void rename(PluginCall call) {
         String path = call.getString("path");
         String newPath = call.getString("newPath");
-        DocumentFile src = fileByRelPath(path);
+        // 🐛 修复(2026-09-25):src.getParentFile()/renameTo 对 relIndex 的 fromSingleUri 不可靠 → 慢查
+        DocumentFile src = fileByRelPathSlow(path);
         if (src == null) {
             call.reject("源文件不存在");
             return;
@@ -930,7 +932,10 @@ public class LibraryFsPlugin extends Plugin {
     public void move(PluginCall call) {
         String path = call.getString("path");
         String newPath = call.getString("newPath");
-        DocumentFile src = fileByRelPath(path);
+        // 🐛 修复(2026-09-25):写操作走「慢查」拿 DocumentFile——relIndex 中对象由 fromSingleUri 构建,
+        //   其 getParentFile() 为 null,doMove 内 src.getParentFile().getUri() 恒 NPE → 「索引已建后」
+        //   所有跨目录移动假失败(实测案:世界书查重清理副本报「移动失败」)。
+        DocumentFile src = fileByRelPathSlow(path);
         if (src == null) {
             call.reject("源文件不存在");
             return;
@@ -943,7 +948,8 @@ public class LibraryFsPlugin extends Plugin {
         }
         String targetDirRel = newRel.contains("/") ? newRel.substring(0, newRel.lastIndexOf('/')) : "";
         String wantName = newRel.contains("/") ? newRel.substring(newRel.lastIndexOf('/') + 1) : newRel;
-        DocumentFile targetDir = targetDirRel.isEmpty() ? rootFile() : fileByRelPath(targetDirRel);
+        // 目标目录同样慢查:move 需 targetDir.findFile(同名冲突检测),single 对象不支持
+        DocumentFile targetDir = targetDirRel.isEmpty() ? rootFile() : fileByRelPathSlow(targetDirRel);
         if (targetDir == null) {
             call.reject("目标目录不可写");
             return;
@@ -962,6 +968,7 @@ public class LibraryFsPlugin extends Plugin {
                     : destName;
             String dedup = base + "_移动_" + System.currentTimeMillis() + (ext.isEmpty() ? "" : "." + ext);
             boolean ok = doMove(src, targetDir, dedup);
+            if (ok) invalidateRelIndex(path);
             JSObject ret = new JSObject();
             ret.put("success", ok);
             ret.put("error", ok ? JSObject.NULL : "移动失败");
@@ -970,11 +977,19 @@ public class LibraryFsPlugin extends Plugin {
             return;
         }
         boolean mv = doMove(src, targetDir, destName);
+        if (mv) invalidateRelIndex(path);
         JSObject ret = new JSObject();
         ret.put("success", mv);
         ret.put("error", mv ? JSObject.NULL : "移动失败");
         ret.put("newPath", targetDirRel.isEmpty() ? destName : targetDirRel + "/" + destName);
         call.resolve(ret);
+    }
+
+    /** 移动/改名成功后失效旧 relIndex 条目(新路径后续走慢查重建,避免命中已被 moveDocument 失效的旧对象) */
+    private void invalidateRelIndex(String relPath) {
+        if (relPath == null) return;
+        String r = relPath.replace('\\', '/').replaceAll("^/+", "");
+        if (!r.isEmpty()) relIndex.remove(r);
     }
 
     /**
@@ -1944,7 +1959,8 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void openFileInFolder(PluginCall call) {
         String rel = call.getString("path");
-        DocumentFile f = fileByRelPath(rel);
+        // 慢查:需 getParentFile() 定位父目录(relIndex 的 fromSingleUri 对象 getParentFile 为 null)
+        DocumentFile f = fileByRelPathSlow(rel);
         if (f == null || !f.exists()) {
             call.reject("文件不存在");
             return;

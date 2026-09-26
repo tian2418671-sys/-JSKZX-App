@@ -24,6 +24,7 @@
                     <van-button size="small" icon="replay" plain @click="scan">重新扫描</van-button>
                     <van-button size="small" icon="plus" type="primary" plain @click="createPreset">新建预设</van-button>
                     <van-button size="small" plain @click="openStitch">🧵 缝合</van-button>
+                    <van-button size="small" plain icon="cluster-o" @click="openPresetDedupe">查重</van-button>
                     <van-button size="small" icon="folder-o" plain @click="pickDir">更换目录</van-button>
                     <span class="pv-count">{{ filtered.length }} 个</span>
                 </div>
@@ -93,6 +94,15 @@
                           :active-preset="null"
                           @close="showStitch = false" 
                           @save="onStitchSave" />
+
+        <!-- ⚙️ 预设智能查重弹窗（同名家族 + 结构指纹聚类，2026-09-25 迁移） -->
+        <PresetDedupeModal
+            :show="showPresetDedupe"
+            :groups="presetDedupeGroups"
+            :skipped="presetDedupeSkipped"
+            @close="showPresetDedupe = false"
+            @resolve-group="resolvePresetGroup"
+        />
     </div>
 </template>
 
@@ -102,13 +112,15 @@ import { useRouter } from 'vue-router';
 import { showToast, showSuccessToast, showConfirmDialog } from 'vant';
 import { api } from '../../bridge/api';
 import PresetStitchView from './PresetStitchView.vue';
+import PresetDedupeModal from '../components/PresetDedupeModal.vue';
+import { scanPresetDuplicates } from '../../utils/presetDedupe.js';
 
 const LS_EXT_PRESET_DIR = 'jsmobile-ext-preset-dir';
 const SS_PRESET_DATA = 'jsmobile-preset-detail-data'; // { uri, title }
 
 export default {
     name: 'PresetsView',
-    components: { PresetStitchView },
+    components: { PresetStitchView, PresetDedupeModal },
     setup() {
         const router = useRouter();
         const title = ref('⚙️ 预设管理');
@@ -336,6 +348,59 @@ export default {
             showStitch.value = true;
         }
 
+        // ---------- ⚙️ 预设智能查重（2026-09-25 迁移；扫描/清理纯 UI 编排） ----------
+        const showPresetDedupe = ref(false);
+        const presetDedupeGroups = ref([]);
+        const presetDedupeSkipped = ref([]);
+        function runPresetDedupeScan() {
+            const res = scanPresetDuplicates(presets.value.map((p) => ({ path: p.path, name: pName(p), data: p.data })));
+            presetDedupeGroups.value = res.groups;
+            presetDedupeSkipped.value = res.skipped;
+            return res;
+        }
+        function openPresetDedupe() {
+            if (!presets.value.length) {
+                showToast('请先扫描预设');
+                return;
+            }
+            const res = runPresetDedupeScan();
+            showPresetDedupe.value = true;
+            showToast(res.groups.length
+                ? `✅ 发现 ${res.groups.length} 组疑似重复（候选 ${res.pairCount} 对）`
+                : '✅ 未发现重复预设');
+        }
+        /** 保留指定版 → 清理组内其余（回收站安全网沿用删除接口） */
+        async function resolvePresetGroup(payload) {
+            const gi = payload && payload.groupIndex;
+            const keepPath = payload && payload.keepPath;
+            const group = presetDedupeGroups.value[gi];
+            if (!group) return;
+            const keep = group.list.find((x) => x.path === keepPath);
+            const trash = group.list.filter((x) => x.path !== keepPath);
+            if (!trash.length) return;
+            const ok = await showConfirmDialog({
+                title: '清理重复预设',
+                message: `保留「${keep ? keep.name : keepPath}」，将其余 ${trash.length} 本移入回收站/删除？此操作不可撤销。`,
+                confirmButtonText: '清理'
+            }).catch(() => false);
+            if (!ok) return;
+            let okN = 0;
+            let failN = 0;
+            for (const t of trash) {
+                const p = presets.value.find((x) => x.path === t.path);
+                if (!p) { failN++; continue; }
+                try {
+                    const res = await api.deleteExternalPreset({ treeUri: p.treeUri, rel: p.rel });
+                    if (res && res.success) okN++; else failN++;
+                } catch (e) { failN++; }
+            }
+            showToast(`已清理 ${okN} 本${failN ? `，失败 ${failN} 本` : ''}`);
+            await scan();
+            // 重扫后刷新查重结果（无重复则关闭弹窗）
+            const again = runPresetDedupeScan();
+            if (!again.groups.length) showPresetDedupe.value = false;
+        }
+
         async function onStitchSave(preset) {
             try {
                 if (preset && preset.treeUri && preset.rel) {
@@ -371,6 +436,7 @@ export default {
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             showStitch, openStitch, onStitchSave,
+            showPresetDedupe, presetDedupeGroups, presetDedupeSkipped, openPresetDedupe, resolvePresetGroup,
             title, treeUri, q, loading, filtered, presets, showEditor, edName, edJson, saving, edError,
             pageSize, pageSizeOptions, currentPage, totalPages, paginatedList, nextPage, prevPage,
             pickDir, scan, openEditor, saveEditor, duplicate, createPreset, remove, pName, pMeta, openDetail

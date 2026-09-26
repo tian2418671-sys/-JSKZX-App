@@ -219,8 +219,8 @@ export const ErrorCode = {
  * @method getFileStats(paths:string[]) → {success:boolean, data:Object<string,{mtimeMs:number, size:number}>, error?:string}
  *   批量获取文件修改时间与大小
  *
- * @method trashFiles(filePaths:string[]) → {success:boolean, count:number, failed:Array<{path:string, error:string}>, error?:string}
- *   移入回收站 (.trash 目录)
+ * @method trashFiles(filePaths:string[]) → {success:boolean, count:number, okPaths:string[], failed:Array<{path:string, error:string}>, error?:string}
+ *   移入回收站 (.trash 目录)。success=至少一个成功; okPaths/failed[].path 均为 /library/ 完整路径(与入参同形)
  *
  * @method openGlobalTrash() → {success:boolean, error?:string}
  *   打开全局回收站

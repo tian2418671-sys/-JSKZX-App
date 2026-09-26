@@ -138,19 +138,42 @@
 
                 <!-- 🚀 v1.10.4 设计修正:世界书就是世界书,不再分「独立文件」与「外部目录」两个列表。
                      库内与外部目录统一为一个世界书列表;外部目录选择入口移入工具组。 -->
+                <!-- 🏷️ 标签筛选行（S1 迁移；有标签时显示，点击筛选、再点取消） -->
+                <div v-if="wbAllTags.length" class="wb-tag-filterbar">
+                    <span class="wbtf-icon">🏷️</span>
+                    <span
+                        v-for="t in wbAllTags.slice(0, 12)"
+                        :key="t.tag"
+                        class="wbtf-chip"
+                        :class="{ active: wbTagFilter.includes(t.tag) }"
+                        @click="toggleWbTagFilter(t.tag)"
+                    >{{ t.tag }}<em>{{ t.count }}</em></span>
+                    <span v-if="wbTagFilter.length" class="wbtf-clear" @click="wbTagFilter = []">✕ 清除</span>
+                </div>
+
                 <van-cell-group inset title="世界书">
                     <van-cell
-                        v-for="wb in allWorldbooks"
+                        v-for="wb in filteredWorldbooks"
                         :key="wb._key"
                         :title="wb.name"
-                        :label="`${Object.keys(wb.wb.entries || {}).length} 条条目 · ${wbCategoryOf(wb)}`"
                         @click="openAnyWb(wb)"
                     >
+                        <template #label>
+                            <div>{{ Object.keys(wb.wb.entries || {}).length }} 条条目 · {{ wbCategoryOf(wb) }}</div>
+                            <div v-if="wbTagsOf(wb).length" class="wb-cell-tags">
+                                <span
+                                    v-for="t in wbTagsOf(wb)"
+                                    :key="t"
+                                    class="wb-cell-tag"
+                                    @click.stop="toggleWbTagFilter(t)"
+                                >#{{ t }}</span>
+                            </div>
+                        </template>
                         <template #right-icon>
                             <van-icon name="ellipsis" size="20" @click.stop="openWbOps(wb)" />
                         </template>
                     </van-cell>
-                    <van-empty v-if="!allWorldbooks.length" description="暂无世界书" image-size="60" />
+                    <van-empty v-if="!filteredWorldbooks.length" :description="allWorldbooks.length ? '没有匹配筛选的世界书' : '暂无世界书'" image-size="60" />
                 </van-cell-group>
             </template>
         </div>
@@ -237,6 +260,18 @@
             @import="doWbImport"
         />
 
+        <!-- 🏷️ 世界书标签编辑弹窗（S1 迁移） -->
+        <WbTagEditModal
+            :show="showWbTagEdit"
+            :wb-name="wbTagEditTarget ? wbTagEditTarget.name : ''"
+            :wb-path="wbTagEditTarget ? (wbTagEditTarget.path || '') : ''"
+            :tags="wbTagEditTags"
+            :suggestions="wbAllTags"
+            @add="onWbTagEditAdd"
+            @remove="onWbTagEditRemove"
+            @close="showWbTagEdit = false"
+        />
+
         <!-- 多书智能合并弹窗 -->
         <van-popup v-model:show="showWbMerge" position="bottom" round style="max-height: 70%">
             <van-nav-bar title="多本世界书智能合并">
@@ -280,12 +315,14 @@ import SnapshotModal from '../components/SnapshotModal.vue';
 import GlobalEntrySearchModal from '../components/GlobalEntrySearchModal.vue';
 import GlobalAssetModal from '../components/GlobalAssetModal.vue';
 import WbImportModal from '../components/WbImportModal.vue';
+import WbTagEditModal from '../components/WbTagEditModal.vue';
 import { extractBookEntries } from '../../utils/cardLoader.js';
+import { normalizeWbTag, normalizeWbTags, countWbTags, matchWbFilter } from '../../utils/wbTags.js';
 import { api } from '../../bridge/api';
 
 export default {
     name: 'WorldbookView',
-    components: { DedupeModal, SnapshotModal, GlobalEntrySearchModal, GlobalAssetModal, WbImportModal },
+    components: { DedupeModal, SnapshotModal, GlobalEntrySearchModal, GlobalAssetModal, WbImportModal, WbTagEditModal },
     setup() {
         const router = useRouter();
         const editing = ref(null); // { path, name, entries, payload, wrapped, external?, treeUri?, rel? }
@@ -396,6 +433,72 @@ export default {
             return '默认';
         }
 
+        // ---------- 世界书标签（S1 迁移 · 2026-09-25；localStorage 持久化，对齐桌面 wbTagMap） ----------
+        // 📌 决策沿用桌面：标签只留配置层（不写入世界书文件）；筛选语义 = 多标签 AND（与分组是复合条件）。
+        // 📌 桌面版有「shallowRef + 手动 triggerRef」响应式缺口（删空后再添加界面不刷新）；
+        //    移动版映射用 reactive 对象，新增/删除键自动追踪，无需该处理。
+        const LS_WB_TAGS = 'jsmobile-wb-tags';
+        const wbTagMap = reactive(loadWbTagMap());
+        function loadWbTagMap() {
+            try { return JSON.parse(localStorage.getItem(LS_WB_TAGS) || '{}'); } catch (e) { return {}; }
+        }
+        function saveWbTagMap() {
+            try { localStorage.setItem(LS_WB_TAGS, JSON.stringify(wbTagMap)); } catch (e) { /* 忽略 */ }
+        }
+        function wbTagsOf(wb) {
+            if (!wb) return [];
+            const key = wb.path || wb.name || '';
+            return key ? normalizeWbTags(wbTagMap[key]) : [];
+        }
+        function setWbTagsOf(wb, tags) {
+            const key = wb && (wb.path || wb.name || '');
+            if (!key) return [];
+            const next = normalizeWbTags(tags);
+            if (next.length) wbTagMap[key] = next; else delete wbTagMap[key]; // 空数组不留残键（防配置膨胀）
+            saveWbTagMap();
+            return next;
+        }
+        function addWbTagOn(wb, tag) {
+            const n = normalizeWbTag(tag);
+            if (!wb || !n) return;
+            setWbTagsOf(wb, [...wbTagsOf(wb), n]);
+        }
+        function removeWbTagOn(wb, tag) {
+            const n = normalizeWbTag(tag);
+            if (!wb || !n) return;
+            setWbTagsOf(wb, wbTagsOf(wb).filter((t) => t !== n));
+        }
+        /** 全库标签清单（含使用频次，按热度降序）——供筛选行与编辑弹窗建议 */
+        const wbAllTags = computed(() => countWbTags(allWorldbooks.value.map((wb) => wbTagsOf(wb))));
+
+        // 标签筛选（多选 AND）
+        const wbTagFilter = ref([]);
+        function toggleWbTagFilter(tag) {
+            const n = normalizeWbTag(tag);
+            if (!n) return;
+            wbTagFilter.value = wbTagFilter.value.includes(n)
+                ? wbTagFilter.value.filter((t) => t !== n)
+                : [...wbTagFilter.value, n];
+        }
+        const filteredWorldbooks = computed(() =>
+            allWorldbooks.value.filter((wb) => matchWbFilter({
+                bookCategory: wbCategoryOf(wb),
+                bookTags: wbTagsOf(wb),
+                filterTags: wbTagFilter.value
+            }))
+        );
+
+        // 标签编辑弹窗（纯 UI 子组件，增删回传本处落盘）
+        const showWbTagEdit = ref(false);
+        const wbTagEditTarget = ref(null);
+        const wbTagEditTags = computed(() => (wbTagEditTarget.value ? wbTagsOf(wbTagEditTarget.value) : []));
+        function openWbTagEditor(wb) {
+            wbTagEditTarget.value = wb;
+            showWbTagEdit.value = true;
+        }
+        function onWbTagEditAdd(tag) { if (wbTagEditTarget.value) addWbTagOn(wbTagEditTarget.value, tag); }
+        function onWbTagEditRemove(tag) { if (wbTagEditTarget.value) removeWbTagOn(wbTagEditTarget.value, tag); }
+
         // ---------- 顶部「更多」菜单 ----------
         const showMore = ref(false);
         const moreActions = [
@@ -418,6 +521,7 @@ export default {
             { name: '重命名', value: 'rename' },
             { name: '复制为副本', value: 'duplicate' },
             { name: '移动到分组', value: 'group' },
+            { name: '🏷️ 编辑标签', value: 'tags' },
             { name: '删除', value: 'delete', color: '#ee0a24' }
         ]);
 
@@ -444,6 +548,8 @@ export default {
                 const key = wb.path || wb.name || '';
                 if (key) { wbCategoryMap[key] = cat; saveWbCatMap(); }
                 showSuccessToast(`已移动到「${cat}」`);
+            } else if (v === 'tags') {
+                openWbTagEditor(wb);
             } else if (v === 'delete') {
                 try {
                     await showConfirmDialog({ title: '删除世界书', message: `确定删除「${wb.name}」吗？\n库内世界书将移入回收站，外部世界书将物理删除。`, confirmButtonText: '删除', confirmButtonColor: '#ee0a24' });
@@ -1411,6 +1517,8 @@ export default {
             showGlobalAsset, globalAllWorldbooks, globalAllRegexScripts,
             extWbDirTitle, extWorldbooks, extWbLoading, pickExternalWbDir, openExternalWb,
             wbCategoryOf, showWbOps, wbOpsTarget, wbOpsDesc, wbOpsActions, openWbOps, onWbOpsSelect,
+            wbTagsOf, wbAllTags, wbTagFilter, toggleWbTagFilter, filteredWorldbooks,
+            showWbTagEdit, wbTagEditTarget, wbTagEditTags, openWbTagEditor, onWbTagEditAdd, onWbTagEditRemove,
             showWbInput, wbInputTitle, wbInputPlaceholder, wbInputValue, onWbInputConfirm, onWbInputCancel,
             onNewWorldbook,
             openWbUrlImport, importWbFiles, batchExportWb,
@@ -1425,6 +1533,25 @@ export default {
 
 <style scoped>
 .view-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* 🏷️ 世界书标签（S1 迁移 · 2026-09-25） */
+.wb-tag-filterbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px 2px; overflow-x: auto; }
+.wbtf-icon { flex-shrink: 0; font-size: 12px; }
+.wbtf-chip {
+    flex-shrink: 0; padding: 3px 9px; border-radius: 999px; font-size: 11px;
+    color: var(--van-text-color-2, #646566); background: #f2f3f5; cursor: pointer;
+}
+.wbtf-chip.active { color: #fff; background: var(--van-primary-color, #06b6d4); }
+.wbtf-chip em { font-style: normal; opacity: .65; margin-left: 3px; font-size: 10px; }
+.wbtf-clear {
+    flex-shrink: 0; padding: 3px 9px; border-radius: 999px; font-size: 11px;
+    color: var(--van-text-color-3, #969799); border: 1px dashed var(--van-gray-4, #dcdee0); cursor: pointer;
+}
+.wb-cell-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.wb-cell-tag {
+    padding: 1px 7px; border-radius: 6px; font-size: 10px; line-height: 16px;
+    color: var(--van-primary-color, #06b6d4); background: rgba(6,182,212,.08);
+    border: 1px solid rgba(6,182,212,.18); cursor: pointer;
+}
 .view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 calc(50px + env(safe-area-inset-bottom, 0px) + 30px); }
 .sub-nav { box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 4px; }
 .status-wrap { padding: 40px 0; text-align: center; }

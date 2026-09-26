@@ -54,7 +54,11 @@ const FEATURE_MARKERS = [
     { key: '世界书卡内导入导出', marker: '跳过重复' },
     { key: '世界书批量管理', marker: '导出所选' },
     { key: '自定义背景', marker: '自定义背景' },
-    { key: 'OTA更新说明渲染', marker: '更新说明渲染失败' }
+    { key: 'OTA更新说明渲染', marker: '更新说明渲染失败' },
+    { key: '高级设定折叠', marker: '收起列表' },
+    { key: '世界书标签', marker: '全库已有标签' },
+    { key: '预设查重', marker: '改名同源' },
+    { key: '世界书查重增强', marker: '名称归一' }
 ];
 
 /** 体积上限(MB):超过视为异常(通常是陈旧产物混入) */

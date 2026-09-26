@@ -4,7 +4,6 @@
         position="center"
         round
         close-on-click-overlay
-        closeable
         class="ddm-popup"
         @update:show="(v) => $emit('update:modelValue', v)"
     >
@@ -24,8 +23,8 @@
             <!-- 扫描中 -->
             <div v-if="scanning || pending" class="ddm-status">
                 <van-loading size="24">{{ pending || '正在分析同名卡片…' }}</van-loading>
-                <!-- 🚀 大库内容指纹扫描可取消:中止水合,已算签名保留(下次续扫) -->
-                <div v-if="scanning && mode === 'content'" class="ddm-cancel-row">
+                <!-- 🚀 大库内容指纹/世界书扫描可取消:中止水合,已算签名保留(下次续扫) -->
+                <div v-if="scanning && (mode === 'content' || mode === 'worldbook')" class="ddm-cancel-row">
                     <van-button size="small" plain type="primary" @click="cancelScan()">取消扫描</van-button>
                 </div>
             </div>
@@ -88,6 +87,7 @@ import { ref, watch } from 'vue';
 import { showToast } from 'vant';
 import { mobileLibrary, loadCardFullData, loadContentTextsStream, loadContentSigs, getContentSig, setContentSig } from '../useMobileLibrary';
 import { estimateTokens } from '../../utils/tokenEstimate';
+import { wbDedupeStem, stripCnReplicaTails, computeMinHash96, estimateMinHashSimilarity } from '../../utils/presetDedupe.js';
 import DiffModal from './DiffModal.vue';
 
 export default {
@@ -316,28 +316,31 @@ export default {
         async function runScan() {
             scanning.value = true;
             groups.value = [];
+            scanCancelFlag.value = false;
+            scanCancelled.value = false;
+            // 🚀 先显示扫描反馈（消除「点了没反应」观感）；worldbook 走独立管线（名称归一 + 内容指纹）
+            pending.value = props.mode === 'worldbook'
+                ? '正在比对世界书（名称归一 + 内容指纹）…'
+                : props.mode === 'content' ? '正在分析内容指纹…' : '正在分析同名卡片…';
+            await new Promise((r) => setTimeout(r, 50));
             try {
                 if (props.mode === 'content') { await runContentScan(); return; }
-                const list = props.mode === 'card'
-                    ? [...mobileLibrary.library]
-                    : mobileLibrary.worldbooks.map((w) => ({ ...w }));
+                if (props.mode === 'worldbook') { await runWorldbookScan(); return; }
+                const list = [...mobileLibrary.library];
                 if (list.length === 0) {
-                    emptyText.value = props.mode === 'card' ? '卡片库为空，无法查重' : '世界书库为空，无法查重';
+                    emptyText.value = '卡片库为空，无法查重';
                     return;
                 }
                 // 1. 按名称聚类
                 const grouped = {};
                 list.forEach((item) => {
-                    let nm;
-                    if (props.mode === 'card') nm = (item.name || '未命名').trim();
-                    else nm = (item.wb && item.wb.name) || (item.name || '').replace(/\.json$/i, '') || '未命名世界书';
-                    nm = String(nm).trim() || '未命名';
+                    const nm = String(item.name || '未命名').trim() || '未命名';
                     if (!grouped[nm]) grouped[nm] = [];
                     grouped[nm].push(item);
                 });
                 const potentials = Object.entries(grouped).filter(([, arr]) => arr.length > 1);
                 if (potentials.length === 0) {
-                    emptyText.value = props.mode === 'card' ? '未发现同名重复的角色卡' : '未发现同名的重复世界书';
+                    emptyText.value = '未发现同名重复的角色卡';
                     return;
                 }
 
@@ -353,15 +356,9 @@ export default {
                 groups.value = potentials.map(([name, arr]) => {
                     arr.forEach((it) => {
                         const stat = stats[it.path] || {};
-                        if (props.mode === 'card') {
-                            // 🚀 轻量化:Token/描述片段已在加载时预提取(_tokens/_desc),不再触碰全量 data
-                            it._tokens = it._tokens || 0;
-                            it._desc = it._desc || '';
-                        } else {
-                            const es = entriesArray(it.wb || {});
-                            it._entryCount = es.length;
-                            it._keys = new Set(es.flatMap(keysOf));
-                        }
+                        // 🚀 轻量化:Token/描述片段已在加载时预提取(_tokens/_desc),不再触碰全量 data
+                        it._tokens = it._tokens || 0;
+                        it._desc = it._desc || '';
                         // SAF 无 birthtime,_ctime 已回退 mtime(ms)
                         const fallback = Number(it._ctime) || 0;
                         it._mtime = stat.mtimeMs || fallback || Date.now();
@@ -372,30 +369,15 @@ export default {
                     });
 
                     arr.sort((a, b) => {
-                        if (props.mode === 'card') {
-                            const td = b._tokens - a._tokens;
-                            if (Math.abs(td) / Math.max(a._tokens, b._tokens, 1) > 0.05) return td;
-                        } else if (a._entryCount !== b._entryCount) {
-                            return b._entryCount - a._entryCount;
-                        }
+                        const td = b._tokens - a._tokens;
+                        if (Math.abs(td) / Math.max(a._tokens, b._tokens, 1) > 0.05) return td;
                         return b._mtime - a._mtime;
                     });
 
                     arr.forEach((it, idx) => {
                         if (idx === 0) return;
-                        if (props.mode === 'card') {
-                            const dl = (it._desc || '').length - (arr[0]._desc || '').length;
-                            it._diffInfo = dl > 100 ? '设定更全' : (dl < -100 ? '设定有缺' : (it._desc !== arr[0]._desc ? '细节不同' : '完全一致'));
-                        } else {
-                            const master = arr[0]._keys || new Set();
-                            const mine = it._keys || new Set();
-                            let overlap = 0;
-                            mine.forEach((k) => { if (master.has(k)) overlap++; });
-                            const ratio = mine.size ? Math.round((overlap / mine.size) * 100) : 0;
-                            it._diffInfo = (it._entryCount === arr[0]._entryCount && ratio === 100)
-                                ? '内容重合' : `重合 ${ratio}%`;
-                        }
-                        it._diffInfo = it._diffInfo || '不同版本';
+                        const dl = (it._desc || '').length - (arr[0]._desc || '').length;
+                        it._diffInfo = dl > 100 ? '设定更全' : (dl < -100 ? '设定有缺' : (it._desc !== arr[0]._desc ? '细节不同' : '完全一致'));
                     });
                     return { name, cards: arr };
                 });
@@ -406,6 +388,131 @@ export default {
             } finally {
                 scanning.value = false;
             }
+        }
+
+        // ================= 世界书查重（名称归一[含副本/版本剥离] + 内容指纹跨名比对） =================
+        // 📌 2026-09-25 修复三问：①只查严格同名漏掉「_副本」→ 名称归一（wbDedupeStem）；
+        //    ②改名同源抓不到 → 内容签名（entries 触发词+正文 MinHash ≥85%）；③无反馈/卡顿 → 先渲染 loading + 分批让出主线程 + 可取消。
+        async function runWorldbookScan() {
+            const list = mobileLibrary.worldbooks.map((w) => ({ ...w }));
+            if (list.length === 0) { emptyText.value = '世界书库为空，无法查重'; return; }
+
+            // 1) 名称归一 + 内容签名（分批让出主线程；可取消）
+            const items = [];
+            for (let i = 0; i < list.length; i++) {
+                const it = list[i];
+                if (scanCancelFlag.value) { scanCancelled.value = true; return; }
+                const wbData = it.wb || {};
+                const name = String(wbData.name || it.name || '').replace(/\.json$/i, '') || '未命名世界书';
+                it._wbName = name;
+                it._wbStem = wbDedupeStem(it.name || name);
+                const es = entriesArray(wbData);
+                it._entryCount = es.length;
+                let text = '';
+                try {
+                    text = es.map((e) => {
+                        const k = Array.isArray(e && e.key) ? e.key.join(' ') : (e && e.key ? String(e.key) : '');
+                        const c = (e && typeof e.content === 'string') ? e.content : '';
+                        return (k + '\n' + c).trim();
+                    }).filter(Boolean).join('\n');
+                } catch (e) { /* 单本异常不中断整批 */ }
+                it._sig = text.length >= 20 ? computeMinHash96(text) : null;
+                items.push(it);
+                if (i % 15 === 14) {
+                    pending.value = `读取世界书 ${i + 1}/${list.length}…`;
+                    await new Promise((r) => setTimeout(r, 0));
+                }
+            }
+            pending.value = '正在聚类比对…';
+            await new Promise((r) => setTimeout(r, 0));
+
+            // 2) 聚类：名称归一相同 ∪ 内容相似（≥ 85%，保守阈值）
+            const parent = Array.from({ length: items.length }, (_, i) => i);
+            const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+            const union = (a, b) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent[rb] = ra; };
+            const CONTENT_THRESHOLD = 0.85;
+            const byStem = new Map();
+            items.forEach((it, i) => {
+                if (!it._wbStem) return;
+                if (!byStem.has(it._wbStem)) byStem.set(it._wbStem, []);
+                byStem.get(it._wbStem).push(i);
+            });
+            for (const [, arr] of byStem) for (let k = 1; k < arr.length; k++) union(arr[0], arr[k]);
+            for (let i = 0; i < items.length; i++) {
+                if (scanCancelFlag.value) { scanCancelled.value = true; return; }
+                for (let j = i + 1; j < items.length; j++) {
+                    if (items[i]._wbStem && items[i]._wbStem === items[j]._wbStem) continue; // 已同组
+                    if (!items[i]._sig || !items[j]._sig) continue;
+                    const sim = estimateMinHashSimilarity(items[i]._sig, items[j]._sig);
+                    if (sim !== null && sim >= CONTENT_THRESHOLD) union(i, j);
+                }
+                if (i % 30 === 29) await new Promise((r) => setTimeout(r, 0));
+            }
+
+            // 3) 组装分组
+            const clusters = new Map();
+            items.forEach((_, i) => {
+                const root = find(i);
+                if (!clusters.has(root)) clusters.set(root, []);
+                clusters.get(root).push(i);
+            });
+            const rawGroups = [];
+            clusters.forEach((members) => { if (members.length >= 2) rawGroups.push(members.map((i) => items[i])); });
+            if (!rawGroups.length) {
+                emptyText.value = '未发现重复世界书（已比对：名称归一 + 内容指纹 🎉）';
+                return;
+            }
+            const paths = rawGroups.flat().map((it) => it.path);
+            let stats = {};
+            try {
+                const sr = await window.electronAPI.getFileStats(paths);
+                if (sr && sr.success) stats = sr.data || {};
+            } catch (e) { /* 降级无物理状态 */ }
+
+            groups.value = rawGroups.map((arr) => {
+                arr.forEach((it) => {
+                    const es = entriesArray(it.wb || {});
+                    it._keys = new Set(es.flatMap(keysOf));
+                    const stat = stats[it.path] || {};
+                    const fallback = Number(it._ctime) || 0;
+                    it._mtime = stat.mtimeMs || fallback || Date.now();
+                    it._dateStr = new Date(it._mtime).toLocaleString('zh-CN', {
+                        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                    });
+                    it._size = stat.size || ((it.wb && it.wb.size) || 0);
+                });
+
+                // 主版本选择(稳定)：本体(文件名无副本/备份尾缀)优先 → 词条多优先 → 修改时间新优先。
+                // 🐛 修复:此前仅按词条数+mtime 排序,「完全一致」的副本若 mtime 更新会被选为主版本,组名跟着变成「_副本」
+                const baseRank = (it) => {
+                    const fn = String(it.fileName || it.name || '').replace(/\.json$/i, '');
+                    return (fn && stripCnReplicaTails(fn) === fn) ? 0 : 1;
+                };
+                arr.sort((a, b) => {
+                    const ra = baseRank(a);
+                    const rb = baseRank(b);
+                    if (ra !== rb) return ra - rb;
+                    if (a._entryCount !== b._entryCount) return b._entryCount - a._entryCount;
+                    return b._mtime - a._mtime;
+                });
+
+                arr.forEach((it, idx) => {
+                    if (idx === 0) return;
+                    const master = arr[0];
+                    const sameStem = !!(master._wbStem && master._wbStem === it._wbStem);
+                    const sim = (master._sig && it._sig) ? estimateMinHashSimilarity(master._sig, it._sig) : null;
+                    const masterKeys = master._keys || new Set();
+                    let overlap = 0;
+                    (it._keys || new Set()).forEach((k) => { if (masterKeys.has(k)) overlap++; });
+                    const ratio = it._keys && it._keys.size ? Math.round((overlap / it._keys.size) * 100) : 0;
+                    it._simPct = sim === null ? null : Math.round(sim * 100);
+                    if (sameStem && it._entryCount === master._entryCount && ratio === 100) it._diffInfo = '完全一致';
+                    else if (sameStem) it._diffInfo = `同源版本 · 重合 ${ratio}%`;
+                    else it._diffInfo = `内容相似 ${it._simPct}%`;
+                });
+                return { name: arr[0]._wbName, cards: arr };
+            });
+            pending.value = '';
         }
 
         function metaText(item) {
@@ -522,48 +629,76 @@ export default {
             showDiff.value = true;
         }
 
-        async function doTrash(paths, keepCount) {
-            const res = await window.electronAPI.trashFiles(paths);
-            if (!res || !res.success) {
-                showToast((res && res.error) || '清理失败');
-                return false;
+        /**
+         * 移入回收站(通用)。返回成功清理的路径数组；全部失败返回 null。
+         * 🐛 修复:此前部分/全部失败也返回 ok → 组被误移除但文件还在(假成功)。
+         */
+        async function doTrash(paths) {
+            let res;
+            try {
+                res = await window.electronAPI.trashFiles(paths);
+            } catch (e) {
+                res = { success: false, failed: [], error: (e && e.message) || '清理失败' };
             }
-            const failedSet = new Set((res.failed || []).map((f) => f.path));
-            const okPaths = paths.filter((p) => !failedSet.has(p));
+            const failedArr = (res && res.failed) || [];
+            const failedSet = new Set(failedArr.map((f) => f.path));
+            // 优先用桥返回的 okPaths(完整路径,已与入参对齐);兜底按 failed 补集计算
+            const okPaths = (res && Array.isArray(res.okPaths) && res.okPaths.length)
+                ? res.okPaths.filter((p) => paths.includes(p))
+                : paths.filter((p) => !failedSet.has(p));
+            if (okPaths.length === 0) {
+                const reason = (res && res.error) || (failedArr[0] && failedArr[0].error) || '未知错误';
+                showToast(`清理失败：${reason}`);
+                return null;
+            }
             if (props.mode === 'card') {
                 mobileLibrary.library = mobileLibrary.library.filter((c) => !okPaths.includes(c.path));
             } else {
                 mobileLibrary.worldbooks = mobileLibrary.worldbooks.filter((w) => !okPaths.includes(w.path));
             }
-            const msg = `已清理 ${res.count} 个版本` + (failedSet.size ? `；${failedSet.size} 个失败` : '');
+            const msg = `已清理 ${okPaths.length} 个版本` + (failedSet.size ? `；${failedSet.size} 个失败` : '');
             showToast(msg);
-            emit('cleaned', { count: res.count, failed: failedSet.size });
-            return true;
+            emit('cleaned', { count: okPaths.length, failed: failedSet.size });
+            return okPaths;
         }
 
         /** 清理单个冗余版本 */
         async function trashOne(gi, ii) {
             const group = groups.value[gi];
             if (!group || busyKey.value) return;
-            busyKey.value = group.cards[ii].path;
-            const ok = await doTrash([group.cards[ii].path], 1);
-            if (ok) {
-                group.cards.splice(ii, 1);
-                if (group.cards.length < 2) groups.value.splice(gi, 1);
+            const target = group.cards[ii];
+            if (!target) return;
+            busyKey.value = target.path;
+            try {
+                const okPaths = await doTrash([target.path]);
+                if (okPaths && okPaths.length) {
+                    const idx = group.cards.findIndex((c) => c.path === target.path);
+                    if (idx >= 0) group.cards.splice(idx, 1);
+                    if (group.cards.length < 2) groups.value.splice(gi, 1);
+                }
+            } finally {
+                busyKey.value = '';
             }
-            busyKey.value = '';
         }
 
-        /** 一键清理:保留推荐版,其余全部移入回收站 */
+        /** 一键清理:保留推荐版,其余全部移入回收站(成功哪些移除哪些,失败保留) */
         async function trashRest(gi) {
             const group = groups.value[gi];
             if (!group || busyKey.value) return;
             if (group.cards.length < 2) return;
             const paths = group.cards.slice(1).map((c) => c.path);
             busyKey.value = group.name;
-            const ok = await doTrash(paths, group.cards.length - 1);
-            if (ok) groups.value.splice(gi, 1);
-            busyKey.value = '';
+            try {
+                const okPaths = await doTrash(paths);
+                if (okPaths && okPaths.length) {
+                    const okSet = new Set(okPaths);
+                    const remaining = group.cards.filter((c) => !okSet.has(c.path));
+                    group.cards.splice(0, group.cards.length, ...remaining);
+                    if (group.cards.length < 2) groups.value.splice(gi, 1);
+                }
+            } finally {
+                busyKey.value = '';
+            }
         }
 
         watch(() => props.modelValue, (v) => { if (v) runScan(); });
