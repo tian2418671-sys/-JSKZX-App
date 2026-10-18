@@ -6,9 +6,19 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
-## [未发布] - 2026-10-18
+## [1.10.32] - 2026-10-18 ✅ 已发布
 
 > 本轮为「桌面版能力迁移 P0」的真机实测修复批次。所有条目均由 **ZTE 7551N / Android 13 / WebView Chromium 101** 真机实测发现。
+
+**发布信息**
+
+- 提交 `3fc401e`（`main-v1.10`，已 push）
+- Release：tag `v1.10.32`（Latest）· 资产 `sillytavern-card-manager-1.10.32-signed.apk`（3.89 MB）
+- sha256 `31a3761b72d37f8ce6c286dc7cb2903ae6dd5109c9425a8d98009f4554f0ef8f`（线上包下载校验一致）
+- 正文 = `RELEASE_NOTES.md` v1.10.32 段抽取 **1795 字节**（remote==local）
+- 校验：入口 `index-BeMFUkaO.js` · 26 分块 web==android · **28 项**关键功能标记齐备 · 签名 CN=JSKZX Mobile
+- `npm test` **209/209**
+
 
 ### 🔴 致命：正则后行断言导致 WebView 渲染进程崩溃（App 被杀）
 
