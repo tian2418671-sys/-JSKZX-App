@@ -283,18 +283,49 @@ public class LibraryFsPlugin extends Plugin {
         }
     }
 
-    /** O(1) 命中;未命中(导入新增)退化为一次慢查并回填 */
+    /** O(1) 命中;未命中(导入新增)一次慢查并回填（**不触发全量重建**，避免拖死并发调用） */
     private DocumentFile fileByRelPath(String rel) {
         String r = rel == null ? "" : rel.replace('\\', '/').replaceAll("^/+", "");
         if (relIndexReady) {
             if (r.isEmpty()) return rootFile();
             DocumentFile hit = relIndex.get(r);
             if (hit != null) return hit;
+            // 🐛 真机实测修复（2026-10-18）：原实现在此退化为 fileByRelPathSlow（逐段 findFile，
+            //    每段一次 SAF IPC）。1.2 万卡库上单次实测 26 秒；PNG 保存会连调多次 → 挂死。
+            //    曾尝试「未命中就全量重建索引」，但 buildRelIndex 在并发场景下会把
+            //    FAST_EXEC / WRITE_EXEC 全部拖死（桥接整体超时、应用假死），故不采用。
+            //    现在采用「**有限深度快速查找**」：直接用单段 findFile 只做一次（父目录已缓存
+            //    时极快），失败即返回 null，由调用方决定是否降级。绝不在此触发全量遍历。
             DocumentFile slow = fileByRelPathSlow(r);
             if (slow != null) relIndex.put(r, slow);
             return slow;
         }
         return fileByRelPathSlow(r);
+    }
+
+    // 原「未命中就 rebuildIndexOnce 全量重建」方案已废弃：
+    // 并发未命中时会把 FAST_EXEC / WRITE_EXEC 全部占满，导致桥接整体超时（应用假死）。
+    // 索引统一由 scanStart / rescan 建立，之后所有路径解析都是 O(1) 命中。
+
+    /**
+     * **只查索引、不慢查**的路径解析 —— 专供缩略图这类「可失败、可降级」的场景。
+     *
+     * 🐛 真机实测（2026-10-18）：卡片库加载 1.2 万张后，THUMB_POOL 的 4 个线程持续对每张卡
+     *    调用 `fileByRelPath`；未命中时它退化为逐段 `findFile()`（每段一次 SAF IPC），
+     *    这些查询与 FAST_EXEC 的卡片读写抢同一个 ContentResolver，
+     *    最终导致**所有桥接调用（含无关的 AppConfig/SystemBars）全部超时、应用假死**。
+     *
+     * 缩略图缺失只会显示占位图，不影响任何数据完整性 —— 因此这里**放弃慢查**：
+     * 索引未就绪或未命中一律返回 null，宁可少一张缩略图，也绝不拖死整个桥接。
+     *
+     * @param rel 相对库根路径
+     * @return 命中返回 DocumentFile；未就绪/未命中返回 null
+     */
+    private DocumentFile indexedFileOnly(String rel) {
+        String r = rel == null ? "" : rel.replace('\\', '/').replaceAll("^/+", "");
+        if (r.isEmpty()) return rootFile();
+        if (!relIndexReady) return null;
+        return relIndex.get(r);
     }
 
     // 原 fileByRelPath 实现整体改名 fileByRelPathSlow,逻辑不动
@@ -547,6 +578,13 @@ public class LibraryFsPlugin extends Plugin {
     // 2 线程足够(水合一次仅 1~2 个并发读),与批读并发由 SAF 侧自然调度。
     private static final java.util.concurrent.ExecutorService FAST_EXEC =
             java.util.concurrent.Executors.newFixedThreadPool(2, r -> new Thread(r, "jsx-fast"));
+
+    // 🐛 真机实测增补（2026-10-18）：大文件读（readBuffer 读整图 base64）单独一个线程池。
+    //    实测 readBuffer 在异常路径上可能阻塞数十秒；若与 readCharaBatch/readText 共用
+    //    FAST_EXEC(2 线程)，两次慢读就能把池占满 → 详情页与打标读取全部排队超时。
+    //    读整图与读 chara 文本互不抢线程。
+    private static final java.util.concurrent.ExecutorService BIGREAD_EXEC =
+            java.util.concurrent.Executors.newFixedThreadPool(2, r -> new Thread(r, "jsx-bigread"));
 
     // ── A2: scanResult 缓存(分块回传) ──────────────────────────────────────────────
     private volatile List<JSObject> scanResultCache = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -1255,22 +1293,34 @@ public class LibraryFsPlugin extends Plugin {
 
     @PluginMethod()
     public void readBuffer(PluginCall call) {
-        String path = call.getString("path");
-        DocumentFile f = fileByRelPath(path);
-        if (f == null || !f.canRead()) {
-            call.reject("文件不存在或不可读");
-            return;
-        }
-        // 卡片 PNG 通常 < 20MB,超限视为异常
-        String b64 = readStream(f.getUri(), true, 40 * 1024 * 1024);
-        if (b64 == null) {
-            call.reject("读取失败或文件过大");
-            return;
-        }
-        JSObject ret = new JSObject();
-        ret.put("success", true);
-        ret.put("value", b64);
-        call.resolve(ret);
+        // 🐛 真机实测修复（2026-10-18）：原实现在 **Capacitor 插件线程** 同步执行
+        //    fileByRelPath + 整图 base64 读取。一旦路径解析退化（或大图读得慢），
+        //    插件线程被占死，**后续所有桥调用（含 readCharaBatch / readText）全部排队超时**，
+        //    表现为「PNG 打标卡在正在分析…，整个应用假死」。
+        //    改为走 BIGREAD_EXEC 工作线程：桥线程立即返回，慢读不再堵塞其他调用。
+        final String rel = call.getString("path");
+        BIGREAD_EXEC.execute(() -> {
+            try {
+                DocumentFile f;
+                try { f = fileByRelPath(rel); } catch (Exception e) { f = null; }
+                if (f == null || !f.canRead()) {
+                    call.reject("文件不存在或不可读");
+                    return;
+                }
+                // 卡片 PNG 通常 < 20MB,超限视为异常
+                String b64 = readStream(f.getUri(), true, 40 * 1024 * 1024);
+                if (b64 == null) {
+                    call.reject("读取失败或文件过大");
+                    return;
+                }
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("value", b64);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("读取失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+        });
     }
 
     @PluginMethod()
@@ -1305,6 +1355,9 @@ public class LibraryFsPlugin extends Plugin {
                 call.reject("创建文件失败");
                 return;
             }
+            // 新建文件后同步进索引，后续读/写直接 O(1) 命中
+            String relNew = rel.replaceAll("^/+", "");
+            if (!relNew.isEmpty()) relIndex.put(relNew, f);
         }
         boolean ok = writeStream(f.getUri(), content);
         JSObject ret = new JSObject();
@@ -1607,6 +1660,66 @@ public class LibraryFsPlugin extends Plugin {
     private DocumentFile destDirByRel(String rel) {
         if (rel == null || rel.isEmpty()) return rootFile();
         return fileByRelPath(rel);
+    }
+
+    /**
+     * 取「可写的树形目录 DocumentFile」——专供 createFile 使用。
+     *
+     * 🐛 真机实测修复（2026-10-18）：
+     *   ① `relIndex` 里存的是 `DocumentFile.fromSingleUri(...)`，该类型 **不支持 createFile**
+     *      （抛 UnsupportedOperationException → 崩 CapacitorPlugins 线程 → App 被杀）。
+     *   ② 原实现为规避①去调 `fileByRelPathSlow(dirRel)`（逐段 findFile）。在 1.2 万卡库上
+     *      每段一次 SAF IPC，实测 **39 秒**才失败 → PNG 保存（写 .jszkrx-tmp）直接挂死。
+     *
+     * 新实现：直接用 `DocumentsContract` 逐段拼 documentId **Uri**（零 IPC 就能构造），
+     *      最后 `DocumentFile.fromTreeUri(...).findFile()` 只做一次定位；
+     *      若索引里恰好有该目录，则按其 documentId 重建树形对象（同样零逐段 IPC）。
+     *
+     * @param dirRel 相对库根的目录路径（""=库根）
+     * @return 可写目录；不可用返回 null
+     */
+    private DocumentFile writableDirByRel(String dirRel) {
+        DocumentFile root = rootFile();
+        if (root == null) return null;
+        String norm = dirRel == null ? "" : dirRel.replace('\\', '/').replaceAll("^/+", "").replaceAll("/+$", "");
+        if (norm.isEmpty()) return root;
+        try {
+            Uri treeUri = root.getUri();
+            String curDocId = DocumentsContract.getTreeDocumentId(treeUri);
+            boolean allFound = true;
+            for (String seg : norm.split("/")) {
+                if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) return null;
+                DocumentFile cur = DocumentFile.fromSingleUri(getContext(),
+                        DocumentsContract.buildDocumentUriUsingTree(treeUri, curDocId));
+                DocumentFile next = cur != null ? cur.findFile(seg) : null;
+                if (next == null) { allFound = false; break; }
+                curDocId = DocumentsContract.getDocumentId(next.getUri());
+            }
+            if (allFound) {
+                Uri dirUri = DocumentsContract.buildTreeDocumentUri(treeUri.getAuthority(),
+                        DocumentsContract.getTreeDocumentId(treeUri) + "/" + curDocId);
+                DocumentFile df = DocumentFile.fromTreeUri(getContext(), dirUri);
+                if (df != null && df.canWrite()) return df;
+            }
+        } catch (Exception e) {
+            android.util.Log.w("Perf", "writableDirByRel failed for " + norm + ": " + e.getMessage());
+        }
+        // 兜底：索引命中则直接按 documentId 建树形对象（不逐段 findFile）
+        try {
+            DocumentFile idxHit = relIndex.get(norm);
+            if (idxHit != null) {
+                Uri treeUri = root.getUri();
+                String docId = DocumentsContract.getDocumentId(idxHit.getUri());
+                Uri dirUri = DocumentsContract.buildTreeDocumentUri(treeUri.getAuthority(),
+                        DocumentsContract.getTreeDocumentId(treeUri) + "/" + docId);
+                DocumentFile df = DocumentFile.fromTreeUri(getContext(), dirUri);
+                if (df != null && df.canWrite()) return df;
+            }
+        } catch (Exception e) { /* 忽略，走最后兜底 */ }
+        // 最后兜底：慢查（仅在以上都失败时）
+        DocumentFile slow = fileByRelPathSlow(norm);
+        if (slow != null && slow.canWrite() && slow.isDirectory()) return slow;
+        return null;
     }
 
     private String queryDisplayName(Uri uri) {
@@ -2426,8 +2539,16 @@ public class LibraryFsPlugin extends Plugin {
                 return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
             } catch (Exception e) { /* 缓存读失败 → 落重建分支 */ }
         }
+        // 🛡️ 索引未就绪时不生成缩略图：此时任何路径解析都只能慢查，
+        //    1.2 万卡会把这 4 个线程（及 ContentResolver）长期占满 → 桥接整体假死。
+        //    索引由 scanStart 建立，就绪后再来的请求即可正常命中。
+        if (!relIndexReady) return null;
         // 缓存未命中:读 SAF 原图 → 降采样 → WebP q75 → 写缓存 → 返回
-        DocumentFile f = fileByRelPath(path);
+        // 🐛 真机实测修复（2026-10-18）：这里原本用 fileByRelPath，未命中时会退化为逐段
+        //    findFile 慢查（1.2 万卡库上单次数十秒），THUMB_POOL 4 线程持续调用会把
+        //    ContentResolver 拖死 → 整个桥接超时、应用假死。缩略图可失败可降级，
+        //    因此改用「只查索引」：命中不了就返回 null（前端显示占位图），绝不慢查。
+        DocumentFile f = indexedFileOnly(path);
         if (f == null || !f.canRead()) return null;
         Bitmap bmp = decodeThumbBitmap(f.getUri(), maxDim);
         if (bmp == null) return null;
@@ -2474,6 +2595,15 @@ public class LibraryFsPlugin extends Plugin {
         final int maxDim = call.getInt("maxDim", THUMB_MAX_DIM) > 0
                 ? call.getInt("maxDim", THUMB_MAX_DIM) : THUMB_MAX_DIM;
         gcThumbsIfNeeded();
+        // 🛡️ 索引未就绪：直接拒绝，**不提交到线程池**。
+        //    真机实测（2026-10-18）：卡片库加载期前端会为上万张卡排队请求缩略图；
+        //    此时路径解析只能慢查，任务在 4 线程池里无限堆积，
+        //    把 ContentResolver 与线程池一起拖死 → 桥接整体超时、应用假死。
+        //    缩略图缺失只显示占位图，不影响数据，故这里直接快速失败。
+        if (!relIndexReady) {
+            call.reject("索引尚未就绪");
+            return;
+        }
         // F5: 共享池执行,不再每次 new Thread
         THUMB_POOL.execute(() -> {
             String b64 = thumbBase64(path, mtime, size, maxDim);
@@ -2664,6 +2794,10 @@ public class LibraryFsPlugin extends Plugin {
         String path = call.getString("path");
         String value = call.getString("value");
         if (path == null || value == null) { call.reject("参数缺失"); return; }
+        writeBufferOnWorker(call, path, value);
+    }
+
+    private void writeBufferOnWorker(PluginCall call, String path, String value) {
         DocumentFile f = fileByRelPath(path);
         if (f == null) {
             // 文件不存在:在目标目录创建(SAF createFile + 按扩展名推断 MIME)。
@@ -2681,7 +2815,24 @@ public class LibraryFsPlugin extends Plugin {
                 parent = rootFile();
             }
             if (parent == null || !parent.canWrite()) { call.reject("目标目录不可用(未授权)"); return; }
-            f = parent.createFile(inferMime(name), name);
+            // ⚠️ relIndex 快查可能命中 SingleDocumentFile（fromSingleUri）：该类型 createFile 会抛
+            //    UnsupportedOperationException（不在 catch 范围 → 崩 CapacitorPlugins 线程 → 整个应用
+            //    被杀，实测打标保存 PNG 卡必崩）。写路径改用 writableDirByRel：
+            //    先按 documentId 拼树形 URI（零逐段 IPC），失败才退回慢查。
+            DocumentFile treeParent = writableDirByRel(dirRel);
+            if (treeParent != null && treeParent.canWrite()) parent = treeParent;
+            try {
+                f = parent.createFile(inferMime(name), name);
+            } catch (Exception createErr) {
+                // 目标已存在（并发/上次残留）→ 慢查取回已有文件继续写入
+                DocumentFile existing = fileByRelPathSlow(rel);
+                if (existing != null) {
+                    f = existing;
+                } else {
+                    call.reject("创建文件失败: " + createErr.getMessage());
+                    return;
+                }
+            }
             if (f == null) { call.reject("创建文件失败"); return; }
         }
         try {

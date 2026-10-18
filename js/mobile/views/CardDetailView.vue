@@ -761,7 +761,7 @@
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue';
 import { defaultAutoTagRules, autoTagKeywordCandidates, compileAutoTagRules, extractBookEntries } from '../../utils/cardLoader.js';
 import { useRoute, useRouter } from 'vue-router';
-import { showToast, showSuccessToast, showConfirmDialog, showImagePreview } from 'vant';
+import { showToast, showSuccessToast, showConfirmDialog, showImagePreview, showLoadingToast } from 'vant';
 import MobileCardCover from '../components/MobileCardCover.vue';
 import SnapshotModal from '../components/SnapshotModal.vue';
 import AiToolModal from '../components/AiToolModal.vue';
@@ -783,6 +783,8 @@ import { STATUSBAR_TEMPLATES } from '../../utils/statusbarTemplates.js';
 import { STATUSBAR_PROMPT_TEMPLATES } from '../../utils/statusbarPromptTemplates.js';
 import { buildMacroContext, applyMacros } from '../useChatMacros';
 import { applyRegexScripts, extractRegexFromCard, coercePlacement } from '../useChatRegex';
+// 🏷️ 结构化标签解析（移植桌面 llmPromptRoles：剥思考块 + 三层降级 + 推理残留判据）
+import { parseStructuredTags, STRUCTURED_FORMAT_RULE, DEFAULT_PREFILL } from '../../utils/parseTagReply.js';
 import { createVariableEngine, countVars, extractMvu } from '../useChatVariables';
 import { renderEjs, looksLikeEjs, buildTemplateContext } from '../useChatEjs';
 import { segmentMessage, promoteHtmlSegments } from '../useChatRender';
@@ -1862,9 +1864,21 @@ export default {
             // 🐛 背景:与 createSnapshot 互斥(两者都整图写盘),之前只单向锁,save 会打断正在创建的快照
             if (!card.value || saving.value || snapshotting.value) return;
             saving.value = true;
+            // 🐢 真机实测(2026-10-18)：PNG 卡保存 = 读整图(readBuffer) + 拼 chunk + 覆盖写回
+            // (openOutputStream "wt" 底层行为)，大图上单次可达数十秒。旧实现全程无反馈，
+            // 用户以为卡死会反复点保存。这里给一个明确的进行中提示，doSave 内部 toast 会自动接管。
+            const loadingToast = showLoadingToast({
+                message: '保存中…',
+                duration: 0,
+                forbidClick: true,
+                overlay: true
+            });
+            // 让出一帧,确保遮罩在重活(整图读+拼装+覆盖写)开始前真正完成渲染
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
             try {
                 await doSave();
             } finally {
+                loadingToast.close();
                 saving.value = false;
             }
         }
@@ -3233,27 +3247,26 @@ export default {
                 prompt += aiCandidates.value.length
                     ? '【规则】：优先从候选池选择；没有合适的可自由提取最精准标签。\n'
                     : '【规则】：自由提取最精准的角色标签。\n';
-                prompt += '【输出强制规则】：必须只返回格式为 ["标签1", "标签2"] 的纯 JSON 数组，绝不要包含任何解释文字。\n\n';
+                prompt += STRUCTURED_FORMAT_RULE + '\n\n';
                 prompt += `【角色设定提取】：\n名字：${card.value.name || '未知'}\n描述：${desc}\n性格：${pers}\n首句：${mes}`;
 
                 const reply = cleanReply(await callAI({
                     model: chatApiModel.value.trim() || 'local-model',
-                    messages: [{ role: 'system', content: '你是一个专业的角色卡分析助手。请阅读角色设定，提取最符合角色的标签。严格只返回一个 JSON 数组（如 ["标签1","标签2"]），不要返回任何其他文字。' }, { role: 'user', content: prompt }],
+                    messages: [{ role: 'system', content: '你是一个专业的角色卡分析助手。请阅读角色设定，提取最符合角色的标签。只输出标签本身，不要输出推理过程。' }, { role: 'user', content: prompt }],
                     temperature: 0.2
                 }));
-                let newTags = [];
                 // 第一层漏斗：规则匹配免费先行（对齐桌面 v2.1.0 三层漏斗第二层以 LLM 兜底）
                 const fullText = [d.description, d.personality, d.scenario, d.first_mes, d.mes_example]
                     .filter(Boolean).join('\n');
-                applyRuleTags(fullText, newTags);
-                const ruleHit = newTags.length;
-                const jsonMatch = reply.replace(/```json/gi, '').replace(/```/g, '').match(/\[[\s\S]*\]/);
-                if (jsonMatch) {
-                    try { newTags = newTags.concat(JSON.parse(jsonMatch[0])); } catch (e) { /* 落兜底 */ }
+                const ruleTags = [];
+                applyRuleTags(fullText, ruleTags);
+                const ruleHit = ruleTags.length;
+                // 🏷️ 结构化解析（剥思考块 → <tags> 精确边界 → JSON 从后往前 → 逐行兜底）
+                const parsed = parseStructuredTags(reply, { prefill: DEFAULT_PREFILL });
+                if (!parsed.ok && parsed.reason && /思维链/.test(parsed.reason)) {
+                    showToast('AI 本次只返回了推理过程，已拒绝写入标签（可关闭模型思考或重试）');
                 }
-                if (!jsonMatch) {
-                    newTags = newTags.concat(reply.replace(/[\[\]"'`]/g, '').split(/[,，、\n]/).map(t => t.trim()).filter(Boolean));
-                }
+                const newTags = ruleTags.concat(parsed.tags);
                 if (newTags.length) {
                     const uniq = [...new Set(newTags.map((t) => String(t).trim()).filter(Boolean))];
                     const tagArr = tags.value;

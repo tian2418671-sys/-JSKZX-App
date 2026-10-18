@@ -603,35 +603,25 @@ export const androidImpl = {
             if (!newChunks) return { success: false, error: 'PNG 结构异常,无法安全写入' };
             // 4. 组装新 PNG
             const newPng = this._assemblePng(newChunks);
-            // 5. 写临时文件(同目录 .tmp),校验,再替换
-            const tmpRel = rel + '.jszkx-tmp';
-            const tmpB64 = bytesToBase64(newPng);
-            const writeRes = await LibraryFs.writeBuffer({ path: tmpRel, value: tmpB64 });
-            if (!writeRes || !writeRes.success) {
-                return { success: false, error: '写入临时文件失败' };
+            // 5. 直接覆盖写回原文件（**不再经过临时文件**）
+            // ☠️ 真机实测两个事故（2026-10-18）：
+            //   ① 原实现「先 delete 原文件 → 再 rename 临时文件」——一旦 rename 失败，
+            //      原图已被删除，**用户卡片永久丢失**（实测真机残留
+            //      `stress_png_084.png.jszkx-tmp` 而 `stress_png_084.png` 消失）。
+            //   ② 中间用 readCharaBatch 回读校验临时文件——tmp 是新建文件、不在元数据索引里，
+            //      只能走逐段 findFile 慢查，1.2 万卡库上实测 25s 起，整次保存挂死 >90s。
+            // 现在：newPng 在内存中由原图合法 chunk + 刚序列化的 chara 块拼成，本就无需回读校验；
+            //      直接覆盖写原路径——写成功才更新，写失败则原文件保持原样（数据安全）。
+            const directB64 = bytesToBase64(newPng);
+            const directRes = await LibraryFs.writeBuffer({ path: rel, value: directB64 });
+            if (directRes && directRes.success) {
+                return { success: true };
             }
-            // 6. 校验临时文件 🚀 性能修复:原实现 readBuffer 整图回读(大 PNG 一次全量 base64
-            //    过桥)只为了验证 JSON 可解析;改为 readCharaBatch 流式提取 chara 文本块
-            //    (原生仅跳过 IDAT 图像数据,载荷几十 KB),大卡保存省掉一次整图往返。
-            const verifyRes = await LibraryFs.readCharaBatch({ paths: [tmpRel] });
-            const verifyOk = !!(verifyRes && verifyRes.success && Array.isArray(verifyRes.results)
-                && verifyRes.results[0] && verifyRes.results[0].success
-                && typeof verifyRes.results[0].value === 'string');
-            if (!verifyOk) {
-                await LibraryFs.delete({ path: tmpRel }).catch(() => {});
-                return { success: false, error: '校验失败:临时文件无法解析' };
-            }
-            // 7. 用临时文件替换原文件(SAF 下:先删原文件,再重命名临时文件)
-            await LibraryFs.delete({ path: rel }).catch(() => {});
-            const renameRes = await LibraryFs.rename({ path: tmpRel, newPath: rel });
-            if (!renameRes || !renameRes.success) {
-                // 重命名失败,尝试恢复:删掉临时文件,用临时文件内容直接写回原路径
-                const fallbackB64 = bytesToBase64(newPng);
-                const fbRes = await LibraryFs.writeBuffer({ path: rel, value: fallbackB64 });
-                await LibraryFs.delete({ path: tmpRel }).catch(() => {});
-                return { success: !!(fbRes && fbRes.success), error: (fbRes && fbRes.error) || '替换失败,已尝试直接写回' };
-            }
-            return { success: true };
+            // 覆盖写失败：保留原文件，明确报错（绝不静默、绝不删除原文件）
+            return {
+                success: false,
+                error: `保存失败：${(directRes && directRes.error) || '覆盖写入失败'}。原文件未被修改`
+            };
         } catch (e) {
             return { success: false, error: (e && e.message) || 'PNG 保存失败' };
         }

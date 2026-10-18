@@ -387,14 +387,31 @@ export function useSearch({
         // 索引查询词 = mustInclude（普通关键词）+ tagOnly（标签关键词）
         const indexQuery = [...rules.mustInclude, ...rules.tagOnly].join(' ');
         let candidates = library.value;
-        
-        if (indexQuery && searchIndex.cardCount > 0) {
+
+        // 🔍 PK-18：索引**就绪且覆盖当前库**才走索引。旧判据 `cardCount > 0` 把
+        //    「构建中 / 半建 / 刷新未收尾」当成完整索引 ⇒ 候选集只有部分卡（「明明有却搜不到」）。
+        const indexReady = searchIndex.cardCount > 0
+            && !searchIndex.building
+            && searchIndex.cardCount >= library.value.length;
+        if (indexQuery && indexReady) {
             // 使用索引查询，传入排除词和标签
-            candidates = searchIndex.search(indexQuery, {
+            const hits = searchIndex.search(indexQuery, {
                 tags: rules.tagOnly,
                 excludeKeywords: rules.mustExclude
-            }) || [];
+            });
+            // 🔍 PK-18：索引查空不再硬空 —— 回落内存匹配（索引只覆盖短字段，长文本本就靠线性兜底）
+            if (Array.isArray(hits) && hits.length) candidates = hits;
         }
+        // 走索引路径时需要做「短语复核」（索引按单字切 token，`系统` 会退化为
+        // 「含系 且 含统」⇒ `体系 传统` 误命中）。只对候选集复算，代价有界。
+        const needPhraseCheck = indexReady && rules.mustInclude.length > 0;
+        const phraseTextCache = needPhraseCheck ? new Map() : null;
+        const phraseTextOf = (card) => {
+            if (phraseTextCache.has(card)) return phraseTextCache.get(card);
+            const t = extractCardSearchableText(card);
+            phraseTextCache.set(card, t);
+            return t;
+        };
 
         const filtered = candidates.filter(card => {
             try {
@@ -404,14 +421,14 @@ export function useSearch({
                 const data = card.data?.data || card.data || {};
 
                 // 2. 排除词校验（- 语法）—— 索引已处理，但需二次校验确保准确
-                if (rules.mustExclude.length > 0 && searchIndex.cardCount === 0) {
+                if (rules.mustExclude.length > 0 && !indexReady) {
                     const fullText = extractCardSearchableText(card);
                     if (rules.mustExclude.some(ex => fullText.includes(ex))) return false;
                 }
 
                 // 3. 标签特定筛选（tag:/t: 语法）—— 索引已处理
                 // 🧹 兼容「导入时忽略卡片自带标签」开关：开启时原生 data.tags 不参与标签搜索
-                if (rules.tagOnly.length > 0 && searchIndex.cardCount === 0) {
+                if (rules.tagOnly.length > 0 && !indexReady) {
                     const cardTags = extractCardTags(card, { ignoreNative: sanitizeImportedTags?.value });
                     if (!rules.tagOnly.every(target => cardTags.some(t => t.includes(target)))) return false;
                 }
@@ -439,10 +456,12 @@ export function useSearch({
                     if (!rules.wbOnly.every(w => wbText.includes(w))) return false;
                 }
 
-                // 7. 全文本多词必含校验（AND 逻辑）—— 索引已处理
-                if (rules.mustInclude.length > 0 && searchIndex.cardCount === 0) {
-                    const fullText = extractCardSearchableText(card);
-                    if (!rules.mustInclude.every(kw => fullText.includes(kw))) return false;
+                // 7. 全文本多词必含校验（AND 逻辑）
+                //    · 非索引路径：全量校验；
+                //    · 索引路径（PK-18）：只对候选集做**短语复核**，过滤单字 AND 的误命中。
+                if (rules.mustInclude.length > 0) {
+                    const fullText = needPhraseCheck ? phraseTextOf(card) : (indexReady ? null : extractCardSearchableText(card));
+                    if (fullText != null && !rules.mustInclude.every(kw => fullText.includes(kw))) return false;
                 }
 
                 return true;

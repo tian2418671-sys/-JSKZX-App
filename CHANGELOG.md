@@ -6,6 +6,84 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [未发布] - 2026-10-18
+
+> 本轮为「桌面版能力迁移 P0」的真机实测修复批次。所有条目均由 **ZTE 7551N / Android 13 / WebView Chromium 101** 真机实测发现。
+
+### 🔴 致命：正则后行断言导致 WebView 渲染进程崩溃（App 被杀）
+
+- **现象**：AI 打标进行到解析阶段时应用直接退出；`logcat -b crash` 显示
+  `CrRendererMain` → `signal 0 (SIGTRAP)` → `Abort message: [FATAL:crashpad_client_linux.cc(724)] Render process's crash wasn't handled by all associated webviews`。
+- **根因**：真机系统 WebView 为 **Chromium 101**，其 V8 对正则 **lookbehind（`(?<=…)` / `(?<!…)`）的实现存在缺陷**，执行时触发内部 `CHECK` 失败 → 渲染进程 abort → 整个应用被连带杀死。**内存充足（7.6 GB 可用 4.9 GB），与 OOM 无关。**
+- **修复**（4 处全部改写为无 lookbehind 的等价写法）：
+  - `js/utils/parseTagReply.js` — 中文间空格压缩改为逐字符扫描 `squeezeCjkSpaces()`；
+  - `js/mobile/components/DedupeModal.vue` — 句子切分改为「标点后插标记再 split」；
+  - `js/mobile/useChatMemory.js` —「讨厌」事实提取改为捕获组前置；
+  - `js/utils/presetDedupe.js` — 版本号形状改为捕获前边界并在替换回调中保留。
+- **防回退**：新增 `test/webviewCompat.test.mjs`（2 组）——扫描 `js/` 全量源码禁止出现 lookbehind，并断言 `squeezeCjkSpaces` 与原正则行为等价。
+
+### 🔴 致命：PNG 卡片保存会永久丢失原图（数据安全）
+
+- **现象**：真机上出现 `stress_png_084.png.jszkx-tmp` 残留，而 `stress_png_084.png` **已不存在**（PNG 从 100 张变 99 张）。
+- **根因**：`_saveCardPng` 的收尾流程是「**先 `delete` 原文件 → 再 `rename` 临时文件**」。一旦 `rename` 失败（SAF 引用失效/权限/并发），原图已被删除，**用户卡片不可恢复**。
+- **修复**：**绝不先删原文件**。改为直接把内存中组装好的新 PNG **覆盖写回原路径**；写成功即完成，写失败则原文件保持原样并明确报错。
+- **数据恢复**：已用残留的合法 `.jszkx-tmp`（PNG 签名 `89 50 4E 47` 完整）把被误删的 `stress_png_084.png` 还原，PNG 数量恢复为 100。
+
+### 🔴 严重：PNG 保存挂死 >90 秒
+
+- **根因**：收尾阶段用 `readCharaBatch` 回读**刚新建的临时文件**做校验；该文件不在元数据索引中，路径解析只能走逐段 `findFile()` 慢查，1.2 万卡库上实测 **25 秒起**，整次保存挂死。
+- **修复**：`newPng` 本就在内存中由「原图合法 chunk + 刚序列化的 chara 块」拼成，**无需回读校验**，直接覆盖写入。
+
+### 🔴 严重：缩略图线程池拖死整个桥接（应用假死）
+
+- **现象**：卡片库加载 1.2 万张后运行数分钟，**所有** Capacitor 调用（包括毫无关系的 `AppConfig.load`、`SystemBars`）全部超时；冷启动后最初 12 秒内一切正常（690~890 ms）。
+- **根因**：`THUMB_POOL`（4 线程）持续对每张卡调用 `fileByRelPath`；未命中时退化为逐段 `findFile()`（每段一次 SAF IPC），与 `FAST_EXEC` 抢同一 `ContentResolver`，最终把整个桥接拖死。
+- **修复**：
+  - 新增 `indexedFileOnly()` —— **只查索引、绝不慢查**；缩略图改用它，未就绪/未命中直接返回 `null`（前端显示占位图），数据完整性不受影响；
+  - `thumbBase64()` 在 `relIndexReady == false` 时直接放弃；
+  - `readThumb()` 在索引未就绪时**直接拒绝，不提交线程池**，避免上万任务堆积；
+  - `readBuffer` 拆分到独立线程池 `BIGREAD_EXEC`，与 `readCharaBatch` / `readText` 互不抢线程。
+
+### 🔴 严重：`writeBuffer` / `writeText` 占用 Capacitor 插件线程
+
+- **根因**：二者同步跑在桥线程上，PNG 保存（读原图 → 拼 chunk → 写盘）期间会长时间占死桥线程，其它调用全部排队。
+- **修复**：`writeBuffer` / `writeText` 改为可在工作线程执行的实现；同时新增 `writableDirByRel()`，用 `DocumentsContract` 按 documentId 直接拼树形 URI（**零逐段 IPC**）替代原先的逐级 `findFile()` 慢查。
+
+### 🔴 严重：长按卡片会同时弹出菜单并打开详情页
+
+- **现象**：真机长按卡片，菜单弹出的同时**立刻跳进卡片详情页**（截图证据：`压测卡11777` 详情页）。
+- **根因**：`v-longpress` 指令在长按触发后 700 ms 自动把 `fired` 复位；真机 WebView 的 `click` 事件常在手指抬起后 >700 ms 才派发，复位后不再拦截 → 长按尾随 click 被当作正常点击。
+- **修复**：改用 `firedAt` 时间戳方案——**只在「下一次 `touchstart`」时复位**，`click` 在 1.5 s 内的都视为长按尾随事件并拦截（超时窗仅作兜底，防永久吞点击）。
+
+### 🔴 严重：超长卡批量打标导致渲染进程 OOM
+
+- **根因**：`onBatchAiTag` 预先为**每张卡**保留完整 `full` 对象 **和** 其材料全文（两份），批量上百张时渲染进程内存翻倍，被系统 OOM kill。
+- **修复**：规划阶段**只保留材料长度**（`materialLenOf`），处理时按需重读、用完即弃；`buildTagUnits` 新增 `materialLen` 入参 + `isPackableByLength()`（单测 `tagBatchPlan` 新增 2 组）。
+
+### 🔴 严重：「AI 打标」静默失败被伪装成已完成
+
+- **现象**：进度显示「2/2 完成」，但卡片标签数为 0；续跑账本把失败卡记为完成，无法重试。
+- **根因**：`sendOnce` 失败时静默 `return null`，分段循环 `continue` 后 `mergeSegmentTags([])` 得空数组 → `markDoneCard` 记完成。
+- **修复**：`sendOnce` 记录 `lastSendError`；分段分支遇失败即置 `segFailed` 并**整卡判失败**（不记完成，续跑会重试）；单发分支把失败原因写入进度状态。同时补充分段/保存的诊断日志。
+
+### ✅ 真机验证结论
+
+| 项目 | 结果 |
+| --- | --- |
+| 长按弹出菜单 / **不误跳详情页** | ✅ 11/11 探针通过 |
+| lookbehind 崩溃 | ✅ 解析链路正常（`layer:1, ok:true`），不再崩溃 |
+| JSON 卡打标落盘 | ✅ 实测 `压测卡00002.json` → `tags:["压测","stress","模拟标签甲","模拟标签乙"]`，结构正确（`spec` + `data.tags`，无多包一层） |
+| PNG 卡打标落盘 | ✅ `stress_png_001.png` 标签成功写入，**原文件未丢失** |
+| 缩略图卡死 | ✅ 桥接调用从「永久假死」降到常驻 ~10 ms |
+| 单元测试 | **209/209 全绿** |
+
+### ⚠️ 已知遗留（不在本批次范围）
+
+- **SAF 覆盖写大文件慢**：对已存在的 PNG 覆盖写入在真机上可能耗时数十秒（`ContentResolver.openOutputStream("wt")` 底层行为）。功能正确、数据安全，但体验待优化——建议后续改用「同目录写新文件 + 成功后重命名」并配合进度提示。
+- **冷启动索引窗口期**：应用刚启动、`scanStart` 尚未建好索引的数十秒内，`readCharaBatch` 仍可能走慢查。缩略图已完全屏蔽此风险（直接跳过），卡片读取建议后续补「索引就绪前排队等待」策略。
+
+---
+
 ## [1.10.31] - 2026-09-26
 
 ### ✨ 卡片详情「高级设定」折叠改造（开场白/子项）

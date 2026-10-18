@@ -248,10 +248,31 @@
         >
             <div class="aitag-progress">
                 <p class="aitag-desc">将对选中的 {{ batchSet.size }} 张卡片调用 AI 提取标签并追加到卡片 tags（失败单卡自动跳过）。</p>
+                <div class="aitag-opts">
+                    <div class="aitag-opt-row">
+                        <span class="aitag-opt-label">📦 每请求打包</span>
+                        <van-stepper v-model="packSize" :min="1" :max="10" integer :disabled="aiTagRunning" />
+                        <span class="aitag-opt-hint">张（1 = 逐张，建议 3~5）</span>
+                    </div>
+                    <van-cell title="⏭️ 跳过已有标签的卡" :value="skipTagged ? '开' : '关'" :disabled="aiTagRunning">
+                        <template #right-icon>
+                            <van-switch v-model="skipTagged" size="20" :disabled="aiTagRunning" />
+                        </template>
+                    </van-cell>
+                    <van-cell
+                        v-if="resumeInfo"
+                        title="📌 上次有未完成的任务"
+                        :label="`待处理 ${resumeInfo.pending} 张` + (resumeInfo.missing ? `（${resumeInfo.missing} 张已不在库中）` : '')"
+                        is-link
+                        :disabled="aiTagRunning"
+                        @click="onResumeBatchAiTag"
+                    />
+                </div>
                 <div v-if="aiTagRunning" class="aitag-bar">
                     <van-progress :percentage="aiTagProgress.total ? Math.round(aiTagProgress.current / aiTagProgress.total * 100) : 0" />
                     <p class="aitag-status">{{ aiTagProgress.status }}</p>
                     <p class="aitag-count">{{ aiTagProgress.current }} / {{ aiTagProgress.total }}</p>
+                    <van-button size="small" plain type="danger" style="margin-top: 8px" @click="onStopBatchAiTag">停止</van-button>
                 </div>
             </div>
         </van-dialog>
@@ -345,6 +366,10 @@ import { currentTheme } from '../theme';
 import { useSearch, extractCardSearchableText, extractCardTags, extractCardShortFields } from '../../composables/useSearch';
 import searchIndex from '../../utils/searchIndex.js';
 import { defaultAutoTagRules, compileAutoTagRules } from '../../utils/cardLoader.js';
+// 🏷️ 结构化标签解析（移植桌面 llmPromptRoles）
+import { parseStructuredTags, extractAiReplyText, STRUCTURED_FORMAT_RULE, DEFAULT_PREFILL, packedOutputRule, parsePackedTags, splitTextSegments, mergeTagList } from '../../utils/parseTagReply.js';
+// 📦 批量打标编排（打包/分段/续跑账本/增量过滤）
+import { buildTagUnits, buildCardMaterialText, isLongCardMaterial, createResumeLedger, markLedgerDone, isLedgerComplete, resolveResumeTargets, mergeSegmentTags } from '../../utils/tagBatchPlan.js';
 import { api } from '../../bridge/api';
 import { loadApiKey } from '../useChatApiConfig';
 import MobileCardCover from '../components/MobileCardCover.vue';
@@ -354,7 +379,7 @@ import TagCategoryPanel from '../components/TagCategoryPanel.vue';
 // 首次打开图谱才拉取该 chunk，启动/列表滚动不再背负图谱代码与模板编译
 import {
     mobileLibrary, loadLibrary, moveCardToGroup, removeCard, renameCardTo,
-    loadCardFullData, syncCardLightFields, LIBRARY_ROOT, setLastOpenedPath,
+    loadCardFullData, syncCardLightFields, saveCardData, LIBRARY_ROOT, setLastOpenedPath,
     appendImportedCards
 } from '../useMobileLibrary';
 import { resetMetaDb } from '../sqliteMeta.js'; // 🚀 P2 B2:授权切换时清空元数据库
@@ -848,6 +873,16 @@ onBeforeUnmount(() => {
         const showBatchAiTag = ref(false);
         const aiTagRunning = ref(false);
         const aiTagProgress = reactive({ current: 0, total: 0, status: '' });
+        // 📦 打包大小（1~10，默认 1 = 与旧行为一致）
+        const packSize = ref((() => {
+            const n = Number(localStorage.getItem('jsmobile-ai-pack-size') || 1);
+            return Number.isFinite(n) && n >= 1 && n <= 10 ? Math.floor(n) : 1;
+        })());
+        watch(packSize, (v) => { try { localStorage.setItem('jsmobile-ai-pack-size', String(v)); } catch (e) { /* 忽略 */ } });
+        // ⏭️ 增量模式（跳过已有标签的卡）
+        const skipTagged = ref(localStorage.getItem('jsmobile-ai-skip-tagged') === '1');
+        watch(skipTagged, (v) => { try { localStorage.setItem('jsmobile-ai-skip-tagged', v ? '1' : '0'); } catch (e) { /* 忽略 */ } });
+        const resumeInfo = ref(null); // { pending, missing } —— 打开弹窗时刷新
         // v4.1 B1：批量进入前的记忆开关原状态（退出时恢复）
         let batchPrevMemoryEnabled = true;
 
@@ -918,77 +953,383 @@ onBeforeUnmount(() => {
         const LS_AI_ENDPOINT = 'stc-api-endpoint';
         const LS_AI_MODEL = 'stc-api-model';
         const LS_AI_TYPE = 'stc-api-type';
-        function extractAiReply(res, type) {
-            if (!res || !res.data) return '';
-            const dd = res.data;
-            if (type === 'anthropic') return (dd.content && dd.content[0] && dd.content[0].text) || '';
-            return (dd.choices && dd.choices[0] && dd.choices[0].message && dd.choices[0].message.content) || '';
-        }
+        // 🏷️ 结构化解析（移植桌面 llmPromptRoles：剥思考块 + 三层降级 + 推理残留判据）
+        //   旧实现是贪婪 json 正则 + 暴力逗号拆分 → 思考型模型的推理会写进标签（桌面 AI-19）。
         function parseAiTags(reply) {
-            const s = String(reply || '').trim();
-            // 容忍被 markdown 代码块包裹 / 前后杂质
-            const m = s.match(/\[[\s\S]*?\]/);
-            if (!m) return [];
-            try {
-                const arr = JSON.parse(m[0]);
-                if (Array.isArray(arr)) return arr.map((x) => String(x).trim()).filter(Boolean);
-            } catch (e) { /* 解析失败返回空 */ }
-            return [];
+            return parseStructuredTags(reply, { prefill: DEFAULT_PREFILL }).tags;
         }
+        // 🛑 立即停止：当前请求返回后不再发下一个单元（不中断在途请求）
+        let aiTagStopRequested = false;
+        function onStopBatchAiTag() {
+            aiTagStopRequested = true;
+            aiTagProgress.status = '正在停止…（当前请求完成后结束，进度已保存）';
+            console.log('[AiTag] 用户请求停止');
+        }
+        /** 💾 续跑账本（localStorage）——目标清单 + 已完成清单，下一次可「继续未完成」 */
+        const LS_AI_RESUME = 'jsmobile-ai-tag-resume';
+        function loadResumeLedger() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(LS_AI_RESUME) || 'null');
+                if (raw && Array.isArray(raw.targetIds) && raw.targetIds.length) return raw;
+            } catch (e) { /* 损坏视为无 */ }
+            return null;
+        }
+        function saveResumeLedger(lg) {
+            try {
+                if (!lg) localStorage.removeItem(LS_AI_RESUME);
+                else localStorage.setItem(LS_AI_RESUME, JSON.stringify(lg));
+            } catch (e) { /* 存储失败不影响主流程 */ }
+        }
+        // 弹窗打开时刷新「继续未完成」入口
+        function refreshResumeInfo() {
+            const lg = loadResumeLedger();
+            if (!lg) { resumeInfo.value = null; return; }
+            const known = new Set(mobileLibrary.library.map((c) => c && c.path).filter(Boolean));
+            const r = resolveResumeTargets(lg, known);
+            resumeInfo.value = r.complete ? null : { pending: r.pending.length, missing: r.missingCount };
+        }
+        watch(showBatchAiTag, (v) => { if (v) refreshResumeInfo(); });
+
         // 弹窗关闭钩子：确认 → 触发打标；取消 → 仅关闭（若正在打标则忽略取消）
         async function onBatchAiTagClose(action) {
             if (action === 'confirm' && !aiTagRunning.value) await onBatchAiTag();
             else if (action !== 'confirm' && !aiTagRunning.value) { showBatchAiTag.value = false; }
         }
 
-        async function onBatchAiTag() {
-            const cards = batchSelectedCards();
-            if (!cards.length) { showBatchAiTag.value = false; return; }
+        /** 构造一张卡的 AI 请求（单发 / 打包内共用同一材料口径） */
+        function makeCardPrompt(card, dd) {
+            const desc = String(dd.description || '').substring(0, 1500);
+            const mes = String(dd.first_mes || '').substring(0, 500);
+            const pers = String(dd.personality || '').substring(0, 300);
+            return `【角色设定】：\n名字：${card.name || '未知'}\n描述：${desc}\n性格：${pers}\n首句：${mes}`;
+        }
+
+        /**
+         * 批量 AI 打标主流程（对齐桌面 useAITools 提量批次）：
+         *   📦 打包（短卡成组，N 张/请求）→ 逐卡校验 → 缺的自动拆回单发
+         *   ✂️ 超长卡（>4000 字）分段 → 逐段打标 → 按出现次数合并
+         *   ⏭️ 增量（跳过已有标签） / 📌 续跑（跳过已完成） / 🛑 停止
+         *
+         * @param {{resume?:boolean}} [opts]
+         */
+        async function onBatchAiTag(opts = {}) {
+            const resume = opts === true || (opts && opts.resume);
+            // 1) 目标清单
+            let cards;
+            let ledger = null;
+            if (resume) {
+                ledger = loadResumeLedger();
+                if (!ledger) { showToast('没有可继续的打标任务'); return; }
+                const known = new Map(mobileLibrary.library.map((c) => [c && c.path, c]).filter(([p]) => p));
+                const r = resolveResumeTargets(ledger, known);
+                if (r.complete) {
+                    saveResumeLedger(null);
+                    resumeInfo.value = null;
+                    showToast('上次的任务已全部完成');
+                    return;
+                }
+                cards = r.pending.map((id) => known.get(id)).filter(Boolean);
+                if (r.missingCount > 0) showToast(`已跳过 ${r.missingCount} 张已不在库中的卡片`);
+            } else {
+                cards = batchSelectedCards();
+                if (!cards.length) { showBatchAiTag.value = false; return; }
+                // ⏭️ 增量模式：跳过已有标签的卡（结果仍记入账本，避免续跑反复处理）
+                if (skipTagged.value) {
+                    const before = cards.length;
+                    cards = cards.filter((c) => {
+                        const d = c.data?.data || c.data || {};
+                        const has = (Array.isArray(d.tags) && d.tags.length) || (Array.isArray(c.customTags) && c.customTags.length);
+                        return !has;
+                    });
+                    if (!cards.length) { showToast(`增量模式：${before} 张已有标签，无需打标`); return; }
+                    if (cards.length < before) showToast(`增量模式：跳过 ${before - cards.length} 张已有标签的卡`);
+                }
+            }
             const endpoint = (localStorage.getItem(LS_AI_ENDPOINT) || '').trim();
             if (!endpoint) { showToast('请先在「设置」页配置 AI API 端点'); return; }
             const model = (localStorage.getItem(LS_AI_MODEL) || 'local-model').trim();
             const type = localStorage.getItem(LS_AI_TYPE) === 'anthropic' ? 'anthropic' : 'openai';
             const key = (await loadApiKey()).trim();
+
+            // 2) 账本
+            if (!resume) ledger = createResumeLedger(cards.map((c) => c.path), packSize.value);
+            saveResumeLedger(ledger);
+            const markDoneCard = (card) => {
+                if (!card || !card.path) return;
+                markLedgerDone(ledger, card.path);
+                saveResumeLedger(ledger);
+            };
+
+            aiTagStopRequested = false;
             aiTagRunning.value = true;
             aiTagProgress.total = cards.length;
             aiTagProgress.current = 0;
             let okCount = 0;
-            for (const c of cards) {
-                aiTagProgress.current++;
-                aiTagProgress.status = `正在分析 ${c.name || '卡片'}…`;
-                // 🚀 轻量化:按需加载全量数据(用后即弃)
-                const full = await loadCardFullData(c);
-                if (!full) continue;
-                const dd = full.data || full;
-                const desc = String(dd.description || '').substring(0, 1500);
-                const mes = String(dd.first_mes || '').substring(0, 500);
-                const pers = String(dd.personality || '').substring(0, 300);
-                const prompt = '你是专业的角色卡片标签分类助手。请根据角色设定提取最精准的标签。\n'
-                    + '【输出强制规则】：必须只返回形如 ["标签1", "标签2"] 的纯 JSON 数组，不要任何解释文字。\n\n'
-                    + `【角色设定】：\n名字：${c.name || '未知'}\n描述：${desc}\n性格：${pers}\n首句：${mes}`;
+            let residueRejected = 0;
+            let doneCount = 0;
+            let failedCount = 0;
+            /** 记录 sendOnce 最近一次失败原因，供分段/单发分支提示 */
+            let lastSendError = '';
+
+            /** 发送一次性请求并按配置解析（单发 / 打包 / 分段共用） */
+            const sendOnce = async (prompt, systemPrompt) => {
                 try {
                     const res = await api.sendChatMessage(endpoint, {
                         model,
                         messages: [
-                            { role: 'system', content: '你是一个专业的角色卡分析助手。请提取最符合角色的标签，严格只返回一个 JSON 数组（如 ["标签1","标签2"]），不要返回其他文字。' },
+                            { role: 'system', content: systemPrompt },
                             { role: 'user', content: prompt }
                         ],
                         temperature: 0.2
                     }, key, type);
-                    if (!res || !res.success) continue;
-                    const newTags = parseAiTags(extractAiReply(res, type));
-                    if (!newTags.length) continue;
-                    const cur = Array.isArray(dd.tags) ? dd.tags : [];
-                    dd.tags = [...cur, ...newTags.filter((t) => !cur.includes(t))];
-                    const saveRes = await api.saveCard(c.path, JSON.parse(JSON.stringify(full)));
-                    if (saveRes && saveRes.success) { okCount++; syncCardLightFields({ path: c.path, data: full }); }
-                } catch (e) { /* 单卡失败不中断，继续下一张 */ }
+                    if (!res || !res.success) {
+                        // 🔍 真机实测：原实现静默返回 null，分段循环 continue 后
+                        //    mergeSegmentTags 得空数组 → markDoneCard 记「完成」，
+                        //    于是网络/鉴权失败被伪装成「已处理」，续跑账本也无法重试。
+                        lastSendError = (res && res.error) ? String(res.error) : '请求失败（无响应）';
+                        return null;
+                    }
+                    const txt = extractAiReplyText(res, type);
+                    if (!txt) lastSendError = '响应无内容（可能触发了思考模式或空回复）';
+                    return txt;
+                } catch (e) {
+                    lastSendError = e && e.message ? e.message : '请求异常';
+                    return null;
+                }
+            };
+
+            /** 把解析出的标签写回卡片（近义去重），成功后记完成 */
+            const applyTags = async (card, full, tags) => {
+                if (!Array.isArray(tags) || !tags.length) return false;
+                // ☠️ 这里的 full 是 loadCardFullData 的整体返回值（V2 卡本体 {spec, data:{...}}），
+                //    卡片字段在 full.data。不能写成 { path, data: full } —— 那会多包一层
+                //    （data.data.data），写盘后卡片结构损坏。
+                const dd = (full && full.data) ? full.data : full;
+                const cur = Array.isArray(dd.tags) ? dd.tags : [];
+                const added = mergeTagList(cur, tags);
+                if (!added.length) {
+                    // 没有新标签 = 这张卡已处理完（续跑账本要记完成，否则会无限重试）
+                    markDoneCard(card);
+                    return true;
+                }
+                dd.tags = [...cur, ...added];
+                // 🛡️ 必须走统一保存入口 saveCardData（内部深拷贝 + 规范化 + 轻量字段同步）：
+                //   ① 内嵌世界书 entries 字典→数组规范化（否则写盘格式脏）
+                //   ② syncCardLightFields 更新列表轻量字段（标签/搜索索引同步）
+                //   ③ PNG 卡的二进制安全写回（直写 JSON 会损坏图片）
+                const saveRes = await saveCardData({ path: card.path, data: full });
+                if (saveRes && saveRes.success) {
+                    okCount++;
+                    console.log('[AiTag] 保存成功', card.name, '新增标签', JSON.stringify(added).slice(0, 120));
+                } else {
+                    failedCount++;
+                    console.warn('[AiTag] 保存失败', card.name, JSON.stringify(saveRes).slice(0, 200));
+                }
+                markDoneCard(card);
+                return true;
+            };
+
+            /** 单卡处理：超长分段 → 否则单发 */
+            const processOne = async (card) => {
+                const full = await loadCardFullData(card);
+                if (!full) {
+                    console.warn('[AiTag] 读取失败（跳过）:', card.name);
+                    failedCount++;
+                    return;
+                }
+                doneCount++;
+                const dd = full.data || full;
+                const material = buildCardMaterialText(dd);
+                console.log(`[AiTag] 处理 ${card.name} · 材料 ${material.length} 字 · 超长=${isLongCardMaterial(material)}`);
+                try {
+                    if (isLongCardMaterial(material)) {
+                        // ✂️ 超长卡：分段 → 逐段打标 → 按出现次数合并
+                        const segs = splitTextSegments(material);
+                        let segFailed = false;
+                        const perSegment = [];
+                        console.log(`[AiTag] 分段 ${card.name} → ${segs.length} 段`);
+                        for (let si = 0; si < segs.length; si++) {
+                            if (aiTagStopRequested) {
+                                console.warn('[AiTag] 分段中断：收到停止请求', card.name, `第 ${si + 1}/${segs.length} 段`);
+                                break;
+                            }
+                            aiTagProgress.status = `分段打标 ${card.name || '卡片'}（${si + 1}/${segs.length}）…`;
+                            const prompt = `你是专业的角色卡片标签分类助手。以下是一张角色卡的设定材料节选（第 ${si + 1}/${segs.length} 段）。\n`
+                                + STRUCTURED_FORMAT_RULE + '\n\n'
+                                + `【角色名】：${card.name || '未知'}\n【材料节选】：\n${segs[si]}`;
+                            const reply = await sendOnce(prompt, '你是一个专业的角色卡分析助手。请提取最符合角色的标签，只输出标签，不要输出推理过程。');
+                            if (reply == null) {
+                                // 🚫 不再静默 continue：记录失败，让进度与账本反映真实结果
+                                console.warn('[AiTag] 分段请求失败:', card.name, `第 ${si + 1}/${segs.length} 段`, lastSendError);
+                                segFailed = true;
+                                break;
+                            }
+                            const parsed = parseStructuredTags(reply, { prefill: DEFAULT_PREFILL });
+                            console.log('[AiTag] 分段解析', card.name, `${si + 1}/${segs.length}`, JSON.stringify(parsed).slice(0, 200));
+                            if (!parsed.ok && parsed.reason && /思维链/.test(parsed.reason)) residueRejected++;
+                            perSegment.push(parsed.tags);
+                        }
+                        // 任一段请求失败 ⇒ 整卡判失败（不记完成，续跑会重试）
+                        if (segFailed) {
+                            failedCount++;
+                            aiTagProgress.status = `「${card.name || '卡片'}」打标失败：${lastSendError || '请求失败'}`;
+                            return;
+                        }
+                        const merged = mergeSegmentTags(perSegment);
+                        if (!merged.length) { markDoneCard(card); return; }
+                        await applyTags(card, full, merged);
+                        return;
+                    }
+                    // 常规单发
+                    const prompt = '你是专业的角色卡片标签分类助手。请根据角色设定提取最精准的标签。\n'
+                        + STRUCTURED_FORMAT_RULE + '\n\n'
+                        + makeCardPrompt(card, dd);
+                    const reply = await sendOnce(prompt, '你是一个专业的角色卡分析助手。请提取最符合角色的标签，只输出标签，不要输出推理过程。');
+                    if (reply == null) {
+                        console.warn('[AiTag] 请求失败（无回复）:', card.name, lastSendError);
+                        aiTagProgress.status = `「${card.name || '卡片'}」打标失败：${lastSendError || '请求失败'}`;
+                        failedCount++;
+                        return;
+                    }
+                    const parsed = parseStructuredTags(reply, { prefill: DEFAULT_PREFILL });
+                    console.log('[AiTag] 解析结果', card.name, JSON.stringify(parsed).slice(0, 160));
+                    if (!parsed.ok && parsed.reason && /思维链/.test(parsed.reason)) residueRejected++;
+                    if (!parsed.tags.length) { markDoneCard(card); return; }
+                    await applyTags(card, full, parsed.tags);
+                } catch (e) {
+                    console.warn('[AiTag] 单卡异常:', card.name, e && e.message);
+                    failedCount++;
+                }
+            };
+
+            /** 打包处理：N 张短卡一次请求 → 逐卡校验 → 缺失的拆回单发 */
+            const processPack = async (packCards) => {
+                const n = packCards.length;
+                const label = packCards.map((c) => c.name || '未知').join('、');
+                // ⚠️ 真机 OOM 修复：不再从外部预加载 Map 取，改为本包内按需读取、用完即释放
+                const fullMap = new Map();
+                try {
+                    let prompt = `你是一个专业的角色卡片标签分类助手。请一次性为以下 ${n} 张角色卡分别打标。\n`;
+                    prompt += packedOutputRule(n) + '\n\n';
+                    for (let idx = 0; idx < packCards.length; idx++) {
+                        const card = packCards[idx];
+                        const fullOne = await loadCardFullData(card);
+                        if (fullOne) fullMap.set(card.path, fullOne);
+                        // ⚠️ full 是 V2 卡本体，字段在 full.data（不再多探一层 data.data）
+                        const dd = (fullOne && fullOne.data) ? fullOne.data : (fullOne || {});
+                        prompt += `【卡片 ${idx + 1}】\n名字：${card.name || '未知'}\n描述：${String(dd.description || '').substring(0, 1500)}\n性格：${String(dd.personality || '').substring(0, 300)}\n首句：${String(dd.first_mes || '').substring(0, 500)}\n\n`;
+                    }
+                    // ⚠️ 打包禁用预填充：对象格式与数组预填充 `<tags>[` 冲突
+                    const reply = await sendOnce(prompt, '你是一个专业的角色卡分析助手。请严格按编号返回每张卡的标签。');
+                    if (reply == null) throw new Error('打包请求失败');
+                    const parsed = parsePackedTags(reply);
+                    const missing = [];
+                    for (let k = 0; k < n; k++) {
+                        const card = packCards[k];
+                        const tags = parsed.ok ? (parsed.map[String(k + 1)] || []) : [];
+                        const full = fullMap.get(card.path);
+                        if (tags.length && full) {
+                            doneCount++;
+                            await applyTags(card, full, tags);
+                        } else {
+                            missing.push(card);
+                        }
+                    }
+                    if (missing.length) {
+                        aiTagProgress.status = `打包内 ${missing.length} 张未取到结果，拆回单发…`;
+                        for (const card of missing) {
+                            if (aiTagStopRequested) break;
+                            await processOne(card);
+                        }
+                    } else if (parsed.ok) {
+                        // 打包成功的卡也要计完成数（doneCount 已在上面累加）
+                        void label;
+                    }
+                } catch (e) {
+                    // 整包失败 → 全部拆回单发（不丢卡）
+                    aiTagProgress.status = '打包请求失败，拆回单发重试…';
+                    for (const card of packCards) {
+                        if (aiTagStopRequested) break;
+                        await processOne(card);
+                    }
+                } finally {
+                    // 🧹 及时释放本包缓存的 full 对象，避免内存累积（真机 OOM 防护）
+                    fullMap.clear();
+                }
+            };
+
+            // 3) 规划请求单元（短卡成组 / 长卡单发）
+            //    ⚠️ 真机实测（2026-10-18）：原实现把「每张卡的完整 full 对象」+「其材料全文」
+            //    双双留在 Map 里做预加载；批量打标上百张时渲染进程内存翻倍 →
+            //    **WebView 渲染进程被 OOM 杀掉，整个 App 崩溃**
+            //    （logcat: Render process's crash wasn't handled → SIGTRAP）。
+            //    改为：规划阶段只保留「材料长度」，full 在处理时按需重读，用完即弃。
+            let units = [];
+            try {
+                const materialLenOf = new Map();
+                for (const card of cards) {
+                    if (aiTagStopRequested) break;
+                    const full = await loadCardFullData(card);
+                    if (!full) continue;
+                    const dd = full.data || full;
+                    // 只记长度：material 变量在下一次循环即失去引用，不在内存中累积
+                    materialLenOf.set(card.path, String(buildCardMaterialText(dd) || '').length);
+                }
+                units = buildTagUnits(cards.map((c) => ({
+                    id: c.path,
+                    // 只传长度：规划阶段不驻留任何卡全文，避免真机渲染进程 OOM
+                    materialLen: materialLenOf.get(c.path) || 0
+                })), packSize.value);
+                console.log(`[AiTag] 编排：${cards.length} 张 → ${units.length} 个单元（packSize=${packSize.value}）`);
+                // 把 unit 的 id 映射回卡片对象
+                const byPath = new Map(cards.map((c) => [c.path, c]));
+                const packedUnits = units.filter((u) => u.ids.length > 1);
+                if (packedUnits.length) {
+                    const total = packedUnits.reduce((s, u) => s + u.ids.length, 0);
+                    aiTagProgress.status = `📦 打包：${total} 张短卡 → ${packedUnits.length} 个请求`;
+                }
+                for (const unit of units) {
+                    if (aiTagStopRequested) break;
+                    const unitCards = unit.ids.map((id) => byPath.get(id)).filter(Boolean);
+                    if (!unitCards.length) continue;
+                    aiTagProgress.current += unitCards.length;
+                    if (unitCards.length === 1) {
+                        aiTagProgress.status = `正在分析 ${unitCards[0].name || '卡片'}…`;
+                        await processOne(unitCards[0]);
+                    } else {
+                        aiTagProgress.status = `📦 打包 ${unitCards.length} 张（${unitCards.map((c) => c.name || '未知').join('、')}）…`;
+                        await processPack(unitCards);
+                    }
+                }
+            } catch (e) {
+                console.warn('[AI 打标] 编排异常', e);
             }
+
+            const stopped = aiTagStopRequested;
+            aiTagStopRequested = false;
             aiTagRunning.value = false;
             showBatchAiTag.value = false;
             aiTagProgress.status = '';
-            if (okCount) showSuccessToast(`AI 打标完成 ${okCount}/${cards.length} 张`);
+
+            // 4) 收尾：账本清理 / 续跑入口
+            if (isLedgerComplete(ledger)) {
+                saveResumeLedger(null);
+                resumeInfo.value = null;
+            } else {
+                refreshResumeInfo();
+            }
+            const parts = [`AI 打标完成 ${okCount}/${cards.length} 张`];
+            if (stopped) parts.push(`已手动停止（处理 ${doneCount} 张）`);
+            if (residueRejected) parts.push(`拒绝写入推理残留 ${residueRejected} 张`);
+            if (failedCount) parts.push(`失败 ${failedCount} 张`);
+            if (okCount || stopped) showSuccessToast(parts.join(' · '));
             else showToast('AI 打标未命中任何标签（请检查 API 配置或网络）');
+        }
+
+        /** ▶ 继续未完成（从账本断点续跑） */
+        async function onResumeBatchAiTag() {
+            if (aiTagRunning.value) return;
+            await onBatchAiTag({ resume: true });
         }
 
         // ---------- 导入自动打标（第三波：对齐桌面 useCardCrud.processAutoTagsAndCategory） ----------
@@ -1356,7 +1697,8 @@ onBeforeUnmount(() => {
             showUrlImport, urlInput, urlImporting, doUrlImport, onUrlImportClose,
             showMore, moreActions, onMoreSelect,
             batchMode, batchSet, showBatchTag, batchTagMode, batchTagInput, showBatchGroup,
-            showBatchAiTag, aiTagRunning, aiTagProgress, onBatchAiTag, onBatchAiTagClose,
+            showBatchAiTag, aiTagRunning, aiTagProgress, onBatchAiTag, onBatchAiTagClose, onStopBatchAiTag,
+            packSize, skipTagged, resumeInfo, onResumeBatchAiTag,
             toggleBatch, selectAllBatch, exitBatch, onBatchTagClose, onBatchDelete, onBatchPush, dedupeMode,
             showFab, scrollPercent, scrollToTop, scrollToBottom
         };
@@ -1503,6 +1845,10 @@ onBeforeUnmount(() => {
 .bb-count { font-size: 12px; color: var(--van-gray-6, #969799); flex-shrink: 0; margin-right: 2px; }
 .aitag-progress { padding: 8px 16px 18px; }
 .aitag-desc { font-size: 13px; color: var(--van-gray-6, #646566); line-height: 1.5; margin: 0 0 14px; }
+.aitag-opts { margin: 0 -16px 12px; }
+.aitag-opt-row { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 13px; }
+.aitag-opt-label { color: var(--van-text-color, #323233); }
+.aitag-opt-hint { font-size: 12px; color: var(--van-gray-5, #969799); }
 .aitag-bar .van-progress { margin-bottom: 10px; }
 .aitag-status { font-size: 13px; color: #06b6d4; margin: 0 0 4px; }
 .aitag-count { font-size: 12px; color: var(--van-gray-5, #969799); margin: 0; font-variant-numeric: tabular-nums; }

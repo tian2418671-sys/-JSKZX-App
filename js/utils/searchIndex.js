@@ -19,6 +19,8 @@ class SearchIndex {
         this.cardTags = new WeakMap();
         this.buildTime = 0;
         this.cardCount = 0;
+        // 🔍 PK-18：索引是否正在构建（供消费方判定「就绪且覆盖全库」才走索引）
+        this.building = false;
     }
 
     build(library, extractText, extractTags, extractShortText) {
@@ -34,23 +36,28 @@ class SearchIndex {
      */
     async buildAsync(library, extractText, extractTags, extractShortText, chunkSize = 50) {
         this.clear();
-        const cards = library || [];
-        for (let i = 0; i < cards.length; i += chunkSize) {
-            const chunk = cards.slice(i, i + chunkSize);
-            for (const card of chunk) this._indexCard(card, extractText, extractTags, extractShortText);
-            // 每处理一个 chunk 后 yield 给主线程
-            if (i + chunkSize < cards.length) {
-                await new Promise(resolve => {
-                    if (typeof requestIdleCallback === 'function') {
-                        requestIdleCallback(resolve, { timeout: 50 });
-                    } else {
-                        setTimeout(resolve, 0);
-                    }
-                });
+        this.building = true;
+        try {
+            const cards = library || [];
+            for (let i = 0; i < cards.length; i += chunkSize) {
+                const chunk = cards.slice(i, i + chunkSize);
+                for (const card of chunk) this._indexCard(card, extractText, extractTags, extractShortText);
+                // 每处理一个 chunk 后 yield 给主线程
+                if (i + chunkSize < cards.length) {
+                    await new Promise(resolve => {
+                        if (typeof requestIdleCallback === 'function') {
+                            requestIdleCallback(resolve, { timeout: 50 });
+                        } else {
+                            setTimeout(resolve, 0);
+                        }
+                    });
+                }
             }
+            this.buildTime = Date.now();
+            return this.stats();
+        } finally {
+            this.building = false;
         }
-        this.buildTime = Date.now();
-        return this.stats();
     }
 
     add(card, extractText, extractTags, extractShortText) {
@@ -75,6 +82,9 @@ class SearchIndex {
     }
 
     search(keywords = [], options = {}) {
+        // ⚠️ 必须先把查询串 token 化：`_getMatches` 只做「短字段 token 的精确/子串匹配」，
+        //    直接拿整串 `系统` 去查会 miss（短字段里没有这个 token）→ 被当成 0 结果。
+        //    旧注释说「调用方会传 token 数组」，但全文线性兜底只对 token 生效，语义不完整。
         const terms = Array.isArray(keywords) ? keywords : this._tokenize(String(keywords).toLowerCase());
         const normalized = terms.map(term => String(term).toLowerCase()).filter(Boolean);
         const { tags = [], excludeKeywords = [] } = options;
@@ -181,6 +191,7 @@ class SearchIndex {
         this.cards.clear();
         this.cardCount = 0;
         this.buildTime = 0;
+        this.building = false;
     }
 
     stats() {

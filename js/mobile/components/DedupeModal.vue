@@ -537,7 +537,11 @@ export default {
         const chunkTextForDiff = (text) => {
             if (!text) return [];
             try {
-                return text.split(/(?<=[。！？.!?\n]+)/).map((s) => s.trim()).filter(Boolean);
+                // ⚠️ 不用 `split(/(?<=[。！？.!?\n]+)/)`：部分真机 WebView（Chromium 101）
+                //    执行 lookbehind 会触发 V8 内部 CHECK 失败 → 渲染进程崩溃、App 被连带杀掉。
+                //    改用「在标点后插标记再切分」的等价写法（无 lookbehind）。
+                const marked = text.replace(/([。！？.!?\n]+)/g, '$1\u0000');
+                return marked.split('\u0000').map((s) => s.trim()).filter(Boolean);
             } catch (e) {
                 return text.split('\n').map((s) => s.trim()).filter(Boolean);
             }

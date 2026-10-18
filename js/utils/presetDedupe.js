@@ -140,8 +140,28 @@ export const normName = (s) => String(s == null ? '' : s).normalize('NFKC').toLo
 /** 尾部副本形状：`(1)` / `（2）` / `_20250925` / `_2025092501` / ` copy2` / `_old` / `-bak` */
 const REPLICA_SHAPES_TAIL = /(?:[_\- ]?(?:copy|backup|bak|old|new)(?:[_\-\d]+)?|\(\d+\)|（\d+）|[_\- ]?\d{4}[-_]?\d{2}[-_]?\d{2}(?:[t_\-]\d{1,6}z?)?|[_\-]\d{6,})$/i;
 
-/** 数字版本形状（token 边界，兼容 CJK 邻接）：`v1.0b` / `2.2` / `3.0-1`（数字前后可直接接中文，如 `2.2版`） */
-const VERSION_SHAPE_G = /(?<=^|[\s\-_\u3400-\u9fff])v?\d+(?:[.\-]\d+)*[a-z]?(?=$|[\s\-_\u3400-\u9fff])/gi;
+/**
+ * 数字版本形状（token 边界，兼容 CJK 邻接）：`v1.0b` / `2.2` / `3.0-1`（数字前后可直接接中文，如 `2.2版`）
+ *
+ * ⚠️ 原写法用后行断言 `(?<=^|[\s\-_\u3400-\u9fff])` 做「前边界」，但**部分真机 WebView
+ * （实测 Chromium 101）执行 lookbehind 会触发 V8 内部 CHECK 失败 → 渲染进程 SIGTRAP
+ * 崩溃、App 被连带杀掉**。故改为「把前边界捕进 m[1]」的写法：
+ * 替换时 `stripVersionShape()` 会把 m[1] 原样保留、只把版本号换成空格（语义等价）。
+ */
+const VERSION_SHAPE_G = /(^|[\s\-_\u3400-\u9fff])(v?\d+(?:[.\-]\d+)*[a-z]?)(?=$|[\s\-_\u3400-\u9fff])/gi;
+
+/**
+ * 把版本形状匹配替换为「保留前边界 + 空格」，并把被剥掉的版本号 push 进 stripped。
+ * @param {string} _match 整体匹配
+ * @param {string} lead 前边界字符（可能为空串=行首）
+ * @param {string} ver 版本号实体
+ * @param {string[]} stripped 收集器
+ * @returns {string}
+ */
+const stripVersionShape = (_match, lead, ver, stripped) => {
+    stripped.push(ver);
+    return `${lead} `;
+};
 
 /** 分隔符（形状剥离后的折叠用） */
 const SEPARATORS_G = /[\s\-_.,/\\()[\]{}，（）「」【】『』—–]+/g;
@@ -162,7 +182,7 @@ export const extractNameStem = (rawName) => {
         if (s === before) break;
     }
     // 形状②：数字版本（任意位置，token 边界）
-    s = s.replace(VERSION_SHAPE_G, (m) => { stripped.push(m); return ' '; });
+    s = s.replace(VERSION_SHAPE_G, (match, lead, ver) => stripVersionShape(match, lead, ver, stripped));
 
     const stem0 = s.replace(SEPARATORS_G, '').toLowerCase();
     return { stem0, stripped };

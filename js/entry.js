@@ -53,7 +53,14 @@ async function registerPlatform(app) {
         mounted(el, binding) {
             const value = typeof binding.value === 'function' ? binding.value : null;
             let timer = null;
-            let fired = false;
+            /**
+             * 🐛 真机实测修复（2026-10-18）：原实现「长按触发后 700ms 自动复位 fired」，
+             *    而真机 WebView 的 click 事件常在手指抬起后 >700ms 才派发（旧 WebView + 合成器
+             *    延时），复位后 click 不再被拦截 → **长按弹出操作菜单的同时马上打开卡片详情页**。
+             *    修复：fired 只在「下一次 touchstart」时复位，并记录触发时间，
+             *    click 在 1.5s 内的都视为长按尾随事件拦截（超时窗仅作兜底防永久吞点击）。
+             */
+            let firedAt = 0;
             let sx = 0;
             let sy = 0;
             const clear = () => {
@@ -63,6 +70,8 @@ async function registerPlatform(app) {
                 }
             };
             const onStart = (e) => {
+                // 新的一次触摸开始 ⇒ 复位上一次长按的抑制标记
+                firedAt = 0;
                 const t = e.changedTouches && e.changedTouches[0];
                 if (t) {
                     sx = t.clientX;
@@ -70,13 +79,12 @@ async function registerPlatform(app) {
                 }
                 clear();
                 timer = setTimeout(() => {
-                    fired = true;
+                    firedAt = Date.now();
                     // 触觉反馈:长按触发时轻震一下,提示手势已被识别
                     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
                         try { navigator.vibrate(15); } catch (err) { /* 忽略设备不支持 */ }
                     }
                     if (value) value(e);
-                    setTimeout(() => { fired = false; }, 700);
                 }, 500);
             };
             const onMove = (e) => {
@@ -85,7 +93,8 @@ async function registerPlatform(app) {
             };
             const onEnd = () => clear();
             const onClick = (e) => {
-                if (fired) {
+                // 长按触发后的尾随 click（含真机延迟派发）：一律吞掉
+                if (firedAt && Date.now() - firedAt < 1500) {
                     e.preventDefault();
                     e.stopPropagation();
                 }
@@ -93,6 +102,7 @@ async function registerPlatform(app) {
             el.addEventListener('touchstart', onStart, { passive: true });
             el.addEventListener('touchmove', onMove, { passive: true });
             el.addEventListener('touchend', onEnd, { passive: true });
+            // 捕获阶段拦截：早于元素自身的 @click 处理
             el.addEventListener('click', onClick, true);
             el.__lpCleanup = () => {
                 clear();
