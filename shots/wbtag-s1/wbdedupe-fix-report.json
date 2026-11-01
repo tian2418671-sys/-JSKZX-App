@@ -1,0 +1,28 @@
+{
+  "steps": [
+    "1_打开瞬间: {\"popup\":true,\"loadingVisible\":false,\"pendingText\":null,\"closeIcons\":0,\"selfCross\":1}",
+    "2_单X断言: {\"popupCloseIcon\":0,\"selfCross\":1,\"pass\":true}",
+    "3_扫描完成: {\"groups\":1,\"emptyText\":\"未发现重复\"}",
+    "4_查重结果: {\"groups\":[{\"name\":\"---温馨的翻斗花园1.0\",\"n\":2,\"rows\":[{\"fname\":\"---温馨的翻斗花园1.0.json\",\"sim\":null},{\"fname\":\"---温馨的翻斗花园1.0_副本.json\",\"diff\":\"完全一致\",\"sim\":100}]}],\"domGroups\":1}"
+  ],
+  "result": {
+    "groups": [
+      {
+        "name": "---温馨的翻斗花园1.0",
+        "n": 2,
+        "rows": [
+          {
+            "fname": "---温馨的翻斗花园1.0.json",
+            "sim": null
+          },
+          {
+            "fname": "---温馨的翻斗花园1.0_副本.json",
+            "diff": "完全一致",
+            "sim": 100
+          }
+        ]
+      }
+    ],
+    "domGroups": 1
+  }
+}

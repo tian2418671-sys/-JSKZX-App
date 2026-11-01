@@ -1,0 +1,223 @@
+{
+  "at": "2026-09-25T14:18:24.183Z",
+  "steps": [
+    {
+      "name": "1_预设页就绪",
+      "val": {
+        "ok": true
+      }
+    },
+    {
+      "name": "2_扫描完成",
+      "val": {
+        "ok": true,
+        "presets": 26
+      }
+    },
+    {
+      "name": "3_查重结果",
+      "val": {
+        "popup": true,
+        "groups": [
+          {
+            "name": "测试预",
+            "byStructure": true,
+            "renamed": 3,
+            "n": 13,
+            "members": [
+              {
+                "name": "测试预设01",
+                "type": "",
+                "label": "✅ 推荐保留",
+                "struct": null,
+                "content": null,
+                "center": true
+              },
+              {
+                "name": "测试预设02",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设03",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设04",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设05",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设06",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设07",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设08",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设09",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "测试预设10",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "BOM预设",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "CRLF预设",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "嵌套预设",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              }
+            ]
+          },
+          {
+            "name": "双人成行春和景明",
+            "byStructure": true,
+            "renamed": 2,
+            "n": 3,
+            "members": [
+              {
+                "name": "双人成行 V5.2 —春和景明.json",
+                "type": "",
+                "label": "✅ 推荐保留",
+                "struct": null,
+                "content": null,
+                "center": true
+              },
+              {
+                "name": "双人成行 V5.2 —春和景明TK.json",
+                "type": "sampler",
+                "label": "参数变体",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              },
+              {
+                "name": "双人成行 V5.2 —春和景明（数据库变量版）.json",
+                "type": "flipped",
+                "label": "启用状态不同",
+                "struct": 95,
+                "content": 78,
+                "center": false
+              }
+            ]
+          },
+          {
+            "name": "大预设12mb",
+            "byStructure": true,
+            "renamed": 1,
+            "n": 2,
+            "members": [
+              {
+                "name": "大预设1.2MB",
+                "type": "",
+                "label": "✅ 推荐保留",
+                "struct": null,
+                "content": null,
+                "center": true
+              },
+              {
+                "name": "超大预设11MB",
+                "type": "reskin",
+                "label": "骨架相同（换皮）",
+                "struct": 100,
+                "content": 100,
+                "center": false
+              }
+            ]
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "4_准备清理",
+      "val": {
+        "group": "双人成行春和景明",
+        "keep": "双人成行 V5.2 —春和景明.json",
+        "trash": [
+          "双人成行 V5.2 —春和景明TK.json",
+          "双人成行 V5.2 —春和景明（数据库变量版）.json"
+        ]
+      }
+    },
+    {
+      "name": "5_清理后",
+      "val": {
+        "confirmed": 1,
+        "before": 26,
+        "after": 26,
+        "leftover": {
+          "groups": 3,
+          "popupOpen": true,
+          "names": [
+            "双人成行 V5.2 —春和景明.json",
+            "双人成行 V5.2 —春和景明TK.json",
+            "双人成行 V5.2 —春和景明（数据库变量版）.json"
+          ]
+        }
+      }
+    }
+  ]
+}

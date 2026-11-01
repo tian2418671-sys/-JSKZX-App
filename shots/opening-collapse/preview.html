@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开场白折叠效果预览 · 静态示意（A / B / A+B 结合）</title>
+<style>
+:root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --text: #323233;
+    --text2: #646566;
+    --text3: #969799;
+    --line: #ebedf0;
+    --primary: #06b6d4;
+    --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #e8eaee;
+    color: var(--text);
+    padding: 24px 16px 60px;
+    overflow-x: hidden;
+}
+.page-head { max-width: 960px; margin: 0 auto 18px; }
+.page-head h1 { font-size: 20px; font-weight: 700; }
+.page-head p { margin-top: 6px; font-size: 13px; color: var(--text2); line-height: 1.7; }
+.page-head .tip {
+    margin-top: 10px; padding: 10px 12px; background: #fff; border-radius: 8px;
+    font-size: 12px; color: var(--text2); border-left: 3px solid var(--primary); line-height: 1.7;
+}
+.stage { max-width: 960px; margin: 0 auto; display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; }
+.phone { width: 400px; max-width: 100%; background: var(--bg); border-radius: 22px; border: 1px solid #d9dce1; overflow: hidden; box-shadow: 0 8px 26px rgba(0,0,0,.08); }
+.phone-head {
+    padding: 12px 16px; font-size: 14px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #06b6d4, #0ea5e9);
+}
+.phone-head small { display: block; margin-top: 3px; font-size: 11px; font-weight: 400; opacity: .9; }
+.app { padding: 10px 12px 18px; min-height: 560px; }
+
+/* ===== 模拟 Vant 折叠区与字段 ===== */
+.sec-title { font-size: 13px; font-weight: 600; color: var(--text2); padding: 8px 4px 6px; }
+.field { background: var(--card); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 9px; }
+.field label { display: block; font-size: 12px; color: var(--text3); margin-bottom: 6px; }
+.field .ta {
+    font-size: 13px; line-height: 1.7; color: var(--text);
+    background: #f7f8fa; border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
+}
+.placeholder-field { opacity: .55; }
+
+/* ===== 方案 A：整体折叠 ===== */
+.collapse-box { position: relative; overflow: hidden; transition: max-height .28s ease; }
+.collapse-box.collapsed { max-height: 96px; }
+.collapse-box.expanded { max-height: 12000px; }
+.collapse-fade {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 56px; pointer-events: none;
+    background: linear-gradient(to bottom, rgba(247,248,250,0), #f7f8fa 82%);
+    transition: opacity .2s;
+}
+.collapse-box.expanded .collapse-fade { opacity: 0; }
+.sep { color: #b8bcc2; font-size: 11px; text-align: center; padding: 2px 0; }
+.more-btn {
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+    width: 100%; margin-top: 8px; padding: 8px 0;
+    border: none; background: transparent; color: var(--primary);
+    font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px;
+}
+.more-btn:active { background: rgba(6,182,212,.08); }
+.more-btn .arr { transition: transform .25s; font-size: 12px; }
+.more-btn.on .arr { transform: rotate(180deg); }
+.count-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; color: var(--primary); background: rgba(6,182,212,.12); vertical-align: 1px;
+}
+
+/* ===== 方案 B：逐条折叠列表 ===== */
+.g-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 8px; }
+.g-head .t { font-size: 12px; color: var(--text2); font-weight: 600; }
+.g-head .ops { display: flex; gap: 6px; }
+.g-head button {
+    border: none; background: rgba(6,182,212,.12); color: var(--primary);
+    font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; font-weight: 600;
+}
+.g-head button:active { opacity: .75; }
+.g-list { background: var(--card); border-radius: var(--radius); overflow: hidden; }
+.g-item { border-bottom: 1px solid var(--line); }
+.g-item:last-child { border-bottom: none; }
+.g-row {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
+    transition: background .15s;
+}
+.g-row:active { background: #f5f6f7; }
+.g-idx {
+    flex: none; width: 30px; height: 20px; line-height: 20px; text-align: center;
+    font-size: 11px; font-weight: 700; color: var(--primary); background: rgba(6,182,212,.12); border-radius: 6px;
+}
+.g-preview {
+    flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.g-len { flex: none; font-size: 11px; color: var(--text3); }
+.g-arrow { flex: none; font-size: 11px; color: var(--text3); transition: transform .22s; }
+.g-item.open .g-arrow { transform: rotate(180deg); }
+.g-full {
+    display: none; padding: 0 12px 12px 50px;
+}
+.g-item.open .g-full { display: block; }
+.g-full .ta { font-size: 12.5px; }
+.g-item.open { background: #fbfcfd; }
+
+/* 方案 C：底部「显示全部 / 收起列表」按钮 */
+#cMore { margin-top: 6px; }
+#cMore .arr { transform: none; }
+#cMore.on .arr { transform: rotate(180deg); }
+
+@media (max-width: 860px) { .stage { flex-direction: column; align-items: center; } }
+</style>
+</head>
+<body>
+<div class="page-head">
+    <div style="margin-bottom:14px;padding:12px 14px;background:#fff7e6;border:1px solid #ffd591;border-radius:8px;font-size:13px;line-height:1.8">
+        ⚠️ <b>本页为早期设计对比稿（已过时）</b>：其中的「逐条折叠 / 展开全部正文」等交互已被否决并从 App 中移除。<br>
+        最终实现效果请看 → <a href="final.html" style="color:#06b6d4;font-weight:700">final.html（与 App 一致）</a>
+    </div>
+    <h1>角色卡「备用开场白」折叠效果预览</h1>
+    <p>当前版本：几十条备用开场白会连成一个超长文本块（<code>### 分隔</code> 连排）。三个方案交互均可点击试用 —— 看完告诉我选哪个（或继续调整）。</p>
+    <div class="tip">
+        <b>方案 A · 整体折叠：</b>原文本默认只露约 4 行，点「展开全部」看全量。<br>
+        <b>方案 B · 逐条折叠列表：</b>每条独立成行（编号 + 预览），点击展开单条全文；顶部一键全开/全收。<br>
+        <b>方案 C · A+B 结合（本页新增）★：</b>列表默认<b>只显示前 5 条</b>（不占屏），点「显示全部」看完整列表；任意条目点击展开全文；顶部「展开全部正文」一键展开所有条目。条数再多，收起时也就五行。
+    </div>
+</div>
+
+<div class="stage">
+    <!-- ================= 方案 A ================= -->
+    <div class="phone" id="phoneA">
+        <div class="phone-head">方案 A · 整体折叠<small>改动最小：超长文本块默认收起，展开看全部</small></div>
+        <div class="app">
+            <div class="sec-title">高级设定</div>
+            <div class="field placeholder-field"><label>创建者备注</label><div class="ta">（以上字段略…）</div></div>
+
+            <div class="field">
+                <label>开场白（首条）</label>
+                <div class="ta">风雪撞开了客栈的门。她抖落肩头的雪，在柜台前停下。</div>
+            </div>
+
+            <div class="field">
+                <label>备用开场白<span class="count-badge" id="aCount"></span></label>
+                <div class="collapse-box collapsed" id="aBox">
+                    <div class="ta" id="aBody"></div>
+                    <div class="collapse-fade"></div>
+                </div>
+                <button class="more-btn" id="aBtn">展开全部 <span class="arr">▾</span></button>
+            </div>
+
+            <div class="field placeholder-field"><label>场景</label><div class="ta">（以下字段略…）</div></div>
+        </div>
+    </div>
+
+    <!-- ================= 方案 B ================= -->
+    <div class="phone" id="phoneB">
+        <div class="phone-head">方案 B · 逐条折叠列表<small>每条独立成行，点击展开；顶部一键全开/全收</small></div>
+        <div class="app">
+            <div class="sec-title">高级设定</div>
+            <div class="field placeholder-field"><label>创建者备注</label><div class="ta">（以上字段略…）</div></div>
+
+            <div class="field">
+                <label>开场白（首条）</label>
+                <div class="ta">风雪撞开了客栈的门。她抖落肩头的雪，在柜台前停下。</div>
+            </div>
+
+            <div class="field" style="padding-bottom: 6px;">
+                <label>备用开场白</label>
+                <div class="g-head">
+                    <span class="t">共 <span id="bCount"></span> 条 · 默认收起</span>
+                    <span class="ops">
+                        <button id="bExpandAll">全部展开</button>
+                        <button id="bCollapseAll">全部收起</button>
+                    </span>
+                </div>
+                <div class="g-list" id="bList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 方案 C：A+B 结合 ================= -->
+    <div class="phone" id="phoneC">
+        <div class="phone-head">方案 C · A+B 结合 ★<small>默认只显示前 5 条；逐条展开全文；显示全部 / 收起</small></div>
+        <div class="app">
+            <div class="sec-title">高级设定</div>
+            <div class="field placeholder-field"><label>创建者备注</label><div class="ta">（以上字段略…）</div></div>
+
+            <div class="field">
+                <label>开场白（首条）</label>
+                <div class="ta">风雪撞开了客栈的门。她抖落肩头的雪，在柜台前停下。</div>
+            </div>
+
+            <div class="field" style="padding-bottom: 6px;">
+                <label>备用开场白<span class="count-badge" id="cCount"></span></label>
+                <div class="g-head">
+                    <span class="t" id="cStatus">默认收起 · 点击条目查看全文</span>
+                    <span class="ops">
+                        <button id="cExpandAllBtn" data-mode="expand">展开全部正文</button>
+                    </span>
+                </div>
+                <div class="g-list" id="cList"></div>
+                <button class="more-btn" id="cMore">显示全部 <span class="arr">▾</span></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ===== 演示数据：25 条备用开场白（长度不一，模拟真实卡片） =====
+const GREETINGS = [
+    '夜色像浓墨化开。她推开那扇吱呀作响的木门，风裹着雪片灌进来，吹得满堂灯火摇晃。',
+    '「你来了。」他头也没抬，把最后一枚棋子落在天元。窗外的雨敲了一整夜，烛芯已经换过三回。',
+    '清晨的市集刚开张。蒸笼的白气里，她一眼就认出了那个六年未见的背影——肩线没变，走路带风的样子也没变。',
+    '穿越后的第一分钟，你就知道自己摊上事了：面前这张桌子对面，坐着一个正把你从头到脚打量一遍的女人，眼神像在对账。',
+    '没有人知道山门是何时立起来的。你只知道，当你在雪地里跪到第七天，那扇门终于开了。',
+    '「别动。」冰冷的刀锋贴着你的喉咙，声音却轻得像叹息，「谁派你来的？」',
+    '酒吧的霓虹灯坏了半边，一明一灭。她坐在吧台角落，面前第七个空杯子刚被收走。',
+    '你在旧书摊前停下。摊主是位老人，他把一本没有书名的册子推到你面前：「它在等你很久了。」',
+    '第一次见到她，是在通缉令上。第二次见到她，是她翻进你家的窗户，肩上还中着箭。',
+    '星际历 2287 年，空间站主控室。警报响起的那一刻，屏幕上只跳动着一行字：「还有十分钟，它会到。」',
+    '开学第一天，你的同桌趴在桌上睡觉，露出一截缠着绷带的手腕。袖口下，隐约能看到某种纹样。',
+    '王城钟声敲响第十二下。广场上的人群忽然安静——谁都看见了，天边那道裂缝正缓缓睁开一只眼睛。',
+    '「所以，」她合上账本，指节叩了叩桌面，「欠我的三顿饭，是打算还钱，还是还人？」灯下的笑不怀好意，却好看得过分。',
+    '你睁开眼时正躺在自家床上，一切如常。除了——床头柜上那封信的发件日期，是三年后的今天。',
+    '雨夜的地铁末班车。整节车厢只有你们两个人，以及窗外倒着掠过的一串串站名——全是你不认识的字。',
+    '「喂，新来的。」她把重剑往地上一插，震得演武场尘土飞扬，「想进队可以，先接我三招。」',
+    '雾散的时候，你已经站在了断崖边上。脚下的云海里，隐约传来和你名字一样的呼唤声。',
+    '柜台后的人抬起眼皮：「收购回忆，明码标价。你要卖，还是买？」柜台上那台老式录音机，红灯正亮着。',
+    '你醒来时，全村的人都在门外站着，表情像是在看一个不该回来的人。村长手里攥着一封被拆开的信。',
+    '封印松动的那晚，月亮停在半空没动。镇子里所有的狗都在朝同一个方向叫——那里的井，已经干涸了三十年。',
+    '高考结束那天，你收到一条彩信，附件是张照片：未来十年后的自己，站在一间你从没见过的办公室窗前。',
+    '「三分钟。」她替你把领结扶正，语气平静，「记住，无论台上发生什么——别回头看我。」幕布另一侧，掌声已经响了。',
+    '末班船的汽笛拉响时，追债的人才赶到码头。你扶着摇晃的栏杆回头望，城市正一寸寸沉进夜色里。',
+    '这是你第七次回到这一天。同样的雨，同样的街角，同样那辆失控冲来的卡车——不同的是，这次你看见了她的脸。',
+    '「签了吧。」契约就摊在桌上，羊角、火漆、六行小字。「代价写得很清楚：你所有的生日。」你注意到，墨迹在你注视下微微流动。'
+];
+
+// ===== 渲染方案 A =====
+const aBody = document.getElementById('aBody');
+const aBox = document.getElementById('aBox');
+const aBtn = document.getElementById('aBtn');
+document.getElementById('aCount').textContent = `共 ${GREETINGS.length} 条`;
+
+// 还原 App 现状：join('\n### 分隔\n')
+aBody.innerHTML = GREETINGS.map((g, i) =>
+    `<span class="sep">— 第 ${i + 1} 条 —</span>\n${g.replace(/</g, '&lt;')}`
+).join('\n\n');
+
+let aOpen = false;
+aBtn.addEventListener('click', () => {
+    aOpen = !aOpen;
+    aBox.classList.toggle('collapsed', !aOpen);
+    aBox.classList.toggle('expanded', aOpen);
+    aBtn.classList.toggle('on', aOpen);
+    aBtn.innerHTML = aOpen
+        ? `收起备用开场白 <span class="arr">▾</span>`
+        : `展开全部 ${GREETINGS.length} 条 <span class="arr">▾</span>`;
+});
+
+// ===== 列表条目模板（方案 B / C 共用） =====
+function itemHtml(g, i) {
+    const preview = g.replace(/\s+/g, ' ').slice(0, 40);
+    return `
+    <div class="g-item" data-i="${i}">
+        <div class="g-row">
+            <span class="g-idx">#${i + 1}</span>
+            <span class="g-preview">${preview.replace(/</g, '&lt;')}…</span>
+            <span class="g-len">${g.length}字</span>
+            <span class="g-arrow">▾</span>
+        </div>
+        <div class="g-full">
+            <div class="ta">${g.replace(/</g, '&lt;')}</div>
+        </div>
+    </div>`;
+}
+
+// ===== 渲染方案 B =====
+const bList = document.getElementById('bList');
+document.getElementById('bCount').textContent = GREETINGS.length;
+bList.innerHTML = GREETINGS.map((g, i) => itemHtml(g, i)).join('');
+
+bList.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.g-row');
+    if (!row) return;
+    row.parentElement.classList.toggle('open');
+});
+document.getElementById('bExpandAll').addEventListener('click', () => {
+    bList.querySelectorAll('.g-item').forEach((el) => el.classList.add('open'));
+});
+document.getElementById('bCollapseAll').addEventListener('click', () => {
+    bList.querySelectorAll('.g-item').forEach((el) => el.classList.remove('open'));
+});
+
+// ===== 渲染方案 C（A+B 结合：默认前 5 条 + 逐条展开 + 显示全部） =====
+const C_PREVIEW_COUNT = 5;
+const cList = document.getElementById('cList');
+const cMore = document.getElementById('cMore');
+const cStatus = document.getElementById('cStatus');
+const cExpandAllBtn = document.getElementById('cExpandAllBtn');
+document.getElementById('cCount').textContent = `共 ${GREETINGS.length} 条`;
+
+let cShowAll = false;
+const cOpenSet = new Set(); // 记住展开的条目（重渲染后恢复）
+
+function renderC() {
+    const idxs = GREETINGS.map((g, i) => i);
+    const shown = cShowAll ? idxs : idxs.slice(0, C_PREVIEW_COUNT);
+    cList.innerHTML = shown.map((i) => itemHtml(GREETINGS[i], i)).join('');
+    cList.querySelectorAll('.g-item').forEach((el) => {
+        if (cOpenSet.has(Number(el.dataset.i))) el.classList.add('open');
+    });
+    cMore.classList.toggle('on', cShowAll);
+    cMore.innerHTML = cShowAll
+        ? `收起列表（仅显示前 ${C_PREVIEW_COUNT} 条） <span class="arr">▾</span>`
+        : `显示全部 ${GREETINGS.length} 条 <span class="arr">▾</span>`;
+    updateCStatus();
+}
+
+function updateCStatus() {
+    const openCount = cOpenSet.size;
+    const shownCount = cShowAll ? GREETINGS.length : C_PREVIEW_COUNT;
+    cStatus.textContent = openCount
+        ? `已展开 ${openCount} 条正文 · 点击条目可收起`
+        : '默认收起 · 点击条目查看全文';
+    const allOpen = shownCount > 0 && openCount >= shownCount;
+    cExpandAllBtn.textContent = allOpen ? '收起全部正文' : '展开全部正文';
+    cExpandAllBtn.dataset.mode = allOpen ? 'collapse' : 'expand';
+}
+
+cList.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.g-row');
+    if (!row) return;
+    const item = row.parentElement;
+    const i = Number(item.dataset.i);
+    item.classList.toggle('open');
+    if (item.classList.contains('open')) cOpenSet.add(i); else cOpenSet.delete(i);
+    updateCStatus();
+});
+
+cMore.addEventListener('click', () => {
+    cShowAll = !cShowAll;
+    renderC();
+});
+
+cExpandAllBtn.addEventListener('click', () => {
+    if (cExpandAllBtn.dataset.mode === 'collapse') {
+        cOpenSet.clear();
+    } else {
+        const idxs = GREETINGS.map((g, i) => i);
+        (cShowAll ? idxs : idxs.slice(0, C_PREVIEW_COUNT)).forEach((i) => cOpenSet.add(i));
+    }
+    renderC();
+});
+
+// ===== 静态演示模式（供截图/快速预览） =====
+// #demoA 展开方案A；#demoB 展开方案B前3条；#demoC 方案C：显示全部 + 展开前2条正文
+if (location.hash === '#demoA') {
+    document.getElementById('phoneB').style.display = 'none';
+    document.getElementById('phoneC').style.display = 'none';
+    setTimeout(() => { aBtn.click(); }, 50);
+}
+if (location.hash === '#demoB') {
+    document.getElementById('phoneA').style.display = 'none';
+    document.getElementById('phoneC').style.display = 'none';
+    setTimeout(() => {
+        document.querySelectorAll('#bList .g-item').forEach((el, i) => { if (i < 3) el.classList.add('open'); });
+    }, 50);
+}
+if (location.hash === '#demoC') {
+    document.getElementById('phoneA').style.display = 'none';
+    document.getElementById('phoneB').style.display = 'none';
+    setTimeout(() => {
+        cShowAll = true;
+        cOpenSet.add(0);
+        cOpenSet.add(1);
+        renderC();
+    }, 50);
+}
+if (location.hash === '#onlyC') {
+    document.getElementById('phoneA').style.display = 'none';
+    document.getElementById('phoneB').style.display = 'none';
+}
+
+renderC();
+</script>
+</body>
+</html>
