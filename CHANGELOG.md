@@ -13,8 +13,13 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 **发布信息**
 
-- 提交：见本段提交（`main-v1.10`）
-- 改动文件：`LibraryFsPlugin.java`、`MainActivity.java`、新增 `androidx/documentfile/provider/FileDocumentFile.java`、`AndroidManifest.xml`、`js/bridge/android.js`、`contract.js`、`SettingsView.vue`、`CardLibraryView.vue`
+- 提交：`743b582`（`main-v1.10`，已 push）
+- Release：tag `v1.11.0`（Latest）· 资产 `sillytavern-card-manager-1.11.0-signed.apk`（3.90 MB）
+- sha256 `d60398c35bbec2078a6c24d490cb1129778a7f3749058691e8651eebdfcb821a`（线上包 `gh release download` 校验一致）
+- 正文 = `RELEASE_NOTES.md` v1.11.0 段抽取 **2250 字节**
+- 校验：入口 `index-D3e9UbsJ.js` · 26 分块 web==android · **21 项**关键功能标记齐备 · 签名 CN=JSKZX Mobile
+- `npm test` **209/209**
+- 改动文件：`LibraryFsPlugin.java`、`MainActivity.java`、新增 `androidx/documentfile/provider/FileDocumentFile.java`、`AndroidManifest.xml`、`js/bridge/android.js`、`contract.js`、`SettingsView.vue`、`CardLibraryView.vue`、`scripts/release-android.mjs`
 - 实测：模拟器（Android 15 / API 35）+ **真机 ZTE 7551N / Android 13 / WebView Chromium 101**
 
 ### 🛠 库扫描「扫描到 0 张」归因与并发抢块修复（用户反馈：OPPO 无法扫描到本地文件）

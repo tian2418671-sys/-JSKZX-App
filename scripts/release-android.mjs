@@ -20,7 +20,7 @@
  * 归属:package.json 的 release:android 命令。
  */
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -333,7 +333,18 @@ function uploadToRelease(tag, hash) {
     }
 
     if (remoteDigest) {
-        execSync(`gh release delete-asset ${tag} app-release.apk --yes`, { cwd: root, stdio: 'inherit', shell: true });
+        // 按实际存在的 .apk 附件删除(不硬编码文件名:历史附件名可能是 app-release.apk / JSKZX-*.apk / *-signed.apk)
+        try {
+            const view = execSync(`gh release view ${tag} --json assets`, { encoding: 'utf-8', shell: true });
+            const assets = JSON.parse(view).assets || [];
+            for (const a of assets) {
+                if (a?.name && /\.apk$/i.test(a.name)) {
+                    execSync(`gh release delete-asset ${tag} "${a.name}" --yes`, { cwd: root, stdio: 'inherit', shell: true });
+                }
+            }
+        } catch (e) {
+            /* 删附件失败不阻断,由 upload --clobber 兜底 */
+        }
     }
 
     const exists = (() => {
@@ -345,14 +356,20 @@ function uploadToRelease(tag, hash) {
         }
     })();
 
+    // ⚠ gh 的 `<file>#<asset-name>` 重命名语法在 Windows(cmd/PowerShell)下会被 `#` 注释截断,
+    //   实际上传名会退化成 app-release.apk。改为先复制成规范文件名再上传。
+    const assetName = `sillytavern-card-manager-${tag.replace(/^v/, '')}-signed.apk`;
+    const uploadPath = join(tmpdir(), assetName);
+    copyFileSync(APK_PATH, uploadPath);
+
     if (exists) {
-        run(`gh release upload ${tag} "${APK_PATH}#JSKZX-${tag}.apk"`);
+        run(`gh release upload ${tag} "${uploadPath}" --clobber`);
         if (notesFile) run(`gh release edit ${tag} --notes-file "${notesFile}"`);
-        log(`   ✓ 已替换 ${tag} 的 release 附件${notesFile ? ' 并同步发布正文' : ''}`);
+        log(`   ✓ 已替换 ${tag} 的 release 附件(${assetName})${notesFile ? ' 并同步发布正文' : ''}`);
     } else {
         const notesArg = notesFile ? ` --notes-file "${notesFile}"` : '';
-        run(`gh release create ${tag} "${APK_PATH}#JSKZX-${tag}.apk" --title "${tag}" --target main-v1.10${notesArg}`);
-        log(`   ✓ 已创建 ${tag} 并上传附件${notesFile ? '(含发布正文)' : '(正文为空,建议先补 RELEASE_NOTES.md 段落)'}`);
+        run(`gh release create ${tag} "${uploadPath}" --title "${tag}" --target main-v1.10${notesArg} --latest`);
+        log(`   ✓ 已创建 ${tag} 并上传附件 ${assetName}${notesFile ? '(含发布正文)' : '(正文为空,建议先补 RELEASE_NOTES.md 段落)'}`);
     }
 }
 
