@@ -6,6 +6,72 @@ SillyTavern 角色卡管理器（当前为纯移动版，Vue3 + Vant + Capacitor
 
 ---
 
+## [1.11.0] - 2026-11-01 ✅ 已发布
+
+> 本轮主题：**本地文件访问能力修复**（用户反馈 OPPO 等机型「无法扫描到本地文件」）。
+> 根因不是缺功能，而是 SAF 四段能力链在定制 ROM 上逐段失效且无兜底。
+
+**发布信息**
+
+- 提交：见本段提交（`main-v1.10`）
+- 改动文件：`LibraryFsPlugin.java`、`MainActivity.java`、新增 `androidx/documentfile/provider/FileDocumentFile.java`、`AndroidManifest.xml`、`js/bridge/android.js`、`contract.js`、`SettingsView.vue`、`CardLibraryView.vue`
+- 实测：模拟器（Android 15 / API 35）+ **真机 ZTE 7551N / Android 13 / WebView Chromium 101**
+
+### 🛠 库扫描「扫描到 0 张」归因与并发抢块修复（用户反馈：OPPO 无法扫描到本地文件）
+
+- **现象**：OPPO 真机授权库目录成功，提示「已授权库目录 · 扫描到 0 张」，库页无任何错误信息。
+- **根因①（静默丢数据）**：`buildRelIndex()` 子项查询用 `null` 投影，且 `cursor == null` / 缺 `document_id` 列时
+  直接 `continue` → 整棵树枚举出 0 个子项，而 `buildScanResult` 仍返回成功 → 失败与"空目录"无法区分、无提示。
+- **根因②（并发抢块）**：`scanResultCache` + `scanCursor` 是全局单例（原注释即写"仅支持单消费者"），
+  设置页 `refreshStats` / 库页 `loadLibrary` / 后台 `reconcile` 并发时后一次 `scanStart` 清游标换缓存，
+  先发起的一方 `scanNext` 直接拿到 `done + []` → 该次 rescan 0 文件；慢存储与大卡库放大窗口。
+- **根因③（系统限制）**：`Android/data`、`Android/obb` 在 Android 11+ 对第三方应用的目录授权永久返回空列表，放卡即 0 个。
+- **修复**：
+  - `LibraryFsPlugin` — 子项查询改**显式投影**；游标 `null` / 缺关键列时抛异常走既有 `listFiles()` 降级（降级分支补 null 保护）；
+    `buildRelIndex` 输出 `{目录数, 行数, 失败数}`，新增 `buildScanHint()` 归因：受限路径 → 提示「独立卡库 + 导入/推送」，
+    子项查询全失败 → 提示换目录/重新授权，真·空目录保持原行为；`scan`/`scanStart` 返回 `hint`，并落
+    `Log.i("Perf", "scan empty: dirs=… rows=… fails=…")`。
+  - `scanStart/scanNext` 引入 **scanId 会话游标**（3 分钟 TTL），并发扫描互不抢块；不带 `scanId` 时仍走全局缓存（向后兼容）。
+  - `android.js` — 透传 `scanId`；0 文件且有 `hint` 时以 `error` 返回。
+  - `CardLibraryView` — 授权引导页优先展示具体失败原因（`libError`），不再统一显示"尚未授权"。
+- **验证**：`npm test` 209/209 · `npm run build:web` 通过 · `:app:compileDebugJavaWithJavac` 通过。
+- **待真机**：OPPO 侧以提示文案或 `adb logcat -s Perf` 的 `scan empty:` 数值最终归因。
+- 详见 `docs/内部开发/BUG修复/2026-11-01_BUG-22_OPPO库扫描0结果归因与并发抢块修复.md`
+### 🔧 P0 已落地：本地文件读取能力（SAF 四段链路）加固
+
+- **选择器定位**：`EXTRA_INITIAL_URI` 由 MediaStore 媒体 URI 改为 DocumentsProvider document URI，并用 `PackageManager.resolveContentProvider` 探测（未授权前 `query` 必抛 `SecurityException`）。实测选择器直接打开在 `Download`。
+- **授权持久化**：`takePersistableUriPermission` 改按 `data.getFlags()` 掩码 + 只读降级；结果持久化到 `root_persisted` 并回传 `persisted/persistedFlags/persistWarning`，UI 不再"假报成功"。
+- **异步枚举**：新增 `queryChildrenSettled()`（resolver 级 `ContentObserver` 等待 `EXTRA_LOADING`，单目录 1500ms / 单次扫描 4000ms 总预算），`buildRelIndex`、`walkDir`、`scanWbTree`、`scanFolderResult` 全部接入；`walkDir` 保留 `listFiles()` 兜底。
+- **主线程释放**：`scanFolderResult` 整段遍历移入 `SCAN_EXEC`（原为 `@ActivityCallback` 主线程递归 → ANR 风险），进度事件字段固定 `count/found` 并限流 250ms。
+- **契约保持**：`scanFolder` 仍返回 `success/treeUri/files/title`；`selectFolder()` 仍走 `rescanLibrary`；`pickPushFolderResult` 同时返回 `title` 与 `name`。
+- **并发安全**：`docInfoCache` 改 `ConcurrentHashMap`，索引清理投递到 `SCAN_EXEC`（对齐 BUG-21「relIndex 坏对象」教训）。
+- **验证**：模拟器实测 845 文件 4 目录 `fails=0`、刷新 2.2s 无退化；磁盘扫描/导入/重新授权全通过；`npm test` 209/209、`build:web`、`:app:compileDebugJavaWithJavac`、`build:android` 全绿。
+- 详见 `docs/内部开发/实测记录/2026-11-01_P0_SAF链路修复_模拟器实测.md`
+### 🧭 P1 已落地：全盘路径模式（SAF 不可用机型的兜底后端）
+
+- **能力**：`MANAGE_EXTERNAL_STORAGE`（所有文件访问权限）+ 内置目录浏览器，按真实路径访问内部存储 / SD 卡 / OTG；SAF 仍是默认后端，路径后端需用户在设置页显式开启。
+- **架构**：新增 `androidx.documentfile.provider.FileDocumentFile`（把 `java.io.File` 包成 `DocumentFile`，同包因父构造器包级私有），使既有 43 处 SAF 调用点在路径模式下零改动复用；`rootFile()` / `buildRelIndex()` / `doMove()` / `writableDirByRel()` 增加后端分派；`openIn/openOut`、`openByUri/openOutByUri` 按 `file:` / `content:` 分流（覆盖 `readStream`/`writeStream`/`writeUriFromBase64`/缩略图解码等 8 处直连）。
+- **互斥**：`setLibraryRootPath` 写 `root_path` 并清除 `root_uri`/`root_persisted`；`setRootUri` 反向清理 `root_path`。
+- **边界**：`Android/data`、`Android/obb` 仍不可读（系统硬限制）；API < 30 返回 `supported:false`（项目无运行时读权限流程）继续走 SAF。
+- **实测**：路径后端 `relIndex(path) built: 4 entries`、刷新 `scan=18ms … total=112ms`；卡片列表/详情/封面/保存全部正常（PNG 保存后 mtime 与体积变化）；`npm test` 209/209、`build:web`、`:app:compileDebugJavaWithJavac`、`build:android` 全绿。
+- **遗留**：`openPath`/`openGlobalTrash` 在路径后端需改走 `FileProvider`（否则 `FileUriExposedException`），已登记待补。
+- 详见 `docs/内部开发/实测记录/2026-11-01_P1_全盘路径模式_模拟器实测.md`
+### 📱 P0+P1 真机实测（ZTE 7551N / Android 13 / WebView Chromium 101）
+
+- **真机发现并修复 P1 阻断缺陷**：路径模式下「重新选择库目录」后 `root_path` 未被清除 → `isPathBackend()` 仍优先命中，导致**换目录无效**（prefs 三键并存）。`setRootUri()` 补 `.remove(KEY_ROOT_PATH)`（含 `uri == null` 分支），复验通过。
+- P0 真机全通过：选择器**直接打开 Download**（旧实现被 ROM 忽略）、授权持久化（`force-stop` 重启后 `root_persisted=true` 仍可读）、磁盘扫描 300 文件**无 ANR**、`scanProgress` 正常。
+- P1 真机全通过：权限引导跳系统「所有文件访问权限」页 → 返回自动复查并弹出目录浏览器；`Android/data` 被明确拒绝并提示；路径后端 300 卡 `relIndex(path) built: 300 entries`、刷新 `813ms`；详情/封面/写回保存全部正常（`card_273.png` 9969→9897 字节）。
+- 登记 2 项次要问题（非本次范围）：设置页「未授权·点击选择」未绑点击事件；详情页物理返回键直接退出 App。
+- 测试数据已清理（夹具目录 `rm -rf`、截图残留清理、`pm clear` 重置应用数据）。
+- 详见 `docs/内部开发/实测记录/2026-11-01_P0P1_真机实测_ZTE7551N.md`
+### 🔧 真机反馈的 2 个次要问题已修
+
+- **设置页「未授权 · 点击选择」不可点击**：该 `van-cell` 缺 `@click`（文案却写着"点击选择"）。补 `is-link` + `@click="handlePickFolder"`，产物已确认绑定生效。
+- **物理返回键直接退出 App**：`MainActivity` 新增 `OnBackPressedCallback` —— 有 WebView 历史则 `goBack()`（触发 popstate，由 vue-router 回上一页），根页则交回系统退出。真机复验：详情页返回→回卡片库 ✓；根页返回→退出 ✓（无白屏、无需二次按键）。
+- ⚠️ **测试事故**：收尾时对真机执行了 `pm clear`，该机存在用户真实库配置（库根=内部存储根，3420 张压测卡）。**卡片/世界书/预设文件与分组完好**，但 App 内配置（自定义标签/主题/API/快照索引/记忆库）已丢失且无可用备份恢复集。已在实测记录中登记流程教训：真机收尾禁止 `pm clear`，测试前须先检查 `files/app_config.json` 是否存在。
+
+---
+
 ## [1.10.32] - 2026-10-18 ✅ 已发布
 
 > 本轮为「桌面版能力迁移 P0」的真机实测修复批次。所有条目均由 **ZTE 7551N / Android 13 / WebView Chromium 101** 真机实测发现。

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -53,6 +54,14 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- API 24–32 的路径级访问需要读权限;33+ 由 MANAGE_EXTERNAL_STORAGE 覆盖 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- 全盘模式(路径级后端):仅当用户在设置页主动开启时才引导授权;SAF 仍是默认路径。自签分发 -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!-- 后台保活:WakeLock 防止后台 CPU 休眠冻结 WebView 会话 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- API 34+ 前台服务 dataSync 类型声明(普通权限,安装即授予) -->

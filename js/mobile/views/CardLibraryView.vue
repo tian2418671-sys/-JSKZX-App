@@ -1,3 +1,5 @@
+
+
 <template>
     <div class="view-page">
         <van-nav-bar title="卡片库" safe-area-inset-top>
@@ -15,9 +17,10 @@
                 <!-- 未授权引导：整页覆盖，隐藏工具条，引导完成 SAF 目录授权 -->
                 <div v-if="!libraryReady && !loading && needsAuth" class="auth-guide">
                     <van-icon name="friends-o" size="56" :color="isDark ? '#3f3f46' : '#c8c9cc'" />
-                    <div class="guide-title">{{ authLost ? '库目录已失效' : '尚未授权卡片库目录' }}</div>
+                    <div class="guide-title">{{ authLost ? '库目录已失效' : (libError ? '库目录读取失败' : '尚未授权卡片库目录') }}</div>
                     <div class="guide-desc">
-                        <template v-if="authLost">
+                        <template v-if="libError">{{ libError }}</template>
+                        <template v-else-if="authLost">
                             之前授权的文件夹现在无法访问（可能已被移动、删除或系统回收了授权）。
                             请重新选择角色卡库文件夹以继续使用。
                         </template>
@@ -425,6 +428,12 @@ export default {
         const libraryReady = ref(false);
         const needsAuth = ref(false);
         const authLost = ref(false);
+        // 库扫描失败的具体原因(如「目录在 Android/data 下不可读」)——有值时优先展示,不再统一说"尚未授权"
+        const libError = computed(() => {
+            const e = mobileLibrary.error || '';
+            // 「尚未选择库目录」是首次使用的正常状态,仍走通用授权引导
+            return /尚未选择库目录|未指定库目录/.test(e) ? '' : e;
+        });
         const showSheet = ref(false);
         const showGroupSheet = ref(false);
         const showExportSheet = ref(false);
@@ -810,6 +819,8 @@ onBeforeUnmount(() => {
                 // 选错目录引导:授权成功但该文件夹没有角色卡
                 if (!(res.files && res.files.length)) {
                     showToast('该文件夹未找到角色卡，可重新选择');
+                } else if (res.persistWarning) {
+                    showToast(res.persistWarning);
                 }
             }
             else showToast((res && res.error) || '已取消');
@@ -1684,7 +1695,7 @@ onBeforeUnmount(() => {
         return {
             showInputDialog, inputDialogTitle, inputValue, inputPlaceholder, onInputConfirm, onInputCancel,
             showTagPanel, tagFilter, onTagPick, clearTagFilter,
-            query, selected, viewMode, refreshing, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip,
+            query, selected, viewMode, refreshing, pullDisabled, loading, libraryReady, needsAuth, authLost, isDark, loadTip, libError,
             filtered, visibleList, renderCount, extendRender, groupChips, showSheet, showGroupSheet, showExportSheet, showDedupe,
             quickFilter, quickFilters, showGroupManage, groupManageActions, onGroupManageSelect,
             onQuickFilter, onSelectCategory, setViewMode, pageIndex, pageCard, prevPage, nextPage,

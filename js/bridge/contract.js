@@ -283,6 +283,15 @@ export const ErrorCode = {
  *
  * @method selectPushFolder() → {success:boolean, path?:string, error?:string}
  *   选择推送目标文件夹
+ *
+ * @method allFilesAccessState() → {supported:boolean, granted:boolean, volumes:Array, backend:'saf'|'path', rootPath:string}
+ *   全盘路径模式:权限状态 + 可用存储卷
+ * @method requestAllFilesAccess() → {supported:boolean, granted:boolean, volumes:Array}
+ *   跳系统设置申请「所有文件访问权限」,返回后自动复查
+ * @method listDirByPath({path:string}) → {success:boolean, path:string, parentPath:string, files:Array}
+ *   路径级目录浏览(内置目录选择器)
+ * @method setLibraryRootPath({path:string}) → {success:boolean, backend:'path', path:string, canWrite:boolean}
+ *   以真实路径作为库根(与 SAF 库根互斥)
  */
 
 // ============================================================
@@ -327,6 +336,8 @@ export function validateContract(impl) {
         'importExternalCards', 'downloadCardFromUrl', 'fetchWbUrl',
         // 目录选择
         'selectGenericFolder', 'selectPushFolder',
+        // 全盘路径模式(P1):权限状态 / 请求授权 / 路径浏览 / 切换库根
+        'allFilesAccessState', 'requestAllFilesAccess', 'listDirByPath', 'setLibraryRootPath',
         // 杂项
         'getWindowsDrives'
     ];

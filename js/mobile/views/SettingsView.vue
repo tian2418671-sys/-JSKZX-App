@@ -1,4 +1,4 @@
-﻿<template>
+<template>
     <div class="view-page">
         <van-nav-bar title="设置" safe-area-inset-top />
 
@@ -28,8 +28,22 @@
                     is-link
                     @click="handlePickFolder"
                 />
-                <van-cell v-else title="未授权 · 点击选择" label="首次使用请选择角色卡库存放的文件夹" icon="question-o" />
+                <van-cell
+                    v-else
+                    title="未授权 · 点击选择"
+                    label="首次使用请选择角色卡库存放的文件夹"
+                    icon="question-o"
+                    is-link
+                    @click="handlePickFolder"
+                />
                 <van-cell title="全部卡片" :value="granted ? scanInfo : '—'" />
+                <van-cell
+                    title="全盘路径模式"
+                    :label="pathModeLabel"
+                    icon="scan"
+                    is-link
+                    @click="onPathModeClick"
+                />
             </van-cell-group>
 
             <!-- API 配置(全局唯一入口，测卡 Tab / AI 工具共用) -->
@@ -251,6 +265,44 @@
                 </div>
             </div>
         </van-popup>
+
+        <!-- 全盘路径模式:内置目录浏览器 -->
+        <van-popup v-model:show="showPathBrowser" position="bottom" round style="max-height: 78%">
+            <van-nav-bar :title="pathBrowserTitle" @click-left="onPathUp">
+                <template #left><van-icon name="arrow-left" v-if="pathBrowserParent" /></template>
+                <template #right><van-icon name="cross" @click="showPathBrowser = false" /></template>
+            </van-nav-bar>
+            <div class="volume-bar" v-if="pathVolumes.length > 1">
+                <van-tag
+                    v-for="v in pathVolumes"
+                    :key="v.path"
+                    :type="v.path === pathVolumeRoot ? 'primary' : 'default'"
+                    size="medium"
+                    @click="openPathDir(v.path)"
+                >{{ v.name }}</van-tag>
+            </div>
+            <div class="path-crumb">{{ pathBrowserPath }}</div>
+            <div class="path-list">
+                <div v-if="pathLoading" class="path-empty"><van-loading size="20" /></div>
+                <template v-else>
+                    <div
+                        v-for="item in pathDirs"
+                        :key="item.path"
+                        class="path-item"
+                        @click="openPathDir(item.path)"
+                    >
+                        <van-icon name="folder-o" class="path-item-icon" />
+                        <span class="path-item-name">{{ item.name }}</span>
+                    </div>
+                    <div v-if="!pathDirs.length" class="path-empty">该目录下没有子文件夹</div>
+                </template>
+            </div>
+            <div class="path-actions">
+                <van-button block type="primary" :disabled="!pathBrowserPath" :loading="pathApplying" @click="useCurrentPath">
+                    使用此目录（{{ pathCardCount }} 张卡）
+                </van-button>
+            </div>
+        </van-popup>
     </div>
 </template>
 
@@ -287,6 +339,109 @@ export default {
         const authLost = ref(false);
         const rootUri = ref('');
         const scanInfo = ref('');
+
+        // ---------- P1 全盘路径模式 ----------
+        const pathBackend = ref(false);
+        const pathRoot = ref('');
+        const showPathBrowser = ref(false);
+        const pathBrowserPath = ref('');
+        const pathBrowserParent = ref('');
+        const pathDirs = ref([]);
+        const pathVolumes = ref([]);
+        const pathVolumeRoot = ref('');
+        const pathLoading = ref(false);
+        const pathApplying = ref(false);
+        const pathCardCount = ref(0);
+        const pathBrowserTitle = computed(() => (pathBackend.value ? '切换卡库目录' : '选择卡库目录'));
+        const pathModeLabel = computed(() => {
+            if (pathBackend.value) return `已启用 · ${pathRoot.value || ''}`;
+            return '系统选择器找不到目录 / 重启掉授权时使用（需所有文件访问权限）';
+        });
+
+        async function refreshPathMode() {
+            try {
+                const st = await api.allFilesAccessState();
+                pathVolumes.value = st.volumes || [];
+                pathVolumeRoot.value = (st.volumes && st.volumes[0] && st.volumes[0].path) || '';
+                pathBackend.value = st.backend === 'path';
+                pathRoot.value = st.rootPath || '';
+            } catch (e) { /* 忽略:环境不支持时不展示 */ }
+        }
+
+        async function onPathModeClick() {
+            const st = await api.allFilesAccessState();
+            if (!st.supported) {
+                showToast('全盘路径模式需 Android 11 及以上');
+                return;
+            }
+            pathVolumes.value = st.volumes || [];
+            pathVolumeRoot.value = (st.volumes && st.volumes[0] && st.volumes[0].path) || '';
+            if (!st.granted) {
+                try {
+                    await showConfirmDialog({
+                        title: '开启全盘路径模式',
+                        message: '用于解决部分机型系统文件选择器找不到目录、或重启后授权失效的问题。\n需要授予「所有文件访问权限」，仅在 App 内浏览目录使用。',
+                        confirmButtonText: '去授权'
+                    });
+                } catch (e) {
+                    return;
+                }
+                const r = await api.requestAllFilesAccess();
+                if (!r || !r.granted) {
+                    showToast('未获得「所有文件访问权限」');
+                    return;
+                }
+            }
+            showPathBrowser.value = true;
+            openPathDir(st.rootPath || pathVolumeRoot.value || (st.volumes[0] && st.volumes[0].path) || '');
+        }
+
+        async function openPathDir(path) {
+            if (!path) return;
+            pathLoading.value = true;
+            try {
+                const res = await api.listDirByPath(path);
+                if (!res.success) {
+                    showToast(res.error || '目录不可读');
+                    return;
+                }
+                pathBrowserPath.value = res.path;
+                pathBrowserParent.value = res.parentPath || '';
+                pathDirs.value = (res.files || []).filter((f) => f.isDirectory);
+                pathCardCount.value = (res.files || []).filter(
+                    (f) => !f.isDirectory && /\.(png|webp|json)$/i.test(f.name || '')
+                ).length;
+            } finally {
+                pathLoading.value = false;
+            }
+        }
+
+        function onPathUp() {
+            if (pathBrowserParent.value) openPathDir(pathBrowserParent.value);
+        }
+
+        async function useCurrentPath() {
+            if (!pathBrowserPath.value || pathApplying.value) return;
+            pathApplying.value = true;
+            try {
+                const res = await api.setLibraryRootPath(pathBrowserPath.value);
+                if (res && res.error) {
+                    showToast(res.error);
+                    return;
+                }
+                showPathBrowser.value = false;
+                await refreshInfo();
+                await refreshPathMode();
+                const n = (res.files || []).length;
+                scanInfo.value = `${n} 张`;
+                loadLibrary(true);
+                showSuccessToast(`已切换到全盘模式 · 扫描到 ${n} 张`);
+            } catch (e) {
+                showToast((e && e.message) || '切换失败');
+            } finally {
+                pathApplying.value = false;
+            }
+        }
         const darkTheme = ref(isDarkTheme(currentTheme()));
         const theme = ref(currentTheme());
         const uiFs = ref(currentFs());
@@ -544,7 +699,12 @@ export default {
                 const n = (res.files || []).length;
                 scanInfo.value = `${n} 张`;
                 loadLibrary(true); // 授权/切换库目录后强制重扫
-                showSuccessToast(`已授权库目录 · 扫描到 ${n} 张`);
+                if (res.persistWarning) {
+                    // 选择器没给长期权限:本次可用,重启后需重选(不能报成功,否则用户重启后只会看到"授权失效")
+                    showToast(res.persistWarning);
+                } else {
+                    showSuccessToast(`已授权库目录 · 扫描到 ${n} 张`);
+                }
             } catch (e) {
                 showToast('已取消或失败');
             }
@@ -566,6 +726,7 @@ export default {
             refreshInfo();
             refreshStats();
             refreshBgState();
+            refreshPathMode();
         });
 
         // ---------- 回收站 ----------
@@ -798,7 +959,10 @@ export default {
             ignoreImportTags, onIgnoreTagsChange,
             importAutoTag, onImportAutoTagChange,
             keepAliveOn, keepAliveBusy, onKeepAliveChange,
-            bgActive, bgBusy, bgVisibility, bgPreviewUrl, onPickBackground, onRemoveBackground, onBgVisibilityChange
+            bgActive, bgBusy, bgVisibility, bgPreviewUrl, onPickBackground, onRemoveBackground, onBgVisibilityChange,
+            pathModeLabel, showPathBrowser, pathBrowserPath, pathBrowserParent, pathDirs, pathVolumes,
+            pathVolumeRoot, pathLoading, pathApplying, pathCardCount, pathBrowserTitle,
+            onPathModeClick, openPathDir, onPathUp, useCurrentPath
         };
     }
 };
@@ -825,8 +989,7 @@ export default {
     justify-content: space-between;
     padding: 14px 16px;
     font-size: 15px;
-    font-weight: 600;
-}
+    font-weight: 600;}
 .theme-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -982,4 +1145,21 @@ export default {
 .mem-item-type { font-size: 12px; color: #06b6d4; margin-bottom: 2px; }
 .mem-item-content { font-size: 13px; word-break: break-word; }
 .mem-item-meta { margin-top: 4px; font-size: 11px; color: var(--van-gray-5, #c8c9cc); }
-</style>
+
+/* 全盘路径模式:目录浏览器 */
+.volume-bar { display: flex; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+.volume-bar .van-tag { cursor: pointer; }
+.path-crumb {
+    padding: 8px 16px; font-size: 12px; color: var(--van-gray-6, #969799);
+    word-break: break-all;
+}
+.path-list { max-height: 46vh; overflow-y: auto; padding: 0 0 8px; }
+.path-item {
+    display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+    border-bottom: 1px solid var(--van-cell-border-color, #ebedf0); cursor: pointer;
+}
+.path-item:active { background: var(--van-cell-active-color, #f2f3f5); }
+.path-item-icon { font-size: 20px; color: #ffb300; }
+.path-item-name { font-size: 14px; word-break: break-all; }
+.path-empty { padding: 28px 16px; text-align: center; font-size: 13px; color: var(--van-gray-6, #969799); }
+.path-actions { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }</style>

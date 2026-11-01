@@ -14,6 +14,7 @@ import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
 import androidx.documentfile.provider.DocumentFile;
+import androidx.documentfile.provider.FileDocumentFile;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -49,8 +50,10 @@ import java.util.zip.Inflater;
 @CapacitorPlugin(name = "LibraryFsPlugin")
 public class LibraryFsPlugin extends Plugin {
 
-    private static final String PREFS = "library_store";
+    private static final String PREFS = "library_store";   // ⚠ 改名/改值会让老用户的库根授权全部丢失
     private static final String KEY_ROOT_URI = "root_uri";
+    private static final String KEY_ROOT_PERSISTED = "root_persisted";   // 最近一次 SAF 授权是否持久化成功
+    private static final String KEY_ROOT_PATH = "root_path";             // P1 全盘模式(路径级后端)根路径
     private static final int REQ_PICK_ROOT = 41001;
 
     // 与桌面 main.js skipFolders 对齐的黑名单
@@ -65,14 +68,79 @@ public class LibraryFsPlugin extends Plugin {
         return getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    // ── P1 全盘模式:路径级后端 ────────────────────────────────────────────────────
+    // 目的:SAF 在某些 ROM 上整体不可用(选择器进不去 / provider 不返回子项)时,用「所有文件访问权限」
+    // 直接以 java.io.File 访问内部存储/SD 卡/U 盘。为了不重写 43 处 SAF 调用点,
+    // 这里把 File 包装成 DocumentFile(URI 用 file: scheme),并在 openIn/openOut 里按 scheme 分派。
+
+    private boolean isPathBackend() {
+        String p = prefs().getString(KEY_ROOT_PATH, null);
+        return p != null && !p.isEmpty();
+    }
+
+    private File getRootPathFile() {
+        String p = prefs().getString(KEY_ROOT_PATH, null);
+        return (p != null && !p.isEmpty()) ? new File(p) : null;
+    }
+
+    private boolean hasAllFilesAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return Environment.isExternalStorageManager();
+        return false;   // API < 30 未申请运行时读权限,P1 明确不支持(SAF 仍是可用路径)
+    }
+
+    /** 统一的读流入口:兼容 SAF(content://)与路径后端(file://) */
+    private InputStream openIn(DocumentFile f) throws IOException {
+        if (f == null) return null;
+        Uri u = f.getUri();
+        if (u != null && "file".equals(u.getScheme())) return new FileInputStream(new File(u.getPath()));
+        return getContext().getContentResolver().openInputStream(u);
+    }
+
+    /** 统一的写流入口(覆盖写):兼容 SAF 与路径后端 */
+    private OutputStream openOut(DocumentFile f) throws IOException {
+        if (f == null) return null;
+        Uri u = f.getUri();
+        if (u != null && "file".equals(u.getScheme())) {
+            File file = new File(u.getPath());
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            return new FileOutputStream(file, false);
+        }
+        return getContext().getContentResolver().openOutputStream(u, "wt");
+    }
+
     private DocumentFile rootFile() {
+        if (isPathBackend()) {
+            File root = getRootPathFile();
+            return (root != null && root.isDirectory()) ? new FileDocumentFile(root, null) : null;
+        }
         String s = prefs().getString(KEY_ROOT_URI, null);
         if (s == null) return null;
         return DocumentFile.fromTreeUri(getContext(), Uri.parse(s));
     }
 
     private void setRootUri(Uri uri) {
-        prefs().edit().putString(KEY_ROOT_URI, uri.toString()).apply();
+        setRootUri(uri, true);
+    }
+
+    /**
+     * 记录库根 URI 并失效索引。
+     * @param persisted 本次选择器是否授予了可持久化的长期权限(决定重启后是否还能访问)
+     */
+    private void setRootUri(Uri uri, boolean persisted) {
+        SharedPreferences.Editor ed = prefs().edit();
+        if (uri == null) {
+            ed.remove(KEY_ROOT_URI).remove(KEY_ROOT_PERSISTED).remove(KEY_ROOT_PATH);
+        } else {
+            // 切回 SAF 后端必须清掉 root_path:isPathBackend() 优先判定路径后端,
+            // 残留会让「重新选择库目录」后仍然读旧路径(真机实测:root_path 未清 → 换目录无效)
+            ed.putString(KEY_ROOT_URI, uri.toString())
+                    .putBoolean(KEY_ROOT_PERSISTED, persisted)
+                    .remove(KEY_ROOT_PATH);
+        }
+        ed.apply();
+        // 库根已变更:旧树的相对路径必须全部作废,否则会命中失效的 DocumentFile
+        SCAN_EXEC.execute(this::clearRelIndex);
     }
 
     private static boolean allDigits(String s) {
@@ -139,46 +207,180 @@ public class LibraryFsPlugin extends Plugin {
             this.size = size; this.lastModified = lastModified; this.mimeType = mimeType;
         }
     }
-    private final java.util.Map<String, CachedDocInfo> docInfoCache = new java.util.HashMap<>();
+    private final java.util.Map<String, CachedDocInfo> docInfoCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * 🚀 A1（两万卡专项）:每目录单次批量 query 建索引 + 行缓存（参照 MaterialFiles queryChildren）。
-     * 旧版用 dir.listFiles()(内部逐目录一次 query) + fillMtimesParallel(逐文件再一次 query)——
-     * 两万卡 = 2 万次 mtime query,实测 1994 卡 scan=57s(8-10 分钟)。
-     * 新版:每进一个目录,ContentResolver.query(buildChildDocumentsUriUsingTree,null)单次 Cursor
-     * 拿全子项(_ID/_DISPLAY_NAME/_SIZE/_LAST_MODIFIED/_MIME_TYPE),逐行填充 docInfoCache
-     * (relPath→属性);buildScanOutputFromIndex 直接从缓存读 mtime/size,
-     * fillMtimesParallel 对根扫描路径不再被调用,2 万 query → 0。
+     * 库根变更后失效全部内存索引与缓存。只在 SCAN_EXEC 上执行(与 buildRelIndex 同线程),
+     * 避免主线程与扫描线程并发写 docInfoCache(本仓库 BUG-21「relIndex 坏对象」即此类问题)。
      */
-    private void buildRelIndex() {
+    private void clearRelIndex() {
+        synchronized (relIndex) { relIndex.clear(); }
+        docInfoCache.clear();
+        scanFilesList = new java.util.ArrayList<>();
+        scanDirsList = new java.util.ArrayList<>();
+        relIndexReady = false;
+    }
+
+    // ── 枚举稳健性:provider 异步加载等待 ──────────────────────────────────────────
+    // OPPO/ColorOS 等机型的 DocumentsProvider 会「先返回一个行还没齐的 Cursor」,
+    // extras 里带 DocumentsContract.EXTRA_LOADING=true,补行后再 notifyChange。
+    // 直接消费半空 Cursor = 卡片数量偏少/为 0(用户感知「读不到本地文件」)。
+    private static final long DIR_LOADING_TIMEOUT_MS = 1500L;    // 单目录最长等待
+    private static final long SCAN_LOADING_BUDGET_MS = 4000L;    // 单次扫描累计等待上限(防 目录数 × 超时 线性放大)
+
+    /**
+     * 子项查询,处理 EXTRA_LOADING 异步加载。必须在后台线程调用(SCAN_EXEC / 桥线程)。
+     *
+     * @param budgetMs 长度 1 的数组,调用方每次扫描创建一份,函数内部扣减(自带总预算)
+     */
+    private android.database.Cursor queryChildrenSettled(Uri childrenUri, long[] budgetMs) {
+        final android.content.ContentResolver cr = getContext().getContentResolver();
+        android.database.Cursor c = cr.query(childrenUri, DOC_CHILD_PROJECTION, null, null, null);
+        if (c == null) return null;
+        boolean loading = false;
+        try {
+            android.os.Bundle extras = c.getExtras();
+            loading = extras != null && extras.getBoolean(DocumentsContract.EXTRA_LOADING, false);
+        } catch (Exception ignored) { /* 部分 provider 不提供 extras */ }
+        if (!loading) return c;
+        long remaining = (budgetMs != null && budgetMs.length > 0) ? budgetMs[0] : 0L;
+        if (remaining <= 0) {
+            android.util.Log.w("Perf", "EXTRA_LOADING 预算耗尽,按当前行消费: " + childrenUri);
+            return c;
+        }
+        final long waitMs = Math.min(DIR_LOADING_TIMEOUT_MS, remaining);
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        android.database.ContentObserver obs = new android.database.ContentObserver(
+                new android.os.Handler(android.os.Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) { latch.countDown(); }
+        };
+        long t0 = System.currentTimeMillis();
+        // resolver 级注册(与 MaterialFiles 同款):Cursor 级 observer 依赖 provider 设置 notificationUri,不可靠
+        cr.registerContentObserver(childrenUri, true, obs);
+        try {
+            if (!latch.await(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                android.util.Log.w("Perf", "EXTRA_LOADING 等待超时(" + waitMs + "ms): " + childrenUri);
+            }
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        } finally {
+            try { cr.unregisterContentObserver(obs); } catch (Exception ignored) { }
+            try { c.close(); } catch (Exception ignored) { }
+        }
+        if (budgetMs != null && budgetMs.length > 0) {
+            budgetMs[0] = Math.max(0L, remaining - (System.currentTimeMillis() - t0));
+        }
+        return cr.query(childrenUri, DOC_CHILD_PROJECTION, null, null, null); // 重开拿补全后的行
+    }
+
+    /**
+     * 索引构建入口:按后端分派(SAF 走 Cursor,全盘模式走 File 树)。
+     * @return {遍历目录数, 读到的子项行数, 子项读取失败目录数}(0 结果归因用)
+     */
+    private int[] buildRelIndex() {
+        if (isPathBackend()) return buildRelIndexByPath();
+        return buildRelIndexOriginal();
+    }
+
+    /**
+     * 路径后端(全盘模式)的索引构建:直接遍历 File 树,产出与 SAF 版同构的
+     * scanFilesList / scanDirsList / docInfoCache / relIndex,使上层扫描与读写零改动。
+     */
+    private int[] buildRelIndexByPath() {
         java.util.Map<String, DocumentFile> m = new java.util.HashMap<>();
         java.util.Map<String, CachedDocInfo> infoMap = new java.util.HashMap<>();
         java.util.List<Object[]> fileList = new java.util.ArrayList<>();
         java.util.List<Object[]> dirList = new java.util.ArrayList<>();
+        int dirsScanned = 0;
+        File root = getRootPathFile();
+        if (root == null || !root.isDirectory()) {
+            relIndexReady = false;
+            return new int[]{ 0, 0, 0 };
+        }
+        java.util.ArrayDeque<File> dirQueue = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<String> relQueue = new java.util.ArrayDeque<>();
+        dirQueue.push(root);
+        relQueue.push("");
+        while (!dirQueue.isEmpty()) {
+            File dir = dirQueue.pop();
+            String dirRel = relQueue.pop();
+            dirsScanned++;
+            File[] children = dir.listFiles();
+            if (children == null) continue;
+            for (File f : children) {
+                String name = f.getName();
+                if (name == null || name.isEmpty()) continue;
+                String rel = dirRel.isEmpty() ? name : dirRel + "/" + name;
+                if (f.isDirectory()) {
+                    if (name.startsWith(".")) continue;
+                    if (SKIP_FOLDERS.contains(name.toLowerCase(Locale.ROOT))) continue;
+                    FileDocumentFile df = new FileDocumentFile(f, null);
+                    m.put(rel, df);
+                    dirList.add(new Object[]{ rel, df });
+                    dirQueue.push(f);
+                    relQueue.push(rel);
+                } else {
+                    if (name.startsWith(".jskzx")) continue;
+                    if (isTransientFile(name)) continue;
+                    FileDocumentFile df = new FileDocumentFile(f, null);
+                    m.put(rel, df);
+                    fileList.add(new Object[]{ rel, df });
+                }
+                infoMap.put(rel, new CachedDocInfo(f.getAbsolutePath(), name,
+                        f.isFile() ? f.length() : 0L, f.lastModified(), f.isDirectory()
+                        ? DocumentsContract.Document.MIME_TYPE_DIR : mimeForName(name)));
+            }
+        }
+        synchronized (relIndex) { relIndex.clear(); relIndex.putAll(m); }
+        docInfoCache.clear();
+        docInfoCache.putAll(infoMap);
+        relIndexReady = true;
+        scanFilesList = fileList;
+        scanDirsList = dirList;
+        android.util.Log.i("Perf", "relIndex(path) built: " + m.size() + " entries, " + dirList.size()
+                + " dirs (root=" + root.getAbsolutePath() + ")");
+        return new int[]{ dirsScanned, m.size(), 0 };
+    }
+
+    private int[] buildRelIndexOriginal() {
+        java.util.Map<String, DocumentFile> m = new java.util.HashMap<>();
+        java.util.Map<String, CachedDocInfo> infoMap = new java.util.HashMap<>();
+        java.util.List<Object[]> fileList = new java.util.ArrayList<>();
+        java.util.List<Object[]> dirList = new java.util.ArrayList<>();
+        // 统计口径:遍历目录数 / 读到的子项行数 / 子项读取失败目录数(0 结果归因用,见 buildScanHint)
+        int dirsScanned = 0;
+        int rowsSeen = 0;
+        int queryFailures = 0;
         DocumentFile root = rootFile();
-        if (root == null) { relIndexReady = false; return; }
+        if (root == null) { relIndexReady = false; return new int[]{ 0, 0, 0 }; }
         Uri treeUri = root.getUri(); // fromTreeUri 创建的 DocumentFile 其 getUri() 即 tree URI
         String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
         java.util.ArrayDeque<String> docIds = new java.util.ArrayDeque<>();
         java.util.ArrayDeque<String> rels = new java.util.ArrayDeque<>();
+        long[] loadingBudget = new long[]{ SCAN_LOADING_BUDGET_MS };
         docIds.push(rootDocId);
         rels.push("");
         while (!docIds.isEmpty()) {
             String docId = docIds.pop();
             String dirRel = rels.pop();
+            dirsScanned++;
             Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId);
             android.database.Cursor cursor = null;
             try {
-                // null projection = all columns (与 MaterialFiles/DocumentsUI 同款,
-                // 含 _ID/_DISPLAY_NAME/_SIZE/_LAST_MODIFIED/_MIME_TYPE/_FLAGS,性能无碍)
-                cursor = getContext().getContentResolver().query(childrenUri, null, null, null, null);
-                if (cursor == null) continue;
+                // 显式投影:部分 ROM/三方 provider 对 null 投影只回 _id 等列,拿不到 document_id
+                // → 旧代码会把整棵树的子项全部跳过(静默 0 结果)。显式列名更稳,失败走 catch 降级。
+                // queryChildrenSettled:处理 provider 异步加载(EXTRA_LOADING),避免消费半空列表。
+                cursor = queryChildrenSettled(childrenUri, loadingBudget);
+                if (cursor == null) throw new IllegalStateException("children 查询返回空游标");
                 int idxId   = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
                 int idxName = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
                 int idxMime = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
                 int idxSize = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
                 int idxMtime= cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+                if (idxId < 0 || idxName < 0) throw new IllegalStateException("provider 未返回 document_id / display_name 列");
                 while (cursor.moveToNext()) {
+                    rowsSeen++;
                     String childDocId = (idxId   >= 0 && !cursor.isNull(idxId))   ? cursor.getString(idxId)   : null;
                     String name       = (idxName >= 0 && !cursor.isNull(idxName)) ? cursor.getString(idxName) : null;
                     if (childDocId == null || name == null || name.isEmpty()) continue;
@@ -208,11 +410,16 @@ public class LibraryFsPlugin extends Plugin {
                     }
                 }
             } catch (Exception e) {
+                queryFailures++;
                 android.util.Log.w("Perf", "queryChildren failed for " + dirRel + ": " + e.getMessage());
                 // 降级:对该目录回退旧版 DocumentFile.listFiles()路径(少量目录可接受)
                 DocumentFile dirDf = m.get(dirRel);
                 if (dirDf == null) dirDf = root;
-                for (DocumentFile f : dirDf.listFiles()) {
+                DocumentFile[] fallbackChildren = null;
+                try { fallbackChildren = dirDf.listFiles(); } catch (Exception ignored2) { /* 连 listFiles 都不支持 */ }
+                if (fallbackChildren == null) continue;
+                for (DocumentFile f : fallbackChildren) {
+                    rowsSeen++;
                     String n = f.getName();
                     if (n == null) continue;
                     String rel = dirRel.isEmpty() ? n : dirRel + "/" + n;
@@ -222,8 +429,10 @@ public class LibraryFsPlugin extends Plugin {
                         if (SKIP_FOLDERS.contains(lower)) continue;
                         m.put(rel, f);
                         dirList.add(new Object[]{ rel, f });
-                        docIds.push(DocumentsContract.getDocumentId(f.getUri()));
-                        rels.push(rel);
+                        try {
+                            docIds.push(DocumentsContract.getDocumentId(f.getUri()));
+                            rels.push(rel);
+                        } catch (Exception ignored3) { /* 非 document URI,无法继续下钻 */ }
                     } else if (!isTransientFile(n)) {
                         m.put(rel, f);
                         fileList.add(new Object[]{ rel, f });
@@ -239,7 +448,48 @@ public class LibraryFsPlugin extends Plugin {
         relIndexReady = true;
         scanFilesList = fileList;
         scanDirsList = dirList;
-        android.util.Log.i("Perf", "relIndex built: " + m.size() + " files, " + dirList.size() + " dirs (A1 batch cursor)");
+        android.util.Log.i("Perf", "relIndex built: " + m.size() + " files, " + dirList.size() + " dirs (A1 batch cursor)"
+                + " · dirs=" + dirsScanned + " rows=" + rowsSeen + " fails=" + queryFailures);
+        return new int[]{ dirsScanned, rowsSeen, queryFailures };
+    }
+
+    /** 库树子项查询投影(显式列名,见 buildRelIndex 注释) */
+    private static final String[] DOC_CHILD_PROJECTION = new String[]{
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+    };
+
+    /**
+     * 扫描 0 结果归因:区分「选中的确实是空目录」与「系统文件服务读不到内容」。
+     * 后者在受限路径(Android/data、Android/obb)与不实现 children 查询的第三方 provider 上
+     * 都会表现为"授权成功但扫描到 0 张",必须给出可执行提示而不是静默成功。
+     * 返回空串 = 无特别原因(照常按空目录处理)。
+     */
+    private String buildScanHint(DocumentFile root, int[] stats, int fileCount) {
+        if (fileCount > 0 || stats == null || stats.length < 3) return "";
+        int dirsScanned = stats[0];
+        int rowsSeen = stats[1];
+        int queryFailures = stats[2];
+        android.util.Log.i("Perf", "scan empty: dirs=" + dirsScanned + " rows=" + rowsSeen + " fails=" + queryFailures);
+        String docId = "";
+        try {
+            docId = DocumentsContract.getTreeDocumentId(root.getUri());
+        } catch (Exception e) { /* 非标准 tree URI:不影响后续判断 */ }
+        String lower = docId == null ? "" : docId.toLowerCase(Locale.ROOT);
+        if (lower.contains("android/data") || lower.contains("android/obb")
+                || lower.endsWith(":android") || lower.equals("android")) {
+            return "所选目录是其他应用的私有目录(Android/data、Android/obb):Android 11 起任何应用都无法通过系统授权读取,"
+                    + "本 App 也不管理这里。请改选一个自己可见的文件夹作为卡库(如「内部存储/Download」下的文件夹);"
+                    + "酒馆里的旧卡在酒馆中导出后用本 App「本地导入」一次性导入,之后改好的卡用「推送」送回酒馆。";
+        }
+        if (queryFailures > 0 && rowsSeen == 0) {
+            return "所选目录读取不到任何内容:系统文件服务未返回子项(遍历 " + dirsScanned
+                    + " 个目录,失败 " + queryFailures + " 个)。请在系统文件选择器里重新选择该目录,或换一个目录。";
+        }
+        return "";
     }
 
     /**
@@ -365,9 +615,28 @@ public class LibraryFsPlugin extends Plugin {
         }
     }
 
+    /** 统一的 URI 读流:content:// 走 ContentResolver,file:// 走 FileInputStream(全盘模式) */
+    private InputStream openByUri(Uri uri) throws IOException {
+        if (uri == null) return null;
+        if ("file".equals(uri.getScheme())) return new FileInputStream(new File(uri.getPath()));
+        return getContext().getContentResolver().openInputStream(uri);
+    }
+
+    /** 统一的 URI 写流:content:// 走 ContentResolver("wt"),file:// 走 FileOutputStream(覆盖) */
+    private OutputStream openOutByUri(Uri uri, boolean truncate) throws IOException {
+        if (uri == null) return null;
+        if ("file".equals(uri.getScheme())) {
+            File f = new File(uri.getPath());
+            File parent = f.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            return new FileOutputStream(f, false);
+        }
+        return getContext().getContentResolver().openOutputStream(uri, truncate ? "wt" : "w");
+    }
+
     private String readStream(Uri uri, boolean asBase64, int maxBytes) {
         try {
-            InputStream in = getContext().getContentResolver().openInputStream(uri);
+            InputStream in = openByUri(uri);
             if (in == null) return null;
             try {
                 java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
@@ -392,7 +661,7 @@ public class LibraryFsPlugin extends Plugin {
 
     private boolean writeStream(Uri uri, String content) {
         try {
-            OutputStream out = getContext().getContentResolver().openOutputStream(uri, "wt");
+            OutputStream out = openOutByUri(uri, true);
             if (out == null) return false;
             try {
                 out.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -424,12 +693,22 @@ public class LibraryFsPlugin extends Plugin {
      * 部分 ROM(尤其国产定制系统)的 SAF 根列表不显示 Download 或将其灰显导致无法选择,
      * 设置 EXTRA_INITIAL_URI 后选择器直接打开在 Download,点「使用此文件夹」即可选定。
      * 该 URI 仅为初始定位,用户仍可导航到任意其他目录。
+     *
+     * ⚠ EXTRA_INITIAL_URI 只接受 DocumentsProvider 的 document URI。
+     *   旧实现传 MediaStore.Downloads.EXTERNAL_CONTENT_URI(content://media/external/downloads)
+     *   属于媒体域 → 部分 ROM 的选择器直接忽略,停在「最近」或空白页(用户即「找不到位置」)。
+     * ⚠ 未授权前不可用 ContentResolver.query() 探测该 URI(必抛 SecurityException),
+     *   改为 PackageManager.resolveContentProvider() 判断 provider 是否存在。
      */
     private void putInitialDownloadsUri(Intent intent) {
         try {
             Uri initial = null;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                initial = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                final String authority = "com.android.externalstorage.documents";
+                android.content.pm.PackageManager pm = getContext().getPackageManager();
+                if (pm != null && pm.resolveContentProvider(authority, 0) != null) {
+                    initial = DocumentsContract.buildDocumentUri(authority, "primary:Download");
+                }
             } else {
                 File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 if (dl != null) initial = Uri.fromFile(dl);
@@ -480,30 +759,74 @@ public class LibraryFsPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /**
+     * 按选择器实际授予的 flags 做持久化授权(只读自动降级)。
+     * @return 实际持久化的 flags;0 表示 provider 不支持持久化或持久化失败
+     */
+    private int tryPersistUriPermission(Uri uri, Intent data) {
+        if (uri == null || data == null) return 0;
+        int flags = data.getFlags();
+        if ((flags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) == 0) {
+            android.util.Log.w("Perf", "provider 未授予 PERSISTABLE 权限: " + uri.getAuthority());
+            return 0;
+        }
+        int takeFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (takeFlags == 0) takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(uri, takeFlags);
+            return takeFlags;
+        } catch (SecurityException e) {
+            // 请求 WRITE 失败时降级为只读持久化(不少三方选择器只给读权限)
+            if ((takeFlags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) {
+                try {
+                    getContext().getContentResolver().takePersistableUriPermission(
+                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    return Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                } catch (SecurityException ex) {
+                    android.util.Log.w("Perf", "只读降级持久化仍失败: " + ex.getMessage());
+                }
+            }
+            return 0;
+        }
+    }
+
     /** pickFolder 回调;call 由 Capacitor 在 @ActivityCallback 返回后自动 resolve/reject */
     @com.getcapacitor.annotation.ActivityCallback
     private void pickFolderResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
         if (result == null || result.getResultCode() != android.app.Activity.RESULT_OK
                 || result.getData() == null) {
             call.reject("用户取消选择");
             return;
         }
-        Uri uri = result.getData().getData();
+        Intent data = result.getData();
+        Uri uri = data.getData();
         if (uri == null) {
             call.reject("未获取到目录");
             return;
         }
-        // 持久化授权(重启后仍可访问)
-        try {
-            getContext().getContentResolver().takePersistableUriPermission(uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        } catch (SecurityException e) {
-            // 部分文件管理器不返回可持久化授权,忽略即可(本次会话仍可用)
-        }
-        setRootUri(uri);
+        int persistedFlags = tryPersistUriPermission(uri, data);
+        boolean persisted = persistedFlags != 0;
+        setRootUri(uri, persisted);
+
+        DocumentFile root = DocumentFile.fromTreeUri(getContext(), uri);
         JSObject ret = new JSObject();
         ret.put("success", true);
+        ret.put("backend", "saf");
         ret.put("uri", uri.toString());
+        ret.put("persisted", persisted);
+        ret.put("persistedFlags", persistedFlags);
+        if (!persisted) {
+            ret.put("persistWarning", "当前系统文件选择器未授予长期访问权限:本次可用,重启 App 后需重新选择该目录");
+        }
+        ret.put("provider", uri.getAuthority() != null ? uri.getAuthority() : "");
+        ret.put("canRead", root != null && root.canRead());
+        ret.put("canWrite", root != null && root.canWrite());
+        try {
+            ret.put("rootId", DocumentsContract.getTreeDocumentId(uri));
+        } catch (Exception e) {
+            ret.put("rootId", "");
+        }
         call.resolve(ret);
     }
 
@@ -511,11 +834,42 @@ public class LibraryFsPlugin extends Plugin {
     @PluginMethod()
     public void libraryInfo(PluginCall call) {
         String uriStr = prefs().getString(KEY_ROOT_URI, null);
-        DocumentFile root = (uriStr != null) ? DocumentFile.fromTreeUri(getContext(), Uri.parse(uriStr)) : null;
+        boolean persisted = prefs().getBoolean(KEY_ROOT_PERSISTED, false);
+        boolean granted = false;
+        String reason = "";
+        // 全盘模式优先:路径后端与 SAF 库根互斥
+        if (isPathBackend()) {
+            File root = getRootPathFile();
+            granted = root != null && root.isDirectory() && root.canRead();
+            JSObject ret = new JSObject();
+            ret.put("backend", "path");
+            ret.put("granted", granted);
+            ret.put("persisted", true);
+            ret.put("hasUri", true);
+            ret.put("uri", root != null ? root.getAbsolutePath() : "");
+            ret.put("path", root != null ? root.getAbsolutePath() : "");
+            ret.put("reason", granted ? "" : "路径不可读(可能未授予所有文件访问权限或目录已删除)");
+            call.resolve(ret);
+            return;
+        }
+        if (uriStr == null) {
+            reason = "尚未选择库目录";
+        } else {
+            try {
+                DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(uriStr));
+                granted = root != null && root.exists() && root.canRead();
+                if (!granted) reason = "授权目录不可读(可能已被系统回收授权或文件夹已移动)";
+            } catch (Exception e) {
+                reason = "授权 URI 无法解析: " + e.getMessage();
+            }
+        }
         JSObject ret = new JSObject();
-        ret.put("granted", root != null && root.exists());
+        ret.put("backend", "saf");
+        ret.put("granted", granted);
+        ret.put("persisted", persisted);
         ret.put("hasUri", uriStr != null);
-        ret.put("uri", uriStr);
+        ret.put("uri", uriStr != null ? uriStr : "");
+        ret.put("reason", reason);
         call.resolve(ret);
     }
 
@@ -532,28 +886,28 @@ public class LibraryFsPlugin extends Plugin {
 
     @com.getcapacitor.annotation.ActivityCallback
     private void pickPushFolderResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
         if (result == null || result.getResultCode() != android.app.Activity.RESULT_OK
                 || result.getData() == null) {
             call.reject("用户取消选择");
             return;
         }
-        Uri uri = result.getData().getData();
+        Intent data = result.getData();
+        Uri uri = data.getData();
         if (uri == null) {
             call.reject("未获取到目录");
             return;
         }
-        // 临时授权(不持久化,不覆盖库根)
-        try {
-            getContext().getContentResolver().takePersistableUriPermission(uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        } catch (SecurityException e) {
-            // 忽略
-        }
+        // 推送目标需要跨会话记住,因此按实际 flags 持久化(库根不受影响)
+        int persistedFlags = tryPersistUriPermission(uri, data);
         DocumentFile root = DocumentFile.fromTreeUri(getContext(), uri);
+        String name = (root != null && root.getName() != null) ? root.getName() : "";
         JSObject ret = new JSObject();
         ret.put("success", true);
         ret.put("uri", uri.toString());
-        ret.put("title", root != null ? root.getName() : "");
+        ret.put("title", name);   // 前端 selectPushFolder/selectGenericFolder 读取 title,必须保留
+        ret.put("name", name);
+        ret.put("persisted", persistedFlags != 0);
         call.resolve(ret);
     }
 
@@ -587,9 +941,32 @@ public class LibraryFsPlugin extends Plugin {
             java.util.concurrent.Executors.newFixedThreadPool(2, r -> new Thread(r, "jsx-bigread"));
 
     // ── A2: scanResult 缓存(分块回传) ──────────────────────────────────────────────
+    // 🐛 真机反馈(OPPO):原实现是「全局单游标 + 全局结果缓存」,只支持一个消费者。
+    //    设置页 refreshStats / 库页 loadLibrary / 后台 reconcile 同时扫描时,
+    //    后来的 scanStart 会把游标清零并换掉缓存 → 先发起的一方拿到的块被抢走,
+    //    循环以 done=true + 空 files 结束 → 界面显示「扫描到 0 张」(慢存储设备窗口更大)。
+    //    现在每次 scanStart 生成 scanId,各自持有独立游标;scanNext 带 scanId 取自己的块。
+    //    全局 scanResultCache/scanCursor 保留兼容旧调用(不带 scanId 的 scanNext)。
     private volatile List<JSObject> scanResultCache = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile List<String> scanResultCategories = new java.util.ArrayList<>();
     private final java.util.concurrent.atomic.AtomicInteger scanCursor = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    private static final class ScanSession {
+        final List<JSObject> files;
+        final java.util.concurrent.atomic.AtomicInteger cursor = new java.util.concurrent.atomic.AtomicInteger(0);
+        final long born = System.currentTimeMillis();
+        ScanSession(List<JSObject> files) { this.files = files; }
+    }
+    private static final long SCAN_SESSION_TTL_MS = 3 * 60 * 1000L;
+    private final java.util.Map<String, ScanSession> scanSessions = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong scanSessionSeq = new java.util.concurrent.atomic.AtomicLong(0);
+    /** 最近一次扫描 0 结果的可执行提示(空串=无特别原因);见 buildScanHint */
+    private volatile String lastScanHint = "";
+
+    private void pruneScanSessions() {
+        long now = System.currentTimeMillis();
+        scanSessions.entrySet().removeIf(e -> now - e.getValue().born > SCAN_SESSION_TTL_MS);
+    }
 
     /**
      * 🚀 A2:扫描结果构建(从 scanOnWorker 提取),供 scan/scanStart 共用。
@@ -598,7 +975,7 @@ public class LibraryFsPlugin extends Plugin {
     private String buildScanResult(String rel, List<JSObject> outFiles, Set<String> outCategories) {
         DocumentFile root = rootFile();
         if (root == null || !root.exists()) return "尚未选择库目录,请先授权角色卡库文件夹";
-        buildRelIndex();
+        int[] idxStats = buildRelIndex();
         DocumentFile startDir = root;
         String prefix = "";
         if (rel != null && !rel.isEmpty()) {
@@ -618,6 +995,7 @@ public class LibraryFsPlugin extends Plugin {
         else walkDir(startDir, prefix, false, outFiles, outCategories, pendingMtime, relIndex);
         relIndexReady = true;
         fillMtimesParallel(pendingMtime);
+        lastScanHint = buildScanHint(root, idxStats, outFiles.size());
         return null; // null = 成功
     }
 
@@ -638,6 +1016,7 @@ public class LibraryFsPlugin extends Plugin {
                 ret.put("files", new JSArray(files));
                 ret.put("categories", new JSArray(new ArrayList<>(categories)));
                 ret.put("folderPath", "/library");
+                if (lastScanHint != null && !lastScanHint.isEmpty()) ret.put("hint", lastScanHint);
                 call.resolve(ret);
             } catch (Exception e) {
                 call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
@@ -646,13 +1025,14 @@ public class LibraryFsPlugin extends Plugin {
     }
 
     /**
-     * 🚀 A2:scanStart 启动后台扫描,生成完整结果并缓存,resolve {success,total,categories}。
-     * JS 侧用循环 scanNext 拉取分块,每块 evaluateJavascript 体积 < 500KB(两万卡 ~4MB 改为 ~8 块),
-     * 主线程解析无长阻塞。
+     * 🚀 A2:scanStart 启动后台扫描,生成完整结果并按 scanId 缓存,resolve {success,total,categories,scanId}。
+     * JS 侧用循环 scanNext(带 scanId) 拉取分块,每块 evaluateJavascript 体积 < 500KB
+     * (两万卡 ~4MB 改为 ~8 块),主线程解析无长阻塞。
      */
     @PluginMethod()
     public void scanStart(final PluginCall call) {
         final String rel = call.getString("path", "");
+        final String scanId = "s" + scanSessionSeq.incrementAndGet();
         SCAN_EXEC.execute(() -> {
             try {
                 List<JSObject> files = new ArrayList<>();
@@ -664,13 +1044,19 @@ public class LibraryFsPlugin extends Plugin {
                     call.resolve(e);
                     return;
                 }
+                // 全局缓存:兼容不带 scanId 的旧 scanNext 调用
                 scanResultCache = new java.util.concurrent.CopyOnWriteArrayList<>(files);
                 scanResultCategories = new ArrayList<>(categories);
                 scanCursor.set(0);
+                // 会话缓存:本次扫描的独立游标,互不抢块
+                pruneScanSessions();
+                scanSessions.put(scanId, new ScanSession(files));
                 JSObject ret = new JSObject();
                 ret.put("success", true);
+                ret.put("scanId", scanId);
                 ret.put("total", files.size());
                 ret.put("categories", new JSArray(scanResultCategories));
+                if (lastScanHint != null && !lastScanHint.isEmpty()) ret.put("hint", lastScanHint);
                 call.resolve(ret);
             } catch (Exception e) {
                 call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
@@ -679,13 +1065,16 @@ public class LibraryFsPlugin extends Plugin {
     }
 
     /**
-     * 🚀 A2:scanNext 从 scanResultCache 切块返回;游标原子自增,天然支持单消费者(RESCAN 模式),
+     * 🚀 A2:scanNext 按 scanId 从对应会话切块返回(缺 scanId 时退回全局缓存,保持旧调用可用);
      * done=true 表示全部拉完。
      */
     @PluginMethod()
     public void scanNext(final PluginCall call) {
         final int batchSize = Math.max(1, call.getInt("batchSize", 500));
-        final List<JSObject> all = scanResultCache;
+        final String scanId = call.getString("scanId", "");
+        ScanSession session = (scanId == null || scanId.isEmpty()) ? null : scanSessions.get(scanId);
+        final List<JSObject> all = session != null ? session.files : scanResultCache;
+        final java.util.concurrent.atomic.AtomicInteger cursor = session != null ? session.cursor : scanCursor;
         JSObject ret = new JSObject();
         if (all == null || all.isEmpty()) {
             ret.put("files", new JSArray());
@@ -694,7 +1083,7 @@ public class LibraryFsPlugin extends Plugin {
             call.resolve(ret);
             return;
         }
-        int start = scanCursor.getAndAdd(batchSize);
+        int start = cursor.getAndAdd(batchSize);
         if (start >= all.size()) {
             ret.put("files", new JSArray());
             ret.put("done", true);
@@ -736,6 +1125,92 @@ public class LibraryFsPlugin extends Plugin {
 
     /** 递归遍历目录,收集文件和文件夹信息 + 顺建路径→DocumentFile索引(一次遍历替代两次) */
     private void walkDir(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime, java.util.Map<String, DocumentFile> indexMap) {
+        // 优先走 Cursor(可处理 provider 异步加载,避免半空列表);任何异常回退旧 listFiles 路径
+        if (walkDirByCursor(dir, relDir, skipHidden, files, categories, pendingMtime, indexMap)) return;
+        walkDirLegacy(dir, relDir, skipHidden, files, categories, pendingMtime, indexMap);
+    }
+
+    /** Cursor 版子目录遍历;返回 false 表示不支持(调用方回退 listFiles) */
+    private boolean walkDirByCursor(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime, java.util.Map<String, DocumentFile> indexMap) {
+        DocumentFile root = rootFile();
+        if (root == null || dir.getUri() == null) return false;
+        Uri tree = root.getUri();
+        String dirDocId;
+        try {
+            dirDocId = DocumentsContract.getDocumentId(dir.getUri());
+        } catch (Exception e) {
+            return false;
+        }
+        if (dirDocId == null || dirDocId.isEmpty()) return false;
+        long[] loadingBudget = new long[]{ SCAN_LOADING_BUDGET_MS };
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, dirDocId);
+        android.database.Cursor c = null;
+        try {
+            c = queryChildrenSettled(childrenUri, loadingBudget);
+            if (c == null) return false;
+            int idxId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+            int idxName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+            int idxMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+            int idxSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+            int idxMtime = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+            if (idxId < 0 || idxName < 0) return false;
+            while (c.moveToNext()) {
+                String name = c.isNull(idxName) ? null : c.getString(idxName);
+                if (name == null) continue;
+                String childId = c.isNull(idxId) ? null : c.getString(idxId);
+                if (childId == null) continue;
+                String mime = (idxMime >= 0 && !c.isNull(idxMime)) ? c.getString(idxMime) : "";
+                long size = (idxSize >= 0 && !c.isNull(idxSize)) ? c.getLong(idxSize) : 0L;
+                long mtime = (idxMtime >= 0 && !c.isNull(idxMtime)) ? c.getLong(idxMtime) : 0L;
+                DocumentFile child = DocumentFile.fromSingleUri(getContext(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, childId));
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    if (skipHidden && name.startsWith(".")) continue;
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    if (skipHidden && SKIP_FOLDERS.contains(lower)) continue;
+                    if (relDir.isEmpty()) categories.add(name);
+                    JSObject d = new JSObject();
+                    d.put("name", name);
+                    d.put("path", "/library/" + relDir + name);
+                    d.put("isDirectory", true);
+                    d.put("mtime", mtime);
+                    files.add(d);
+                    // 递归:用同一条 Cursor 路径继续下钻(Cursor 遍历是深度优先的栈式,这里直接递归即可)
+                    if (child != null) walkDir(child, relDir + name + "/", skipHidden, files, categories, pendingMtime, indexMap);
+                    continue;
+                }
+                String ext = name.contains(".")
+                        ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT)
+                        : "";
+                if (!ext.equals("png") && !ext.equals("webp") && !ext.equals("json")) continue;
+                if (name.startsWith(".jskzx")) continue;
+                if (isTransientFile(name)) continue;
+                JSObject o = new JSObject();
+                o.put("name", name);
+                o.put("path", "/library/" + relDir + name);
+                o.put("isDirectory", false);
+                o.put("url", JSObject.NULL);
+                o.put("mtime", 0); // 延后到 fillMtimesParallel 并行补齐
+                o.put("birthtime", 0);
+                o.put("size", size);
+                o.put("subFolder", relDir.replaceAll("/+$", ""));
+                o.put("category", relDir.isEmpty() ? "未分类" : relDir.split("/")[0]);
+                o.put("embeddedData", JSObject.NULL);
+                files.add(o);
+                if (child != null) pendingMtime.add(new Object[]{ o, child });
+                if (indexMap != null) indexMap.put(relDir.isEmpty() ? name : relDir + "/" + name, child);
+            }
+            return true;
+        } catch (Exception e) {
+            android.util.Log.w("Perf", "walkDir cursor 枚举失败,回退 listFiles: " + e.getMessage());
+            return false;
+        } finally {
+            if (c != null) try { c.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    /** 旧 listFiles 版子目录遍历(provider 不支持 Cursor 子项查询时的兜底) */
+    private void walkDirLegacy(DocumentFile dir, String relDir, boolean skipHidden, List<JSObject> files, Set<String> categories, List<Object[]> pendingMtime, java.util.Map<String, DocumentFile> indexMap) {
         for (DocumentFile child : dir.listFiles()) {
             if (child.isDirectory()) {
                 String name = child.getName();
@@ -792,7 +1267,7 @@ public class LibraryFsPlugin extends Plugin {
     private String extractChara(DocumentFile f) {
         InputStream in = null;
         try {
-            in = getContext().getContentResolver().openInputStream(f.getUri());
+            in = openIn(f);
             if (in == null) return null;
             // 读取并校验 PNG 8 字节签名(89 50 4E 47 0D 0A 1A 0A)
             byte[] sig = new byte[8];
@@ -1035,6 +1510,19 @@ public class LibraryFsPlugin extends Plugin {
      * 先 DocumentsContract.moveDocument 换父目录,必要时再 renameTo 改名(重命名式移动)
      */
     private boolean doMove(DocumentFile src, DocumentFile parent, String newName) {
+        // 全盘模式:直接 File.renameTo(无需 DocumentsContract)
+        if (isPathBackend()) {
+            try {
+                File from = new File(src.getUri().getPath());
+                File to = new File(new File(parent.getUri().getPath()), newName);
+                File toParent = to.getParentFile();
+                if (toParent != null && !toParent.exists()) toParent.mkdirs();
+                return from.renameTo(to);
+            } catch (Exception e) {
+                android.util.Log.w("Perf", "path doMove 失败: " + e.getMessage());
+                return false;
+            }
+        }
         try {
             android.content.ContentResolver cr = getContext().getContentResolver();
             Uri srcUri = src.getUri();
@@ -1500,7 +1988,7 @@ public class LibraryFsPlugin extends Plugin {
             return;
         }
         try {
-            InputStream in = getContext().getContentResolver().openInputStream(f.getUri());
+            InputStream in = openIn(f);
             if (in == null) {
                 call.reject("读取源文件失败");
                 return;
@@ -1588,7 +2076,7 @@ public class LibraryFsPlugin extends Plugin {
                 if (f == null || !f.canRead()) continue;
                 String entryName = f.getName() != null ? f.getName() : ("file_" + i);
                 zos.putNextEntry(new java.util.zip.ZipEntry(entryName));
-                InputStream in = getContext().getContentResolver().openInputStream(f.getUri());
+                InputStream in = openIn(f);
                 if (in != null) {
                     try {
                         byte[] buf = new byte[64 * 1024];
@@ -1682,6 +2170,13 @@ public class LibraryFsPlugin extends Plugin {
         DocumentFile root = rootFile();
         if (root == null) return null;
         String norm = dirRel == null ? "" : dirRel.replace('\\', '/').replaceAll("^/+", "").replaceAll("/+$", "");
+        if (isPathBackend()) {
+            // 全盘模式:直接按路径定位/创建目录(无需 DocumentsContract)
+            File d = norm.isEmpty() ? getRootPathFile() : new File(getRootPathFile(), norm);
+            if (d == null) return null;
+            if (!d.isDirectory() && !d.mkdirs()) return null;
+            return new FileDocumentFile(d, null);
+        }
         if (norm.isEmpty()) return root;
         try {
             Uri treeUri = root.getUri();
@@ -1749,7 +2244,7 @@ public class LibraryFsPlugin extends Plugin {
     /** 通用「写目标 document」:从 InputStream 拷贝到 content uri,返回是否成功 */
     private boolean writeUriFromStream(Uri target, InputStream in) {
         try {
-            OutputStream out = getContext().getContentResolver().openOutputStream(target);
+            OutputStream out = openOutByUri(target, true);
             if (out == null) return false;
             try {
                 byte[] buf = new byte[64 * 1024];
@@ -1810,88 +2305,121 @@ public class LibraryFsPlugin extends Plugin {
     }
 
     @com.getcapacitor.annotation.ActivityCallback
-    private void scanFolderResult(PluginCall call, ActivityResult result) {
+    private void scanFolderResult(final PluginCall call, ActivityResult result) {
+        if (call == null) return;
         if (result == null || result.getResultCode() != android.app.Activity.RESULT_OK
                 || result.getData() == null) {
             call.reject("用户取消选择目录");
             return;
         }
-        Uri treeUri = result.getData().getData();
+        final Uri treeUri = result.getData().getData();
         if (treeUri == null) {
             call.reject("未获取到目录授权");
             return;
         }
-        String ext = call.getString("ext", ".png").toLowerCase(Locale.ROOT);
-        boolean skipLarge = call.getBoolean("skipLarge", true);
-        final long MAX_FILE_BYTES = skipLarge ? 50L * 1024 * 1024 : Long.MAX_VALUE;
-        DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
-        if (root == null || !root.isDirectory()) {
-            call.reject("选择的目录不可读");
-            return;
-        }
-        JSArray files = new JSArray();
-        java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
-        stack.push(root);
-        long count = 0;
-        long collected = 0;
-        while (!stack.isEmpty()) {
-            DocumentFile dir = stack.pop();
-            DocumentFile[] children = dir.listFiles();
-            if (children == null) continue;
-            for (DocumentFile c : children) {
-                if (c.isDirectory()) {
-                    stack.push(c);
-                    continue;
+        final String ext = call.getString("ext", ".png").toLowerCase(Locale.ROOT);
+        final boolean skipLarge = call.getBoolean("skipLarge", true);
+        final long maxFileBytes = skipLarge ? 50L * 1024 * 1024 : Long.MAX_VALUE;
+
+        // 🐛 旧实现在 @ActivityCallback(主线程)里整棵树递归 + 逐目录 SAF IPC:
+        //    大目录必然 ANR/被 ROM 杀掉 → 用户看到"扫描失败/读不到"。整段移入 SCAN_EXEC。
+        SCAN_EXEC.execute(() -> {
+            try {
+                DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
+                if (root == null || !root.exists()) {
+                    call.reject("选择的目录不可读");
+                    return;
                 }
-                if (collected >= 3000) break; // 单次扫描上限,避免超大目录 CPU 峰值
-                String n = c.getName();
-                if (n == null) continue;
-                String lower = n.toLowerCase(Locale.ROOT);
-                boolean hit = lower.endsWith(ext)
-                        || lower.endsWith(".png") || lower.endsWith(".webp");
-                if (!hit) continue;
-                if (c.length() > MAX_FILE_BYTES) continue;
-                String rel = relPathWithin(root, c);
-                if (rel == null) continue;
-                JSObject o = new JSObject();
-                o.put("path", rel);
-                o.put("name", n);
-                o.put("size", c.length());
-                files.put(o);
-                collected++;
+                final String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+                final JSArray files = new JSArray();
+                final java.util.ArrayDeque<String[]> stack = new java.util.ArrayDeque<>();
+                final long[] loadingBudget = new long[]{ SCAN_LOADING_BUDGET_MS };
+                stack.push(new String[]{ rootDocId, "" });
+                long dirCount = 0;
+                long found = 0;
+                long lastEmit = 0L;
+
+                while (!stack.isEmpty()) {
+                    String[] cur = stack.pop();
+                    String dirDocId = cur[0];
+                    String prefix = cur[1];
+                    dirCount++;
+                    Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dirDocId);
+                    android.database.Cursor c = null;
+                    try {
+                        c = queryChildrenSettled(childrenUri, loadingBudget);
+                        if (c == null) continue;
+                        int idxId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                        int idxName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                        int idxMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+                        int idxSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+                        while (c.moveToNext()) {
+                            if (found >= 3000) break;   // 单次扫描上限,避免超大目录 CPU 峰值
+                            String name = (idxName >= 0 && !c.isNull(idxName)) ? c.getString(idxName) : null;
+                            if (name == null || name.isEmpty()) continue;
+                            String childId = (idxId >= 0 && !c.isNull(idxId)) ? c.getString(idxId) : null;
+                            if (childId == null) continue;
+                            String mime = (idxMime >= 0 && !c.isNull(idxMime)) ? c.getString(idxMime) : "";
+                            long size = (idxSize >= 0 && !c.isNull(idxSize)) ? c.getLong(idxSize) : 0L;
+                            String rel = prefix.isEmpty() ? name : prefix + "/" + name;
+                            if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                                stack.push(new String[]{ childId, rel });
+                                continue;
+                            }
+                            String lower = name.toLowerCase(Locale.ROOT);
+                            boolean hit = lower.endsWith(ext)
+                                    || lower.endsWith(".png") || lower.endsWith(".webp");
+                            if (!hit) continue;
+                            long bytes = size > 0 ? size : queryDocumentSize(treeUri, childId);
+                            if (bytes > maxFileBytes) continue;
+                            JSObject o = new JSObject();
+                            o.put("path", rel);
+                            o.put("name", name);
+                            o.put("size", bytes);
+                            files.put(o);
+                            found++;
+                        }
+                    } catch (Exception ignoredChild) {
+                        // 单个目录失败不影响整棵树
+                    } finally {
+                        if (c != null) try { c.close(); } catch (Exception ignored) { }
+                    }
+                    // 进度心跳字段与 DiskScanView.vue 对齐:count=已遍历目录数,found=已发现文件数
+                    // 进度心跳字段与 DiskScanView.vue 对齐:count=已遍历目录数,found=已发现文件数
+                    // 限流 250ms:大目录下逐目录上报会把桥接事件队列打满
+                    long nowTs = System.currentTimeMillis();
+                    if (nowTs - lastEmit >= 250L) {
+                        lastEmit = nowTs;
+                        JSObject ev = new JSObject();
+                        ev.put("count", dirCount);
+                        ev.put("found", found);
+                        ev.put("phase", "walk");
+                        notifyListeners("scanProgress", ev);
+                    }
+                }
+
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("treeUri", treeUri.toString());
+                ret.put("files", files);
+                ret.put("title", root.getName());
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("扫描失败: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
             }
-            count++;
-            if (count % 100 == 0) {
-                JSObject ev = new JSObject();
-                ev.put("count", count);
-                ev.put("found", collected);
-                ev.put("phase", "walk");
-                notifyListeners("scanProgress", ev);
-            }
-        }
-        JSObject ret = new JSObject();
-        ret.put("success", true);
-        ret.put("treeUri", treeUri.toString());
-        ret.put("files", files);
-        ret.put("title", root.getName());
-        call.resolve(ret);
+        });
     }
 
-    /** 计算 target 相对 root 树的路径(如 子目录/a.png;不含根目录名);无法定位返回 null */
-    private String relPathWithin(DocumentFile root, DocumentFile target) {
-        java.util.List<String> segs = new ArrayList<>();
-        DocumentFile cur = target;
-        String rootUri = root.getUri() == null ? "" : root.getUri().toString();
-        while (cur != null) {
-            String curUri = cur.getUri() == null ? "" : cur.getUri().toString();
-            if (curUri.equals(rootUri)) break;
-            String n = cur.getName();
-            if (n == null) break;
-            segs.add(0, n);
-            cur = cur.getParentFile();
-        }
-        if (segs.isEmpty()) return null;
-        return String.join("/", segs);
+    /** 子项未返回 size 时补查一次(极少发生;只在 size=0 时才走) */
+    private long queryDocumentSize(Uri treeUri, String docId) {
+        try {
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+            try (android.database.Cursor c = getContext().getContentResolver()
+                    .query(docUri, new String[]{ DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
+                if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+            }
+        } catch (Exception ignored) { }
+        return 0L;
     }
 
     /**
@@ -1936,7 +2464,7 @@ public class LibraryFsPlugin extends Plugin {
                         failed.add(name);
                         continue;
                     }
-                    InputStream in = getContext().getContentResolver().openInputStream(src.getUri());
+                    InputStream in = openIn(src);
                     if (in == null) {
                         failed.add(name);
                         continue;
@@ -2022,7 +2550,7 @@ public class LibraryFsPlugin extends Plugin {
                         failed.put(fe);
                         continue;
                     }
-                    InputStream in = getContext().getContentResolver().openInputStream(src.getUri());
+                    InputStream in = openIn(src);
                     if (in == null) {
                         JSObject fe = new JSObject();
                         fe.put("path", rel);
@@ -2242,36 +2770,54 @@ public class LibraryFsPlugin extends Plugin {
                 call.resolve(err);
                 return;
             }
+            final Uri tree = Uri.parse(treeUri);
             JSArray files = new JSArray();
-            java.util.ArrayDeque<DocumentFile> stack = new java.util.ArrayDeque<>();
-            stack.push(root);
+            // 栈内元素:{docId, 相对路径}
+            java.util.ArrayDeque<String[]> stack = new java.util.ArrayDeque<>();
+            final long[] loadingBudget = new long[]{ SCAN_LOADING_BUDGET_MS };
+            stack.push(new String[]{ DocumentsContract.getTreeDocumentId(tree), "" });
             long collected = 0;
             long skippedLarge = 0;
             while (!stack.isEmpty()) {
-                DocumentFile dir = stack.pop();
-                DocumentFile[] children = dir.listFiles();
-                if (children == null) continue;
-                for (DocumentFile c : children) {
-                    if (c.isDirectory()) {
-                        String nm = c.getName();
-                        if (nm != null && !nm.startsWith(".")) stack.push(c);
-                        continue;
+                String[] cur = stack.pop();
+                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, cur[0]);
+                android.database.Cursor c = null;
+                try {
+                    c = queryChildrenSettled(childrenUri, loadingBudget);
+                    if (c == null) continue;
+                    int idxId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                    int idxName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                    int idxMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE);
+                    int idxSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+                    int idxMtime = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+                    while (c.moveToNext()) {
+                        String n = (idxName >= 0 && !c.isNull(idxName)) ? c.getString(idxName) : null;
+                        if (n == null || n.isEmpty()) continue;
+                        String childId = (idxId >= 0 && !c.isNull(idxId)) ? c.getString(idxId) : null;
+                        if (childId == null) continue;
+                        String mime = (idxMime >= 0 && !c.isNull(idxMime)) ? c.getString(idxMime) : "";
+                        String rel = cur[1].isEmpty() ? n : cur[1] + "/" + n;
+                        if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                            if (!n.startsWith(".")) stack.push(new String[]{ childId, rel });
+                            continue;
+                        }
+                        if (collected >= 10000) break;
+                        if (!n.toLowerCase(Locale.ROOT).endsWith(".json")) continue;
+                        long size = (idxSize >= 0 && !c.isNull(idxSize)) ? c.getLong(idxSize) : 0L;
+                        // >50MB 的 JSON 基本不可能是预设/世界书,跳过但计数上报(不静默)
+                        if (size > 50L * 1024 * 1024) { skippedLarge++; continue; }
+                        JSObject o = new JSObject();
+                        o.put("path", rel);
+                        o.put("name", n);
+                        o.put("size", size);
+                        o.put("mtime", (idxMtime >= 0 && !c.isNull(idxMtime)) ? c.getLong(idxMtime) : 0L);
+                        files.put(o);
+                        collected++;
                     }
-                    if (collected >= 10000) break;
-                    String n = c.getName();
-                    if (n == null) continue;
-                    if (!n.toLowerCase(Locale.ROOT).endsWith(".json")) continue;
-                    // >50MB 的 JSON 基本不可能是预设/世界书,跳过但计数上报(不静默)
-                    if (c.length() > 50L * 1024 * 1024) { skippedLarge++; continue; }
-                    String rel = relPathWithin(root, c);
-                    if (rel == null) continue;
-                    JSObject o = new JSObject();
-                    o.put("path", rel);
-                    o.put("name", n);
-                    o.put("size", c.length());
-                    o.put("mtime", queryLastModified(c));
-                    files.put(o);
-                    collected++;
+                } catch (Exception ignoredChild) {
+                    // 单个目录失败不影响其它目录
+                } finally {
+                    if (c != null) try { c.close(); } catch (Exception ignored) { }
                 }
             }
             JSObject ret = new JSObject();
@@ -2492,7 +3038,7 @@ public class LibraryFsPlugin extends Plugin {
         try {
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inJustDecodeBounds = true;
-            in = getContext().getContentResolver().openInputStream(uri);
+            in = openByUri(uri);
             if (in == null) return null;
             BitmapFactory.decodeStream(in, null, opts);
             in.close(); in = null;
@@ -2503,7 +3049,7 @@ public class LibraryFsPlugin extends Plugin {
             opts.inJustDecodeBounds = false;
             opts.inSampleSize = sample;
             opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
-            in = getContext().getContentResolver().openInputStream(uri);
+            in = openByUri(uri);
             if (in == null) return null;
             Bitmap bmp = BitmapFactory.decodeStream(in, null, opts);
             if (bmp == null) return null;
@@ -2755,7 +3301,7 @@ public class LibraryFsPlugin extends Plugin {
             if (existing != null) existing.delete();
             DocumentFile nf = parent.createFile(mimeForName(name), name);
             if (nf == null) { call.reject("创建目标文件失败"); return; }
-            InputStream in = getContext().getContentResolver().openInputStream(src.getUri());
+            InputStream in = openIn(src);
             if (in == null) { call.reject("读取源文件失败"); return; }
             boolean ok;
             try {
@@ -2841,14 +3387,14 @@ public class LibraryFsPlugin extends Plugin {
             // openOutputStream 会失败 → 慢路径重新解析路径(绕过索引)重试一次,防保存链路丢文件
             OutputStream out = null;
             try {
-                out = getContext().getContentResolver().openOutputStream(f.getUri(), "wt");
+                out = openOut(f);
             } catch (Exception openErr) { /* 引用失效,落慢路径重试 */ }
             if (out == null) {
                 DocumentFile fresh = fileByRelPathSlow(path.replace('\\', '/').replaceAll("^/+", ""));
                 if (fresh != null) {
                     f = fresh;
                     try {
-                        out = getContext().getContentResolver().openOutputStream(fresh.getUri(), "wt");
+                        out = openOut(fresh);
                     } catch (Exception openErr2) { out = null; }
                 }
             }
@@ -2863,6 +3409,159 @@ public class LibraryFsPlugin extends Plugin {
         } catch (Exception e) {
             call.reject("写入失败: " + e.getMessage());
         }
+    }
+
+    // endregion
+
+    // region P1 全盘模式(路径级后端) —— SAF 不可用机型 / 用户想按路径直接浏览时的兜底通道
+
+    /** 全盘访问权限状态 + 可用存储卷(内部存储 / 外置 SD / OTG) */
+    @PluginMethod()
+    public void allFilesAccessState(PluginCall call) {
+        boolean supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
+        JSArray volumes = new JSArray();
+        try {
+            File primary = Environment.getExternalStorageDirectory();
+            if (primary != null) {
+                JSObject v = new JSObject();
+                v.put("name", "内部存储");
+                v.put("path", primary.getAbsolutePath());
+                v.put("primary", true);
+                volumes.put(v);
+            }
+            if (supported) {
+                android.os.storage.StorageManager sm =
+                        (android.os.storage.StorageManager) getContext().getSystemService(Context.STORAGE_SERVICE);
+                if (sm != null) {
+                    for (android.os.storage.StorageVolume sv : sm.getStorageVolumes()) {
+                        if (sv.isPrimary()) continue;
+                        File dir = sv.getDirectory();
+                        if (dir != null && dir.exists()) {
+                            JSObject v = new JSObject();
+                            v.put("name", String.valueOf(sv.getDescription(getContext())));
+                            v.put("path", dir.getAbsolutePath());
+                            v.put("primary", false);
+                            volumes.put(v);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) { }
+        JSObject ret = new JSObject();
+        ret.put("supported", supported);
+        ret.put("granted", supported && hasAllFilesAccess());
+        ret.put("volumes", volumes);
+        ret.put("backend", isPathBackend() ? "path" : "saf");
+        ret.put("rootPath", isPathBackend() && getRootPathFile() != null ? getRootPathFile().getAbsolutePath() : "");
+        call.resolve(ret);
+    }
+
+    /** 跳转系统「所有文件访问权限」设置页;用户返回后自动复查授权结果 */
+    @PluginMethod()
+    public void requestAllFilesAccess(PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            call.reject("全盘模式需 Android 11 及以上;当前系统请继续使用目录授权方式");
+            return;
+        }
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+            intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+            startActivityForResult(call, intent, "allFilesAccessResult");
+        } catch (Exception e) {
+            // 少数 ROM 不支持包名定向页 → 回退总列表页
+            try {
+                Intent fallback = new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                startActivityForResult(call, fallback, "allFilesAccessResult");
+            } catch (Exception ex) {
+                call.reject("无法打开系统设置: " + ex.getMessage());
+            }
+        }
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void allFilesAccessResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        allFilesAccessState(call);
+    }
+
+    /** 路径级目录浏览(供 App 内置目录浏览器使用) */
+    @PluginMethod()
+    public void listDirByPath(final PluginCall call) {
+        if (!hasAllFilesAccess()) {
+            call.reject("未授予「所有文件访问权限」");
+            return;
+        }
+        final String defaultPath = Environment.getExternalStorageDirectory().getAbsolutePath();
+        final String path = call.getString("path", defaultPath);
+        SCAN_EXEC.execute(() -> {
+            try {
+                File dir = new File(path);
+                if (!dir.exists() || !dir.isDirectory()) {
+                    call.reject("目录不存在: " + path);
+                    return;
+                }
+                File[] children = dir.listFiles();
+                if (children == null) {
+                    call.reject("目录不可读(Android/data、Android/obb 属系统硬限制)");
+                    return;
+                }
+                java.util.Arrays.sort(children, (a, b) -> {
+                    if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
+                    return a.getName().compareToIgnoreCase(b.getName());
+                });
+                JSArray out = new JSArray();
+                for (File f : children) {
+                    if (f.getName().startsWith(".")) continue;
+                    JSObject o = new JSObject();
+                    o.put("path", f.getAbsolutePath());
+                    o.put("name", f.getName());
+                    o.put("isDirectory", f.isDirectory());
+                    o.put("size", f.isFile() ? f.length() : 0L);
+                    o.put("mtime", f.lastModified());
+                    out.put(o);
+                }
+                File parent = dir.getParentFile();
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("path", dir.getAbsolutePath());
+                ret.put("parentPath", (parent != null && parent.canRead()) ? parent.getAbsolutePath() : "");
+                ret.put("files", out);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("读取目录失败: " + e.getMessage());
+            }
+        });
+    }
+
+    /** 以真实路径作为库根(切换为全盘模式;与 SAF 库根互斥) */
+    @PluginMethod()
+    public void setLibraryRootPath(PluginCall call) {
+        if (!hasAllFilesAccess()) {
+            call.reject("未授予「所有文件访问权限」");
+            return;
+        }
+        String rawPath = call.getString("path", "");
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            call.reject("路径不能为空");
+            return;
+        }
+        File dir = new File(rawPath);
+        if (!dir.isDirectory() || !dir.canRead()) {
+            call.reject("所选目录不可读");
+            return;
+        }
+        prefs().edit()
+                .putString(KEY_ROOT_PATH, dir.getAbsolutePath())
+                .remove(KEY_ROOT_URI)
+                .remove(KEY_ROOT_PERSISTED)
+                .apply();
+        SCAN_EXEC.execute(this::clearRelIndex);
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("backend", "path");
+        ret.put("path", dir.getAbsolutePath());
+        ret.put("canWrite", dir.canWrite());
+        call.resolve(ret);
     }
 
     // endregion

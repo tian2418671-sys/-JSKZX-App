@@ -367,18 +367,35 @@ export const androidImpl = {
         try {
             const res = await LibraryFs.libraryInfo();
             return {
+                ...(res || {}),
                 granted: !!(res && res.granted),
                 hasUri: !!(res && res.hasUri),
-                uri: (res && res.uri) || ''
+                uri: (res && res.uri) || '',
+                backend: (res && res.backend) || 'saf',
+                // 未返回时按 true 处理,避免老包/老桥接误报"重启会失效"
+                persisted: res && res.persisted !== undefined ? !!res.persisted : true,
+                reason: (res && res.reason) || ''
             };
         } catch (e) {
-            return { granted: false, hasUri: false, uri: '' };
+            return { granted: false, hasUri: false, uri: '', backend: 'saf', persisted: true, reason: (e && e.message) || '' };
         }
     },
     async selectFolder() {
-        const res = await LibraryFs.pickFolder();
-        if (res && res.error) return { folderPath: null, files: [], error: res.error };
-        return this.rescanLibrary(LIBRARY_ROOT);
+        let pick;
+        try {
+            pick = await LibraryFs.pickFolder();
+        } catch (e) {
+            return { folderPath: null, files: [], error: (e && e.message) || '用户取消选择' };
+        }
+        if (pick && pick.error) return { folderPath: null, files: [], error: pick.error };
+        // 授权成功后必须重扫:调用方(CardLibraryView / SettingsView)依赖 files 计算"扫描到 N 张"
+        const res = await this.rescanLibrary(LIBRARY_ROOT);
+        return {
+            ...res,
+            backend: (pick && pick.backend) || 'saf',
+            persisted: pick ? pick.persisted !== false : true,
+            persistWarning: (pick && pick.persistWarning) || ''
+        };
     },
     /** 后台保活:委托到独立 keepAlive 模块(前台服务 + WakeLock,设置页开关与启动自动拉起共用) */
     keepAlive,
@@ -390,10 +407,13 @@ export const androidImpl = {
         if (rel === null) return { folderPath: null, files: [], error: '未指定库目录' };
         // 🚀 A2:分块拉取 scan 结果(单块 ≤500 条,两万卡 ~4MB 改为 ~8 块 evaluateJavascript,
         // 主线程无大字符串解析长阻塞);scanStart/scanNext 为 v1.10.25+ 新增协议。
+        // 🐛 scanId:每次扫描独立游标,避免并发扫描(设置页统计/库页加载/后台 reconcile)互相抢块
+        // → 先发起的一方拿到 done + 空数组导致「扫描到 0 张」。
         if (typeof LibraryFs.scanStart === 'function' && typeof LibraryFs.scanNext === 'function') {
             try {
                 const start = await LibraryFs.scanStart({ path: rel });
                 if (start && start.error) return { folderPath: LIBRARY_ROOT, files: [], categories: [], error: start.error };
+                const scanId = (start && start.scanId) || '';
                 const files = [];
                 const total = (start && start.total) || 0;
                 const categories = (start && start.categories) || [];
@@ -401,12 +421,14 @@ export const androidImpl = {
                 let guard = 0;
                 while (!done && guard < 100000) {
                     guard++;
-                    const chunk = await LibraryFs.scanNext({ batchSize: 500 });
+                    const chunk = await LibraryFs.scanNext({ batchSize: 500, scanId });
                     if (chunk && chunk.error) return { folderPath: LIBRARY_ROOT, files, categories, error: chunk.error };
                     files.push(...((chunk && chunk.files) || []));
                     done = !!(chunk && chunk.done);
                 }
-                return { folderPath: LIBRARY_ROOT, files, categories, total };
+                // 0 结果且原生判定为「读到不到内容」(受限路径 / provider 不返回子项)→ 给出可执行提示
+                const hint = (!files.length && start && start.hint) || '';
+                return { folderPath: LIBRARY_ROOT, files, categories, total, error: hint || undefined, hint: hint || undefined };
             } catch (e) {
                 // 分块协议异常:回退旧版一次性 scan
                 const res = await LibraryFs.scan({ path: rel });
@@ -419,11 +441,12 @@ export const androidImpl = {
             }
         }
         const res = await LibraryFs.scan({ path: rel });
+        const files = (res && res.files) || [];
         return {
             folderPath: LIBRARY_ROOT,
-            files: (res && res.files) || [],
+            files,
             categories: (res && res.categories) || [],
-            error: (res && res.error) || undefined
+            error: (res && res.error) || ((!files.length && res && res.hint) || undefined)
         };
     },
     // ---------- 分组(SAF 目录树操作) ----------
@@ -1418,9 +1441,59 @@ export const androidImpl = {
             return null;
         }
     },
-    /** M4 选择推送目标文件夹:不覆盖库根,返回 treeUri 供后续 copyToFolder 使用 */
-    async selectPushFolder() {
+    // ---------- P1 全盘模式(路径级后端) ----------
+    /** 全盘访问权限状态 + 可用存储卷(内部存储 / SD / OTG) */
+    async allFilesAccessState() {
         try {
+            const res = await LibraryFs.allFilesAccessState();
+            return {
+                supported: !!(res && res.supported),
+                granted: !!(res && res.granted),
+                volumes: (res && res.volumes) || [],
+                backend: (res && res.backend) || 'saf',
+                rootPath: (res && res.rootPath) || ''
+            };
+        } catch (e) {
+            return { supported: false, granted: false, volumes: [], backend: 'saf', rootPath: '', error: (e && e.message) || '' };
+        }
+    },
+    /** 跳系统设置申请「所有文件访问权限」(返回后原生自动复查) */
+    async requestAllFilesAccess() {
+        try {
+            const res = await LibraryFs.requestAllFilesAccess();
+            return { supported: !!(res && res.supported), granted: !!(res && res.granted), volumes: (res && res.volumes) || [] };
+        } catch (e) {
+            return { supported: false, granted: false, volumes: [], error: (e && e.message) || '打开设置失败' };
+        }
+    },
+    /** 路径级目录浏览(内置目录选择器用) */
+    async listDirByPath(path) {
+        try {
+            const res = await LibraryFs.listDirByPath({ path: path || '' });
+            return {
+                success: !!(res && res.success),
+                path: (res && res.path) || '',
+                parentPath: (res && res.parentPath) || '',
+                files: (res && res.files) || [],
+                error: (res && !res.success && res.error) || undefined
+            };
+        } catch (e) {
+            return { success: false, path: '', parentPath: '', files: [], error: (e && e.message) || '读取目录失败' };
+        }
+    },
+    /** 以真实路径作为库根(切换全盘模式并重扫) */
+    async setLibraryRootPath(path) {
+        try {
+            const r = await LibraryFs.setLibraryRootPath({ path });
+            if (!r || !r.success) return { folderPath: null, files: [], error: (r && r.error) || '设置路径失败' };
+            const scanRes = await this.rescanLibrary(LIBRARY_ROOT);
+            return { ...scanRes, backend: 'path', persisted: true };
+        } catch (e) {
+            return { folderPath: null, files: [], error: (e && e.message) || '设置路径失败' };
+        }
+    },
+    /** M4 选择推送目标文件夹:不覆盖库根,返回 treeUri 供后续 copyToFolder 使用 */
+    async selectPushFolder() {        try {
             const res = await LibraryFs.pickPushFolder();
             return { success: !!(res && res.success), path: res && res.uri, title: res && res.title, error: (res && !res.success && res.error) || undefined };
         } catch (e) {
